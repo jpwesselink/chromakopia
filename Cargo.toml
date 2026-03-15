@@ -1,0 +1,76 @@
+[package]
+name = "shimmer"
+version = "0.1.0"
+edition = "2021"
+description = "Beautiful terminal string gradients — a Rust port of gradient-string"
+license = "MIT"
+
+[dependencies]
+colored = "3"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
+rand = "0.9"
+libc = "0.2"
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"
+
+[[example]]
+name = "loading"
+path = "examples/loading.rs"
+
+[[example]]
+name = "ascii_art"
+path = "examples/ascii_art.rs"
+
+[[example]]
+name = "rainbow"
+path = "examples/rainbow.rs"
+
+[[example]]
+name = "pulse"
+path = "examples/pulse.rs"
+
+[[example]]
+name = "glitch"
+path = "examples/glitch.rs"
+
+[[example]]
+name = "radar"
+path = "examples/radar.rs"
+
+[[example]]
+name = "neon"
+path = "examples/neon.rs"
+
+[[example]]
+name = "karaoke"
+path = "examples/karaoke.rs"
+
+[[example]]
+name = "glow"
+path = "examples/glow.rs"
+
+[[example]]
+name = "cycle"
+path = "examples/cycle.rs"
+
+[[example]]
+name = "flap"
+path = "examples/flap.rs"
+
+[[example]]
+name = "sequence"
+path = "examples/sequence.rs"
+
+[[example]]
+name = "fade_in"
+path = "examples/fade_in.rs"
+
+[[example]]
+name = "flap_fade"
+path = "examples/flap_fade.rs"
+
+[[example]]
+name = "settle"
+path = "examples/settle.rs"

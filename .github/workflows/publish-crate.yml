@@ -1,0 +1,46 @@
+name: Publish crate (beta / PR)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  publish:
+    name: Publish pre-release
+    runs-on: ubuntu-latest
+    # Skip if this is the release-plz "chore: release" commit (release-plz.yml handles that)
+    if: "!startsWith(github.event.head_commit.message, 'chore: release')"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          SHORT_SHA=$(git rev-parse --short HEAD)
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PR_NUM=${{ github.event.pull_request.number }}
+            SHORT_SHA=$(echo "${{ github.event.pull_request.head.sha }}" | cut -c1-7)
+            echo "version=${CARGO_VERSION}-pr-${PR_NUM}.${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${CARGO_VERSION}-beta.${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Print version
+        run: echo "Publishing shimmer ${{ steps.version.outputs.version }}"
+
+      - name: Set version in Cargo.toml
+        run: sed -i 's/^version = ".*"/version = "${{ steps.version.outputs.version }}"/' Cargo.toml
+
+      - name: Publish to crates.io
+        run: cargo publish --allow-dirty
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
