@@ -62,9 +62,8 @@ impl Animation {
 impl Drop for Animation {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
-        if let Some(h) = self.handle.take() {
-            h.abort();
-        }
+        // Don't abort — let the task finish its cleanup (cursor restore, line clear).
+        // The task will see running=false on the next loop check and exit cleanly.
     }
 }
 
@@ -137,7 +136,7 @@ where
             if lines_printed > 0 {
                 buf.push_str(&format!("\x1B[{}F", lines_printed));
             }
-            buf.push_str("\x1B[?25h"); // show cursor
+            buf.push_str("\x1B[?25h\n"); // show cursor, newline so next output starts clean
             let mut stderr = std::io::stderr().lock();
             let _ = write!(stderr, "{}", buf);
             let _ = stderr.flush();
