@@ -32,7 +32,6 @@ jobs:
   release:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    if: "github.event.head_commit.message == 'chore: release' || startsWith(github.event.head_commit.message, 'chore: release v')"
     permissions:
       contents: write
     steps:
