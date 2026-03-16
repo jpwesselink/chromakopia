@@ -1,6 +1,4 @@
-use std::io::{self, Read, Write};
 use std::sync::OnceLock;
-use std::time::Duration;
 
 use crate::color::Color;
 
@@ -11,7 +9,11 @@ static FG_COLOR: OnceLock<Color> = OnceLock::new();
 ///
 /// `osc_code` is 10 for foreground, 11 for background.
 /// Sends `ESC]{osc_code};?BEL` and parses the `rgb:` response.
+#[cfg(unix)]
 fn probe_osc_color(osc_code: u8) -> Option<Color> {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+
     let fd = libc_fd();
     let old_termios = unsafe {
         let mut t = std::mem::zeroed();
@@ -32,12 +34,12 @@ fn probe_osc_color(osc_code: u8) -> Option<Color> {
     }
 
     let result = (|| -> Option<Color> {
-        let mut stderr = io::stderr();
+        let mut stderr = std::io::stderr();
         let query = format!("\x1B]{};?\x07", osc_code);
         stderr.write_all(query.as_bytes()).ok()?;
         stderr.flush().ok()?;
 
-        let mut stdin = io::stdin();
+        let mut stdin = std::io::stdin();
         let mut response = Vec::new();
         let start = std::time::Instant::now();
         let timeout = Duration::from_millis(100);
@@ -75,6 +77,11 @@ fn probe_osc_color(osc_code: u8) -> Option<Color> {
     }
 
     result
+}
+
+#[cfg(not(unix))]
+fn probe_osc_color(_osc_code: u8) -> Option<Color> {
+    None
 }
 
 /// Parse an OSC color response: `ESC]{code};rgb:RRRR/GGGG/BBBB BEL`
