@@ -27,6 +27,9 @@ pub struct Animation {
     text: Arc<Mutex<String>>,
     handle: Option<JoinHandle<()>>,
     frame: Arc<AtomicUsize>,
+    last_rendered: Arc<Mutex<String>>,
+    lines_printed: Arc<AtomicUsize>,
+    clear_on_stop: Arc<AtomicBool>,
 }
 
 impl Animation {
@@ -57,14 +60,89 @@ impl Animation {
             let _ = h.await;
         }
     }
+
+    /// Stop the animation and fade to the terminal's foreground color.
+    /// The text stays on screen as solid, readable text.
+    pub async fn fade_to_foreground(self, duration: Duration) {
+        self.fade_out_to(FadeTarget::Foreground, duration, true).await;
+    }
+
+    /// Stop the animation and fade to a static gradient.
+    /// The text stays on screen with the gradient applied.
+    pub async fn fade_to_gradient(self, gradient: Gradient, duration: Duration) {
+        self.fade_out_to(FadeTarget::Gradient(gradient), duration, true).await;
+    }
+
+    /// Stop the animation and fade to background (disappear).
+    pub async fn fade_to_background(self, duration: Duration) {
+        self.fade_out_to(FadeTarget::Background, duration, false).await;
+    }
+
+    async fn fade_out_to(mut self, target: FadeTarget, duration: Duration, settle: bool) {
+        // Tell the spawned task not to clear on stop
+        self.clear_on_stop.store(false, Ordering::SeqCst);
+        self.running.store(false, Ordering::SeqCst);
+
+        // Wait for the animation task to finish
+        if let Some(h) = self.handle.take() {
+            let _ = h.await;
+        }
+
+        let last = self.last_rendered.lock().unwrap().clone();
+        let text = self.text.lock().unwrap().clone();
+        let mut lines_printed = self.lines_printed.load(Ordering::SeqCst);
+
+        let delay = Duration::from_millis(30);
+        let total_frames = (duration.as_millis() / 30).max(1) as usize;
+        let easing = Easing::EaseOut;
+
+        for frame in 0..=total_frames {
+            let raw_t = frame as f64 / total_frames as f64;
+            let eased_t = easing.apply(raw_t);
+            let opacity = 1.0 - eased_t;
+
+            let faded = match &target {
+                FadeTarget::Background => apply_fade_toward(&last, opacity, crate::terminal::bg_color()),
+                FadeTarget::Foreground => apply_fade_toward(&last, opacity, crate::terminal::fg_color()),
+                FadeTarget::Color(c) => apply_fade_toward(&last, opacity, *c),
+                FadeTarget::Gradient(g) => apply_fade_toward_gradient(&last, opacity, g, &text),
+            };
+
+            let mut buf = String::new();
+            lines_printed = render_frame(&mut buf, &faded, lines_printed);
+            {
+                let mut stderr = std::io::stderr().lock();
+                let _ = write!(stderr, "{}", buf);
+                let _ = stderr.flush();
+            }
+
+            if frame < total_frames {
+                tokio::time::sleep(delay).await;
+            }
+        }
+
+        if settle {
+            let mut stderr = std::io::stderr().lock();
+            let _ = write!(stderr, "\n\x1B[?25h");
+            let _ = stderr.flush();
+        } else {
+            let mut buf = String::new();
+            if lines_printed > 0 {
+                buf.push_str(&format!("\x1B[{}F", lines_printed));
+            }
+            buf.push_str("\r\x1B[J\x1B[?25h\n");
+            let mut stderr = std::io::stderr().lock();
+            let _ = write!(stderr, "{}", buf);
+            let _ = stderr.flush();
+        }
+    }
 }
 
 impl Drop for Animation {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
-        if let Some(h) = self.handle.take() {
-            h.abort();
-        }
+        // Don't abort — let the task finish its cleanup (cursor restore, line clear).
+        // The task will see running=false on the next loop check and exit cleanly.
     }
 }
 
@@ -75,14 +153,20 @@ where
     let running = Arc::new(AtomicBool::new(true));
     let text = Arc::new(Mutex::new(text.to_string()));
     let frame = Arc::new(AtomicUsize::new(0));
+    let last_rendered = Arc::new(Mutex::new(String::new()));
+    let lines_printed = Arc::new(AtomicUsize::new(0));
+    let clear_on_stop = Arc::new(AtomicBool::new(true));
 
     let r = running.clone();
     let t = text.clone();
     let f = frame.clone();
+    let lr = last_rendered.clone();
+    let lp = lines_printed.clone();
+    let cs = clear_on_stop.clone();
     let delay = Duration::from_millis((delay_ms as f64 / speed) as u64);
 
     let handle = tokio::spawn(async move {
-        let mut lines_printed: usize = 0;
+        let mut local_lines_printed: usize = 0;
 
         // Hide cursor
         {
@@ -95,18 +179,22 @@ where
             let current_frame = f.fetch_add(1, Ordering::SeqCst);
             let current_text = t.lock().unwrap().clone();
             let rendered = effect(&current_text, current_frame);
+
+            // Store last rendered frame for fade methods
+            *lr.lock().unwrap() = rendered.clone();
+
             let rendered = rendered.trim_end_matches('\n');
             let rendered_lines: Vec<&str> = rendered.split('\n').collect();
             let line_count = rendered_lines.len();
 
             let mut buf = String::new();
-            if lines_printed > 0 {
-                buf.push_str(&format!("\x1B[{}F", lines_printed));
+            if local_lines_printed > 0 {
+                buf.push_str(&format!("\x1B[{}F", local_lines_printed));
             }
             for (i, line) in rendered_lines.iter().enumerate() {
                 buf.push('\r');
                 buf.push_str(line);
-                buf.push_str("\x1B[K"); // clear remainder after content
+                buf.push_str("\x1B[K");
                 if i < line_count - 1 {
                     buf.push('\n');
                 }
@@ -118,30 +206,32 @@ where
                 let _ = stderr.flush();
             }
 
-            lines_printed = line_count - 1; // cursor is on the last line, not below it
+            local_lines_printed = line_count - 1;
+            lp.store(local_lines_printed, Ordering::SeqCst);
             tokio::time::sleep(delay).await;
         }
 
-        // Clear the animation and show cursor
-        {
+        if cs.load(Ordering::SeqCst) {
+            // Normal stop: clear the animation and show cursor
             let mut buf = String::new();
-            if lines_printed > 0 {
-                buf.push_str(&format!("\x1B[{}F", lines_printed));
+            if local_lines_printed > 0 {
+                buf.push_str(&format!("\x1B[{}F", local_lines_printed));
             }
-            for i in 0..=lines_printed {
+            for i in 0..=local_lines_printed {
                 buf.push_str("\r\x1B[K");
-                if i < lines_printed {
+                if i < local_lines_printed {
                     buf.push('\n');
                 }
             }
-            if lines_printed > 0 {
-                buf.push_str(&format!("\x1B[{}F", lines_printed));
+            if local_lines_printed > 0 {
+                buf.push_str(&format!("\x1B[{}F", local_lines_printed));
             }
-            buf.push_str("\x1B[?25h"); // show cursor
+            buf.push_str("\x1B[?25h\n");
             let mut stderr = std::io::stderr().lock();
             let _ = write!(stderr, "{}", buf);
             let _ = stderr.flush();
         }
+        // If !clear_on_stop, the fade method handles cleanup
     });
 
     Animation {
@@ -149,6 +239,9 @@ where
         text,
         handle: Some(handle),
         frame,
+        last_rendered,
+        lines_printed,
+        clear_on_stop,
     }
 }
 
