@@ -1,4 +1,4 @@
-use shimmer::{animate, presets};
+use chromakopia::{animate, presets};
 use std::time::Duration;
 
 const BANNER: &str = r#"       __    __
@@ -19,7 +19,7 @@ async fn main() {
 
     // Fade in to static mist, hold, fade out
     animate::Sequence::new(BANNER)
-        .hold(shimmer::Color::new(0x8f, 0xcd, 0xdb), Duration::from_secs(4))
+        .hold(chromakopia::Color::new(0x8f, 0xcd, 0xdb), Duration::from_secs(4))
         .with_fade(Duration::from_secs(2), Duration::from_secs(2))
         .run(1.0)
         .await;
@@ -27,7 +27,7 @@ async fn main() {
     eprintln!();
 
     // Fade in to rainbow, hold, fade out
-    animate::Sequence::new("shimmer: beautiful terminal animations")
+    animate::Sequence::new("chromakopia: beautiful terminal animations")
         .rainbow(Duration::from_secs(5))
         .with_fade(Duration::from_secs(1), Duration::from_secs(1))
         .run(1.0)

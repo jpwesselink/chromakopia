@@ -1,4 +1,4 @@
-use shimmer::{animate, presets};
+use chromakopia::{animate, presets};
 use std::time::Duration;
 
 const BANNER: &str = r#"       __    __

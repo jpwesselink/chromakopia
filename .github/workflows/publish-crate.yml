@@ -35,7 +35,7 @@ jobs:
           fi
 
       - name: Print version
-        run: echo "Publishing shimmer ${{ steps.version.outputs.version }}"
+        run: echo "Publishing chromakopia ${{ steps.version.outputs.version }}"
 
       - name: Set version in Cargo.toml
         run: sed -i 's/^version = ".*"/version = "${{ steps.version.outputs.version }}"/' Cargo.toml

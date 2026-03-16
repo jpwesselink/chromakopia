@@ -14,7 +14,7 @@ pub use terminal::{bg_color, fg_color, set_bg_color, set_fg_color};
 /// or named colors like `"red"`.
 ///
 /// ```
-/// use shimmer::gradient;
+/// use chromakopia::gradient;
 /// let text = gradient(&["#ff0000", "#00ff00", "#0000ff"]).apply("Hello, world!");
 /// ```
 pub fn gradient(colors: &[&str]) -> Gradient {

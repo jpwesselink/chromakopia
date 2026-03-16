@@ -1,5 +1,5 @@
 /// Animated ASCII art banners.
-use shimmer::{animate, presets};
+use chromakopia::{animate, presets};
 use std::time::Duration;
 
 const BANNER: &str = r#"
@@ -9,9 +9,9 @@ const BANNER: &str = r#"
 |_____|__|__|__|__|__|__|__|__|__|_____|__|"#;
 
 const SMALL: &str = r#"
- ╔═══════════════════════════════════╗
- ║  shimmer — terminal gradients 🎨  ║
- ╚═══════════════════════════════════╝"#;
+ ╔═════════════════════════════════════╗
+ ║  chromakopia — terminal gradients 🎨  ║
+ ╚═════════════════════════════════════╝"#;
 
 #[tokio::main]
 async fn main() {

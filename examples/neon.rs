@@ -1,4 +1,4 @@
-use shimmer::animate;
+use chromakopia::animate;
 use std::time::Duration;
 
 #[tokio::main]

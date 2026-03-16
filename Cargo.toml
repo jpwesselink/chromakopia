@@ -1,8 +1,8 @@
 [package]
-name = "shimmer"
+name = "chromakopia"
 version = "0.1.0"
 edition = "2021"
-description = "Beautiful terminal string gradients — a Rust port of gradient-string"
+description = "Beautiful terminal string gradients and animations for Rust"
 license = "MIT"
 
 [dependencies]
@@ -74,3 +74,19 @@ path = "examples/flap_fade.rs"
 [[example]]
 name = "settle"
 path = "examples/settle.rs"
+
+[[example]]
+name = "layers"
+path = "examples/layers.rs"
+
+[[example]]
+name = "emerge"
+path = "examples/emerge.rs"
+
+[[example]]
+name = "breathe"
+path = "examples/breathe.rs"
+
+[[example]]
+name = "cinematic"
+path = "examples/cinematic.rs"

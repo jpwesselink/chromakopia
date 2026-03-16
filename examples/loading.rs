@@ -1,5 +1,5 @@
 /// Simulates a CLI tool that does work while showing animated loading states.
-use shimmer::animate;
+use chromakopia::animate;
 use std::time::Duration;
 
 #[tokio::main]
@@ -30,7 +30,7 @@ async fn main() {
     eprintln!();
     eprintln!(
         "{}",
-        shimmer::presets::rainbow().apply("🚀 Server started on http://localhost:3000")
+        chromakopia::presets::rainbow().apply("🚀 Server started on http://localhost:3000")
     );
 }
 

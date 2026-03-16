@@ -1,8 +1,8 @@
-use shimmer::{gradient, presets};
+use chromakopia::{gradient, presets};
 
 fn main() {
     println!("{}", gradient(&["#ff0000", "#00ff00", "#0000ff"]).apply("Hello, gradient world!"));
-    println!("{}", gradient(&["cyan", "pink"]).apply("Shimmer is beautiful"));
+    println!("{}", gradient(&["cyan", "pink"]).apply("Chromakopia is beautiful"));
     println!("{}", gradient(&["#833ab4", "#fd1d1d", "#fcb045"]).hsv().apply("HSV interpolation!"));
     println!();
 

@@ -2,13 +2,16 @@
 //!
 //! ```no_run
 //! # async fn example() {
-//! let anim = shimmer::animate::rainbow("Loading...", 1.0);
+//! let anim = chromakopia::animate::rainbow("Loading...", 1.0);
 //! // ... do async work ...
 //! anim.stop();
 //! # }
 //! ```
 
 mod effects;
+mod easing;
+
+pub use easing::Easing;
 
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -174,7 +177,8 @@ fn render_frame(buf: &mut String, rendered: &str, lines_printed: usize) -> usize
 
 type BoxEffect = Box<dyn Fn(&str, usize) -> String + Send + 'static>;
 
-enum FadeTarget {
+/// Target color for a fade transition.
+pub enum FadeTarget {
     /// Fade toward terminal background (text disappears)
     Background,
     /// Fade toward terminal foreground (gradient calms down to solid text)
@@ -185,38 +189,103 @@ enum FadeTarget {
     Gradient(Gradient),
 }
 
-struct Step {
+/// A time range on the animation timeline, in seconds.
+pub struct TimeRange {
+    pub start: f64,
+    pub end: f64,
+}
+
+impl TimeRange {
+    pub fn new(start: f64, end: f64) -> Self {
+        Self { start, end }
+    }
+
+    pub fn from_duration(start: Duration, end: Duration) -> Self {
+        Self {
+            start: start.as_secs_f64(),
+            end: end.as_secs_f64(),
+        }
+    }
+
+    fn contains(&self, t: f64) -> bool {
+        t >= self.start && t < self.end
+    }
+
+    fn progress(&self, t: f64) -> f64 {
+        let d = self.end - self.start;
+        if d <= 0.0 {
+            return 1.0;
+        }
+        ((t - self.start) / d).clamp(0.0, 1.0)
+    }
+}
+
+struct EffectLayer {
+    time: TimeRange,
     effect: BoxEffect,
-    duration: Duration,
     delay_ms: u64,
-    fade_in: Duration,
-    fade_out: Duration,
-    fade_out_target: FadeTarget,
+}
+
+/// Direction of a fade transition.
+pub enum FadeKind {
+    /// Fade from target → effect colors (opacity 0→1)
+    FadeFrom(FadeTarget),
+    /// Fade from effect colors → target (opacity 1→0)
+    FadeTo(FadeTarget),
+}
+
+struct FadeLayer {
+    time: TimeRange,
+    kind: FadeKind,
+    easing: Easing,
 }
 
 /// Chain multiple animation effects into a sequence.
 ///
+/// Effects and fades are placed on a shared timeline as composable layers.
+/// The chaining API places them sequentially, but the internal model
+/// supports overlapping layers for future power-user methods.
+///
 /// ```no_run
 /// # async fn example() {
 /// use std::time::Duration;
-/// shimmer::animate::Sequence::new("Hello, world!")
+/// chromakopia::animate::Sequence::new("Hello, world!")
 ///     .fade_in(Duration::from_secs(1))
-///     .glow(shimmer::presets::dark_n_stormy(), Duration::from_secs(3))
+///     .glow(chromakopia::presets::dark_n_stormy(), Duration::from_secs(3))
 ///     .fade_out(Duration::from_secs(1))
 ///     .run(1.0).await;
 /// # }
 /// ```
 pub struct Sequence {
     text: String,
-    steps: Vec<Step>,
+    effect_layers: Vec<EffectLayer>,
+    fade_layers: Vec<FadeLayer>,
+    cursor: f64,
 }
 
 impl Sequence {
     pub fn new(text: &str) -> Self {
         Self {
             text: text.to_string(),
-            steps: Vec::new(),
+            effect_layers: Vec::new(),
+            fade_layers: Vec::new(),
+            cursor: 0.0,
         }
+    }
+
+    fn push_effect(&mut self, effect: BoxEffect, duration: Duration, delay_ms: u64) {
+        let start = self.cursor;
+        let end = start + duration.as_secs_f64();
+        self.effect_layers.push(EffectLayer {
+            time: TimeRange::new(start, end),
+            effect,
+            delay_ms,
+        });
+        self.cursor = end;
+    }
+
+    fn last_effect_range(&self) -> Option<(f64, f64)> {
+        self.effect_layers.last().map(|e| (e.time.start, e.time.end))
     }
 
     /// Fade from black to white.
@@ -227,14 +296,11 @@ impl Sequence {
     /// Fade from black to a specific color.
     pub fn fade_in_color(mut self, color: crate::color::Color, duration: Duration) -> Self {
         let total = (duration.as_millis() / 30) as usize;
-        self.steps.push(Step {
-            effect: Box::new(move |text, frame| effects::fade_in(text, frame, total, color)),
+        self.push_effect(
+            Box::new(move |text, frame| effects::fade_in(text, frame, total, color)),
             duration,
-            delay_ms: 30,
-            fade_in: Duration::ZERO,
-            fade_out: Duration::ZERO,
-            fade_out_target: FadeTarget::Background,
-        });
+            30,
+        );
         self
     }
 
@@ -246,14 +312,11 @@ impl Sequence {
     /// Fade from a specific color to black.
     pub fn fade_out_color(mut self, color: crate::color::Color, duration: Duration) -> Self {
         let total = (duration.as_millis() / 30) as usize;
-        self.steps.push(Step {
-            effect: Box::new(move |text, frame| effects::fade_out(text, frame, total, color)),
+        self.push_effect(
+            Box::new(move |text, frame| effects::fade_out(text, frame, total, color)),
             duration,
-            delay_ms: 30,
-            fade_in: Duration::ZERO,
-            fade_out: Duration::ZERO,
-            fade_out_target: FadeTarget::Background,
-        });
+            30,
+        );
         self
     }
 
@@ -265,8 +328,8 @@ impl Sequence {
         let mid = palette[palette.len() / 2];
         let dark = palette[palette.len() - 1];
 
-        self.steps.push(Step {
-            effect: Box::new(move |text, frame| {
+        self.push_effect(
+            Box::new(move |text, frame| {
                 use colored::Colorize;
                 let lines: Vec<&str> = text.split('\n').collect();
                 let max_col = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
@@ -291,24 +354,18 @@ impl Sequence {
                 }).collect::<Vec<_>>().join("\n")
             }),
             duration,
-            delay_ms: 30,
-            fade_in: Duration::ZERO,
-            fade_out: Duration::ZERO,
-            fade_out_target: FadeTarget::Background,
-        });
+            30,
+        );
         self
     }
 
     /// Rainbow effect.
     pub fn rainbow(mut self, duration: Duration) -> Self {
-        self.steps.push(Step {
-            effect: Box::new(|text, frame| effects::rainbow(text, frame)),
+        self.push_effect(
+            Box::new(|text, frame| effects::rainbow(text, frame)),
             duration,
-            delay_ms: 15,
-            fade_in: Duration::ZERO,
-            fade_out: Duration::ZERO,
-            fade_out_target: FadeTarget::Background,
-        });
+            15,
+        );
         self
     }
 
@@ -317,14 +374,11 @@ impl Sequence {
         use crate::color::Color;
         let settled = Color::new(0xff, 0xcc, 0x00);
         let flipping = Color::new(0x99, 0x7a, 0x00);
-        self.steps.push(Step {
-            effect: Box::new(move |text, frame| effects::flap(text, frame, settled, flipping)),
+        self.push_effect(
+            Box::new(move |text, frame| effects::flap(text, frame, settled, flipping)),
             duration,
-            delay_ms: 60,
-            fade_in: Duration::ZERO,
-            fade_out: Duration::ZERO,
-            fade_out_target: FadeTarget::Background,
-        });
+            60,
+        );
         self
     }
 
@@ -333,21 +387,18 @@ impl Sequence {
         let palette = grad.palette(2);
         let settled = palette[0];
         let flipping = palette[1];
-        self.steps.push(Step {
-            effect: Box::new(move |text, frame| effects::flap(text, frame, settled, flipping)),
+        self.push_effect(
+            Box::new(move |text, frame| effects::flap(text, frame, settled, flipping)),
             duration,
-            delay_ms: 60,
-            fade_in: Duration::ZERO,
-            fade_out: Duration::ZERO,
-            fade_out_target: FadeTarget::Background,
-        });
+            60,
+        );
         self
     }
 
     /// Cycle a gradient's colors.
     pub fn cycle(mut self, grad: Gradient, duration: Duration) -> Self {
-        self.steps.push(Step {
-            effect: Box::new(move |text, frame| {
+        self.push_effect(
+            Box::new(move |text, frame| {
                 use colored::Colorize;
                 let len = text.chars().filter(|c| !c.is_whitespace()).count().max(2);
                 let palette = grad.palette(len * 2);
@@ -366,22 +417,38 @@ impl Sequence {
                 result
             }),
             duration,
-            delay_ms: 15,
-            fade_in: Duration::ZERO,
-            fade_out: Duration::ZERO,
-            fade_out_target: FadeTarget::Background,
-        });
+            15,
+        );
         self
     }
 
-    /// Set fade-in and fade-out durations on the last added step.
+    /// Set fade-in and fade-out durations on the last added effect.
     ///
     /// Fades to/from the terminal background color (text appears/disappears).
     pub fn with_fade(mut self, fade_in: Duration, fade_out: Duration) -> Self {
-        if let Some(step) = self.steps.last_mut() {
-            step.fade_in = fade_in;
-            step.fade_out = fade_out;
-            step.fade_out_target = FadeTarget::Background;
+        if let Some((start, end)) = self.last_effect_range() {
+            // Remove any existing fade layers for this effect
+            self.fade_layers.retain(|f| {
+                let is_from_here = matches!(&f.kind, FadeKind::FadeFrom(_))
+                    && (f.time.start - start).abs() < 0.001;
+                let is_to_here = matches!(&f.kind, FadeKind::FadeTo(_))
+                    && (f.time.end - end).abs() < 0.001;
+                !is_from_here && !is_to_here
+            });
+            if fade_in > Duration::ZERO {
+                self.fade_layers.push(FadeLayer {
+                    time: TimeRange::new(start, start + fade_in.as_secs_f64()),
+                    kind: FadeKind::FadeFrom(FadeTarget::Background),
+                    easing: Easing::Linear,
+                });
+            }
+            if fade_out > Duration::ZERO {
+                self.fade_layers.push(FadeLayer {
+                    time: TimeRange::new(end - fade_out.as_secs_f64(), end),
+                    kind: FadeKind::FadeTo(FadeTarget::Background),
+                    easing: Easing::Linear,
+                });
+            }
         }
         self
     }
@@ -389,9 +456,15 @@ impl Sequence {
     /// Fade the gradient into the terminal's foreground color.
     /// The text stays on screen as solid, readable text.
     pub fn fade_to_foreground(mut self, duration: Duration) -> Self {
-        if let Some(step) = self.steps.last_mut() {
-            step.fade_out = duration;
-            step.fade_out_target = FadeTarget::Foreground;
+        if let Some((_, end)) = self.last_effect_range() {
+            self.fade_layers.retain(|f| {
+                !(matches!(&f.kind, FadeKind::FadeTo(_)) && (f.time.end - end).abs() < 0.001)
+            });
+            self.fade_layers.push(FadeLayer {
+                time: TimeRange::new(end - duration.as_secs_f64(), end),
+                kind: FadeKind::FadeTo(FadeTarget::Foreground),
+                easing: Easing::Linear,
+            });
         }
         self
     }
@@ -399,9 +472,15 @@ impl Sequence {
     /// Fade the gradient into a specific color.
     /// The text stays on screen in that color.
     pub fn fade_to_color(mut self, color: crate::color::Color, duration: Duration) -> Self {
-        if let Some(step) = self.steps.last_mut() {
-            step.fade_out = duration;
-            step.fade_out_target = FadeTarget::Color(color);
+        if let Some((_, end)) = self.last_effect_range() {
+            self.fade_layers.retain(|f| {
+                !(matches!(&f.kind, FadeKind::FadeTo(_)) && (f.time.end - end).abs() < 0.001)
+            });
+            self.fade_layers.push(FadeLayer {
+                time: TimeRange::new(end - duration.as_secs_f64(), end),
+                kind: FadeKind::FadeTo(FadeTarget::Color(color)),
+                easing: Easing::Linear,
+            });
         }
         self
     }
@@ -409,17 +488,23 @@ impl Sequence {
     /// Fade the animation into a static gradient.
     /// The text stays on screen with the gradient applied.
     pub fn fade_to_gradient(mut self, grad: Gradient, duration: Duration) -> Self {
-        if let Some(step) = self.steps.last_mut() {
-            step.fade_out = duration;
-            step.fade_out_target = FadeTarget::Gradient(grad);
+        if let Some((_, end)) = self.last_effect_range() {
+            self.fade_layers.retain(|f| {
+                !(matches!(&f.kind, FadeKind::FadeTo(_)) && (f.time.end - end).abs() < 0.001)
+            });
+            self.fade_layers.push(FadeLayer {
+                time: TimeRange::new(end - duration.as_secs_f64(), end),
+                kind: FadeKind::FadeTo(FadeTarget::Gradient(grad)),
+                easing: Easing::Linear,
+            });
         }
         self
     }
 
     /// Hold static text (useful for pauses between effects).
     pub fn hold(mut self, color: crate::color::Color, duration: Duration) -> Self {
-        self.steps.push(Step {
-            effect: Box::new(move |text, _frame| {
+        self.push_effect(
+            Box::new(move |text, _frame| {
                 use colored::Colorize;
                 text.split('\n').map(|line| {
                     line.chars().map(|ch| {
@@ -428,11 +513,84 @@ impl Sequence {
                 }).collect::<Vec<_>>().join("\n")
             }),
             duration,
-            delay_ms: 30,
-            fade_in: Duration::ZERO,
-            fade_out: Duration::ZERO,
-            fade_out_target: FadeTarget::Background,
+            30,
+        );
+        self
+    }
+
+    /// Place an effect at an explicit time range on the timeline.
+    ///
+    /// ```no_run
+    /// # async fn example() {
+    /// use std::time::Duration;
+    /// use chromakopia::animate::{TimeRange, Sequence, rainbow_effect};
+    ///
+    /// Sequence::new("Hello!")
+    ///     .effect(TimeRange::from_duration(Duration::ZERO, Duration::from_secs(5)), 15, rainbow_effect())
+    ///     .run(1.0).await;
+    /// # }
+    /// ```
+    pub fn effect<F>(mut self, time: TimeRange, delay_ms: u64, effect: F) -> Self
+    where
+        F: Fn(&str, usize) -> String + Send + 'static,
+    {
+        if time.end > self.cursor {
+            self.cursor = time.end;
+        }
+        self.effect_layers.push(EffectLayer {
+            time,
+            effect: Box::new(effect),
+            delay_ms,
         });
+        self
+    }
+
+    /// Place a fade at an explicit time range with a specific easing curve.
+    ///
+    /// ```no_run
+    /// # async fn example() {
+    /// use std::time::Duration;
+    /// use chromakopia::animate::{TimeRange, FadeKind, FadeTarget, Easing, Sequence};
+    ///
+    /// Sequence::new("Hello!")
+    ///     .glow(chromakopia::presets::mist(), Duration::from_secs(5))
+    ///     .fade(
+    ///         TimeRange::from_duration(Duration::ZERO, Duration::from_secs(1)),
+    ///         FadeKind::FadeFrom(FadeTarget::Background),
+    ///         Easing::EaseOut,
+    ///     )
+    ///     .run(1.0).await;
+    /// # }
+    /// ```
+    pub fn fade(mut self, time: TimeRange, kind: FadeKind, easing: Easing) -> Self {
+        self.fade_layers.push(FadeLayer {
+            time,
+            kind,
+            easing,
+        });
+        self
+    }
+
+    /// Set the easing curve on the last fade layer.
+    ///
+    /// ```no_run
+    /// # async fn example() {
+    /// use std::time::Duration;
+    /// use chromakopia::animate::{Easing, Sequence};
+    ///
+    /// Sequence::new("Hello!")
+    ///     .glow(chromakopia::presets::mist(), Duration::from_secs(5))
+    ///     .with_fade(Duration::from_secs(1), Duration::ZERO)
+    ///     .eased(Easing::EaseOut)
+    ///     .fade_to_gradient(chromakopia::presets::dark_n_stormy(), Duration::from_secs(2))
+    ///     .eased(Easing::EaseInOut)
+    ///     .run(1.0).await;
+    /// # }
+    /// ```
+    pub fn eased(mut self, easing: Easing) -> Self {
+        if let Some(fade) = self.fade_layers.last_mut() {
+            fade.easing = easing;
+        }
         self
     }
 
@@ -447,73 +605,65 @@ impl Sequence {
             let _ = stderr.flush();
         }
 
+        let total_duration = self.effect_layers.iter()
+            .map(|l| l.time.end)
+            .chain(self.fade_layers.iter().map(|l| l.time.end))
+            .fold(0.0f64, f64::max);
+
         let mut lines_printed: usize = 0;
+        let mut t = 0.0;
 
-        for step in &self.steps {
-            let delay = Duration::from_millis((step.delay_ms as f64 / speed) as u64);
-            let total_frames = (step.duration.as_millis() as f64 / step.delay_ms as f64) as usize;
-            let fade_in_frames = (step.fade_in.as_millis() as f64 / step.delay_ms as f64) as usize;
-            let fade_out_frames = (step.fade_out.as_millis() as f64 / step.delay_ms as f64) as usize;
+        while t < total_duration {
+            // Find active effect layer (last one containing t)
+            let active = self.effect_layers.iter()
+                .rev()
+                .find(|l| l.time.contains(t));
 
-            for frame in 0..total_frames {
-                let rendered = (step.effect)(&text, frame);
+            let Some(active) = active else {
+                // No active effect at this time — skip forward
+                t += 0.030;
+                continue;
+            };
 
-                // Apply opacity envelope
-                let fade_in_opacity = if frame < fade_in_frames {
-                    Some(frame as f64 / fade_in_frames.max(1) as f64)
-                } else {
-                    None
-                };
-                let fade_out_opacity = if fade_out_frames > 0 && frame >= total_frames - fade_out_frames {
-                    Some((total_frames - frame) as f64 / fade_out_frames.max(1) as f64)
-                } else {
-                    None
-                };
+            let delay_ms = active.delay_ms;
+            let frame = ((t - active.time.start) * 1000.0 / delay_ms as f64) as usize;
+            let rendered = (active.effect)(&text, frame);
 
-                let final_rendered = match (fade_in_opacity, fade_out_opacity) {
-                    (Some(t), _) => {
-                        // Fade-in always goes from bg → full color
-                        apply_fade_toward(&rendered, t, crate::terminal::bg_color())
-                    }
-                    (_, Some(t)) => {
-                        // Fade-out target depends on step config
-                        match &step.fade_out_target {
-                            FadeTarget::Gradient(grad) => {
-                                apply_fade_toward_gradient(&rendered, t, grad, &text)
-                            }
-                            other => {
-                                let target = match other {
-                                    FadeTarget::Background => crate::terminal::bg_color(),
-                                    FadeTarget::Foreground => crate::terminal::fg_color(),
-                                    FadeTarget::Color(c) => *c,
-                                    FadeTarget::Gradient(_) => unreachable!(),
-                                };
-                                apply_fade_toward(&rendered, t, target)
-                            }
-                        }
-                    }
-                    _ => rendered,
-                };
+            // Apply fades — FadeFrom takes priority over FadeTo (matches original behavior)
+            let active_from = self.fade_layers.iter()
+                .find(|f| f.time.contains(t) && matches!(f.kind, FadeKind::FadeFrom(_)));
+            let active_to = self.fade_layers.iter()
+                .find(|f| f.time.contains(t) && matches!(f.kind, FadeKind::FadeTo(_)));
 
-                let mut buf = String::new();
-                lines_printed = render_frame(&mut buf, &final_rendered, lines_printed);
-                {
-                    let mut stderr = std::io::stderr().lock();
-                    let _ = write!(stderr, "{}", buf);
-                    let _ = stderr.flush();
-                }
-                tokio::time::sleep(delay).await;
+            let final_rendered = if let Some(fade) = active_from {
+                let raw_t = fade.time.progress(t);
+                let eased_t = fade.easing.apply(raw_t);
+                apply_fade(&rendered, eased_t, &fade.kind, &text)
+            } else if let Some(fade) = active_to {
+                let raw_t = fade.time.progress(t);
+                let eased_t = fade.easing.apply(raw_t);
+                apply_fade(&rendered, eased_t, &fade.kind, &text)
+            } else {
+                rendered
+            };
+
+            let mut buf = String::new();
+            lines_printed = render_frame(&mut buf, &final_rendered, lines_printed);
+            {
+                let mut stderr = std::io::stderr().lock();
+                let _ = write!(stderr, "{}", buf);
+                let _ = stderr.flush();
             }
+
+            let delay = Duration::from_millis((delay_ms as f64 / speed) as u64);
+            tokio::time::sleep(delay).await;
+            t += delay_ms as f64 / 1000.0;
         }
 
-        // Check if the last step settled (text should stay on screen)
-        let settled = self.steps.last().map_or(false, |s| {
-            s.fade_out > Duration::ZERO
-                && matches!(
-                    s.fade_out_target,
-                    FadeTarget::Foreground | FadeTarget::Color(_) | FadeTarget::Gradient(_)
-                )
-        });
+        // Check if the last fade settles text on screen
+        let settled = self.fade_layers.iter()
+            .filter(|f| (f.time.end - total_duration).abs() < 0.001)
+            .any(|f| matches!(&f.kind, FadeKind::FadeTo(target) if !matches!(target, FadeTarget::Background)));
 
         if settled {
             // Move to the line after the text and show cursor
@@ -579,8 +729,15 @@ fn apply_fade_toward(s: &str, opacity: f64, target: crate::color::Color) -> Stri
                 i += 1;
             }
         } else {
-            result.push(bytes[i] as char);
-            i += 1;
+            // Correctly handle multi-byte UTF-8 characters
+            let byte = bytes[i];
+            let char_len = if byte < 0x80 { 1 }
+                else if byte < 0xE0 { 2 }
+                else if byte < 0xF0 { 3 }
+                else { 4 };
+            let end = (i + char_len).min(bytes.len());
+            result.push_str(&s[i..end]);
+            i = end;
         }
     }
 
@@ -637,13 +794,116 @@ fn apply_fade_toward_gradient(s: &str, opacity: f64, grad: &Gradient, text: &str
                 i += 1;
             }
         } else {
-            result.push(bytes[i] as char);
-            i += 1;
+            // Correctly handle multi-byte UTF-8 characters
+            let byte = bytes[i];
+            let char_len = if byte < 0x80 { 1 }
+                else if byte < 0xE0 { 2 }
+                else if byte < 0xF0 { 3 }
+                else { 4 };
+            let end = (i + char_len).min(bytes.len());
+            result.push_str(&s[i..end]);
+            i = end;
         }
     }
 
     result
 }
+
+/// Apply a fade layer to rendered text.
+fn apply_fade(rendered: &str, progress: f64, kind: &FadeKind, text: &str) -> String {
+    match kind {
+        FadeKind::FadeFrom(target) => {
+            // progress 0→1: from target to effect colors
+            let opacity = progress;
+            match target {
+                FadeTarget::Background => apply_fade_toward(rendered, opacity, crate::terminal::bg_color()),
+                FadeTarget::Foreground => apply_fade_toward(rendered, opacity, crate::terminal::fg_color()),
+                FadeTarget::Color(c) => apply_fade_toward(rendered, opacity, *c),
+                FadeTarget::Gradient(g) => apply_fade_toward_gradient(rendered, opacity, g, text),
+            }
+        }
+        FadeKind::FadeTo(target) => {
+            // progress 0→1: from effect colors to target
+            let opacity = 1.0 - progress;
+            match target {
+                FadeTarget::Background => apply_fade_toward(rendered, opacity, crate::terminal::bg_color()),
+                FadeTarget::Foreground => apply_fade_toward(rendered, opacity, crate::terminal::fg_color()),
+                FadeTarget::Color(c) => apply_fade_toward(rendered, opacity, *c),
+                FadeTarget::Gradient(g) => apply_fade_toward_gradient(rendered, opacity, g, text),
+            }
+        }
+    }
+}
+
+// ── Effect factory functions (for power-user `.effect()` API) ──
+
+/// Create a rainbow effect closure for use with [`Sequence::effect`].
+pub fn rainbow_effect() -> impl Fn(&str, usize) -> String + Send + 'static {
+    |text, frame| effects::rainbow(text, frame)
+}
+
+/// Create a glow effect closure for use with [`Sequence::effect`].
+pub fn glow_effect(grad: Gradient) -> impl Fn(&str, usize) -> String + Send + 'static {
+    use crate::color::Color;
+    let palette = grad.palette(3);
+    let bright = palette[0];
+    let mid = palette[palette.len() / 2];
+    let dark = palette[palette.len() - 1];
+
+    move |text, frame| {
+        use colored::Colorize;
+        let lines: Vec<&str> = text.split('\n').collect();
+        let max_col = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+        if max_col == 0 { return String::new(); }
+
+        let glow_width = (max_col as f64 * 0.3).max(4.0);
+        let period = max_col as f64 + glow_width * 2.0;
+        let center = (frame as f64 * 0.4) % period - glow_width;
+
+        lines.iter().map(|line| {
+            line.chars().enumerate().map(|(col, ch)| {
+                let dist = (col as f64 - center).abs();
+                let t = (dist / glow_width).min(1.0);
+                let t = t * t * (3.0 - 2.0 * t);
+                let c = if t < 0.5 {
+                    Color::lerp_rgb(bright, mid, t * 2.0)
+                } else {
+                    Color::lerp_rgb(mid, dark, (t - 0.5) * 2.0)
+                };
+                ch.to_string().truecolor(c.r, c.g, c.b).to_string()
+            }).collect::<String>()
+        }).collect::<Vec<_>>().join("\n")
+    }
+}
+
+/// Create a cycle effect closure for use with [`Sequence::effect`].
+pub fn cycle_effect(grad: Gradient) -> impl Fn(&str, usize) -> String + Send + 'static {
+    move |text, frame| {
+        use colored::Colorize;
+        let len = text.chars().filter(|c| !c.is_whitespace()).count().max(2);
+        let palette = grad.palette(len * 2);
+        let offset = frame % palette.len();
+        let mut result = String::new();
+        let mut color_idx = 0;
+        for ch in text.chars() {
+            if ch.is_whitespace() {
+                result.push(ch);
+            } else {
+                let c = palette[(color_idx + offset) % palette.len()];
+                result.push_str(&ch.to_string().truecolor(c.r, c.g, c.b).to_string());
+                color_idx += 1;
+            }
+        }
+        result
+    }
+}
+
+/// Create a flap (split-flap board) effect closure for use with [`Sequence::effect`].
+pub fn flap_effect(settled: crate::color::Color, flipping: crate::color::Color) -> impl Fn(&str, usize) -> String + Send + 'static {
+    move |text, frame| effects::flap(text, frame, settled, flipping)
+}
+
+// ── Standalone animations ──
 
 /// Start a rainbow animation. Speed is a multiplier (1.0 = default).
 pub fn rainbow(text: &str, speed: f64) -> Animation {
@@ -682,7 +942,7 @@ pub fn karaoke(text: &str, speed: f64) -> Animation {
 ///
 /// ```no_run
 /// # async fn example() {
-/// let anim = shimmer::animate::glow(shimmer::presets::dark_n_stormy(), "Loading...", 1.0);
+/// let anim = chromakopia::animate::glow(chromakopia::presets::dark_n_stormy(), "Loading...", 1.0);
 /// anim.stop();
 /// # }
 /// ```
@@ -737,7 +997,7 @@ pub fn glow(grad: Gradient, text: &str, speed: f64) -> Animation {
 ///
 /// ```no_run
 /// # async fn example() {
-/// let anim = shimmer::animate::flap("DEPARTURES", 1.0);
+/// let anim = chromakopia::animate::flap("DEPARTURES", 1.0);
 /// anim.stop();
 /// # }
 /// ```
@@ -773,7 +1033,7 @@ pub fn flap_with(grad: Gradient, text: &str, speed: f64) -> Animation {
 ///
 /// ```no_run
 /// # async fn example() {
-/// let anim = shimmer::animate::cycle(shimmer::presets::morning(), "Loading...", 1.0);
+/// let anim = chromakopia::animate::cycle(chromakopia::presets::morning(), "Loading...", 1.0);
 /// anim.stop();
 /// # }
 /// ```
