@@ -9,6 +9,7 @@ license = "MIT"
 colored = "3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
 rand = "0.9"
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [[example]]
