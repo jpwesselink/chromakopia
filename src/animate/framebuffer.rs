@@ -90,35 +90,90 @@ impl FrameBuffer {
 /// Shared mailbox between animation and renderer.
 type Mailbox = Arc<Mutex<Option<FrameBuffer>>>;
 
+/// Try to get the current cursor row using ANSI DSR (Device Status Report).
+/// Returns 1-based row number, or None if detection fails.
+#[cfg(unix)]
+fn get_cursor_row() -> Option<usize> {
+    use std::fs::OpenOptions;
+    use std::io::{Read, Write};
+    use std::os::unix::io::AsRawFd;
+
+    let mut tty = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .ok()?;
+
+    let fd = tty.as_raw_fd();
+    let old = unsafe {
+        let mut t = std::mem::zeroed();
+        if libc::tcgetattr(fd, &mut t) != 0 { return None; }
+        t
+    };
+
+    let mut raw = old;
+    unsafe {
+        libc::cfmakeraw(&mut raw);
+        raw.c_cc[libc::VMIN] = 0;
+        raw.c_cc[libc::VTIME] = 1;
+        libc::tcsetattr(fd, libc::TCSANOW, &raw);
+    }
+
+    // Send DSR: ESC[6n — terminal responds with ESC[row;colR
+    let _ = tty.write_all(b"\x1B[6n");
+    let _ = tty.flush();
+
+    let mut buf = [0u8; 32];
+    let mut len = 0;
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_millis(100) {
+        match tty.read(&mut buf[len..]) {
+            Ok(0) => break,
+            Ok(n) => {
+                len += n;
+                if buf[..len].contains(&b'R') { break; }
+            }
+            Err(_) => break,
+        }
+    }
+
+    unsafe { libc::tcsetattr(fd, libc::TCSANOW, &old); }
+
+    let s = std::str::from_utf8(&buf[..len]).ok()?;
+    // Parse ESC[row;colR
+    let inner = s.strip_prefix("\x1B[")?.strip_suffix('R')?;
+    let row_str = inner.split(';').next()?;
+    row_str.parse().ok()
+}
+
+#[cfg(not(unix))]
+fn get_cursor_row() -> Option<usize> {
+    None
+}
+
 /// Diff two framebuffers and produce minimal ANSI output.
-fn diff_render(prev: Option<&FrameBuffer>, curr: &FrameBuffer) -> String {
+///
+/// `start_row` is the 1-based terminal row where the framebuffer starts.
+/// Uses absolute cursor positioning — no newlines, no scrolling.
+fn diff_render(prev: Option<&FrameBuffer>, curr: &FrameBuffer, start_row: usize) -> String {
     let mut out = String::with_capacity(curr.width * curr.height * 4);
     let mut last_color: Option<Color> = None;
 
     for y in 0..curr.height {
-        // Move cursor to start of line
-        if y == 0 {
-            out.push('\r');
-        } else {
-            out.push('\n');
-            out.push('\r');
-        }
+        let mut need_position = true;
 
-        let mut need_move = false;
-        let mut x = 0;
-
-        while x < curr.width {
+        for x in 0..curr.width {
             let cell = curr.get(x, y);
             let changed = prev.map_or(true, |p| {
                 y < p.height && x < p.width && p.get(x, y) != cell
             }) || prev.is_none();
 
             if changed {
-                if need_move {
-                    // We skipped some unchanged cells — need to position cursor
-                    out.push_str(&format!("\x1B[{}G", x + 1));
+                if need_position {
+                    // Absolute cursor position: ESC[row;colH (1-based)
+                    out.push_str(&format!("\x1B[{};{}H", start_row + y, x + 1));
                 }
-                need_move = false;
+                need_position = false;
 
                 if last_color != Some(cell.color) {
                     out.push_str(&format!("\x1B[38;2;{};{};{}m", cell.color.r, cell.color.g, cell.color.b));
@@ -126,9 +181,8 @@ fn diff_render(prev: Option<&FrameBuffer>, curr: &FrameBuffer) -> String {
                 }
                 out.push(cell.ch);
             } else {
-                need_move = true;
+                need_position = true;
             }
-            x += 1;
         }
     }
 
@@ -247,12 +301,29 @@ pub async fn run_effect(
     let mailbox: Mailbox = Arc::new(Mutex::new(None));
     let running = Arc::new(AtomicBool::new(true));
 
-    // Hide cursor
+    // Hide cursor and reserve space by printing blank lines
     {
         let mut stderr = std::io::stderr().lock();
         let _ = write!(stderr, "\x1B[?25l");
+        // Print empty lines to reserve space, then save cursor row
+        for _ in 0..height {
+            let _ = write!(stderr, "\n");
+        }
+        // Move back up to where we started
+        let _ = write!(stderr, "\x1B[{}A", height);
         let _ = stderr.flush();
     }
+
+    // Query current cursor row via DSR — or just use a simple approach:
+    // save the cursor position and use it as our start row
+    // Since we can't reliably query, we'll use \x1B[s/\x1B[u (save/restore)
+    // and track position via the row count we moved.
+    //
+    // Simpler: use \x1B7 to save position, render with absolute positioning
+    // relative to saved position. Actually simplest: just get cursor row.
+    //
+    // For now, get cursor position via ANSI DSR or fall back to row 1.
+    let start_row = get_cursor_row().unwrap_or(1);
 
     let fps = 25u64;
     let frame_duration = Duration::from_millis(1000 / fps);
@@ -284,7 +355,7 @@ pub async fn run_effect(
 
             let new_frame = m.lock().unwrap().take();
             if let Some(buf) = new_frame {
-                let output = diff_render(prev.as_ref(), &buf);
+                let output = diff_render(prev.as_ref(), &buf, start_row);
                 if !output.is_empty() {
                     let mut stderr = std::io::stderr().lock();
                     let _ = write!(stderr, "{}", output);
@@ -302,10 +373,10 @@ pub async fn run_effect(
     let _ = anim_handle.await;
     let _ = render_handle.await;
 
-    // Show cursor, move past the rendered area
+    // Move cursor below rendered area and show it
     {
         let mut stderr = std::io::stderr().lock();
-        let _ = write!(stderr, "\x1B[{}B\n\x1B[?25h", height);
+        let _ = write!(stderr, "\x1B[{};1H\x1B[?25h", start_row + height);
         let _ = stderr.flush();
     }
 }
@@ -334,7 +405,7 @@ mod tests {
     #[test]
     fn diff_render_first_frame() {
         let buf = FrameBuffer::from_text("hi", Color::new(255, 255, 255));
-        let output = diff_render(None, &buf);
+        let output = diff_render(None, &buf, 1);
         assert!(output.contains('h'));
         assert!(output.contains('i'));
     }
@@ -342,7 +413,7 @@ mod tests {
     #[test]
     fn diff_render_no_change() {
         let buf = FrameBuffer::from_text("hi", Color::new(255, 255, 255));
-        let output = diff_render(Some(&buf), &buf);
+        let output = diff_render(Some(&buf), &buf, 1);
         // No visible chars should be emitted — nothing changed
         assert!(!output.contains('h'));
     }
@@ -352,7 +423,7 @@ mod tests {
         let buf1 = FrameBuffer::from_text("hi", Color::new(255, 255, 255));
         let mut buf2 = buf1.clone();
         buf2.set(1, 0, Cell::new('o', Color::new(255, 0, 0)));
-        let output = diff_render(Some(&buf1), &buf2);
+        let output = diff_render(Some(&buf1), &buf2, 1);
         assert!(!output.contains('h')); // unchanged
         assert!(output.contains('o'));  // changed
     }

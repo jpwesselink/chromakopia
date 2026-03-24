@@ -14,7 +14,7 @@ const BANNER: &str = r#"
 / /___/ __  / _, _/ /_/ / /  / / ___ |/ /| / /_/ / ____// // ___ |
 \____/_/ /_/_/ |_|\____/_/  /_/_/  |_/_/ |_\____/_/   /___/_/  |_|
 
-                  My God, it's full of stars.
+     (c) 2026 JP Wesselink — github.com/jpwesselink/chromakopia — MIT License
 "#;
 
 #[tokio::main]
@@ -24,10 +24,11 @@ async fn main() {
     let height = lines.len();
     let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
 
-    // Clear screen
-    eprint!("\x1B[2J\x1B[H");
+    let effect = fb_effects::Plasma::new(
+        text,
+        presets::storm().palette(256),
+        rand::random::<f64>() * 1000.0,
+    );
 
-    // Native framebuffer sparkle — no ANSI string allocation
-    let effect = fb_effects::Sparkle::new(text, presets::starfield().palette(64));
-    framebuffer::run_effect(effect, width, height, Duration::from_secs(8), 3.0).await;
+    framebuffer::run_effect(effect, width, height, Duration::from_secs(10), 1.0).await;
 }
