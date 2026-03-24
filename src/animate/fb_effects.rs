@@ -1,4 +1,5 @@
 use crate::color::Color;
+use crate::gradient::Gradient;
 use super::framebuffer::{Cell, Effect, FrameBuffer};
 
 /// Native framebuffer plasma — writes directly to the grid, no ANSI strings.
@@ -138,119 +139,183 @@ impl Effect for Sparkle {
     }
 }
 
-/// Compose multiple effects — each one writes to the buffer in order.
-/// Later effects overwrite earlier ones (last-write-wins per cell).
-pub struct LayeredEffect {
-    layers: Vec<Box<dyn Effect>>,
+/// A line in a Scene — either static or animated.
+pub enum SceneLine {
+    /// Static text in a fixed color.
+    Static(&'static str, Color),
+    /// Animated text with a plasma gradient.
+    Plasma(&'static str, Gradient),
+    /// Animated text with sparkle effect.
+    Sparkle(&'static str, Gradient),
+    /// Empty spacer line.
+    Blank,
 }
 
-impl LayeredEffect {
-    pub fn new() -> Self {
-        Self { layers: Vec::new() }
-    }
-
-    pub fn add(mut self, effect: impl Effect) -> Self {
-        self.layers.push(Box::new(effect));
-        self
-    }
-}
-
-impl Effect for LayeredEffect {
-    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        for layer in &self.layers {
-            layer.render(buf, frame);
-        }
-    }
-}
-
-/// Write static text into the buffer — only on the first frame.
-/// After that, leaves cells untouched so animated effects can own them.
-pub struct StaticText {
-    rows: Vec<(usize, Vec<char>, Color)>, // (row_index, chars, color)
-}
-
-impl StaticText {
-    /// Create from text where specific rows are static.
-    /// `row_map` is a list of (row_index, text, color).
-    pub fn new(rows: Vec<(usize, &str, Color)>) -> Self {
-        Self {
-            rows: rows
-                .into_iter()
-                .map(|(y, text, color)| (y, text.chars().collect(), color))
-                .collect(),
-        }
-    }
-}
-
-impl Effect for StaticText {
-    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        if frame > 0 {
-            return; // only write on first frame
-        }
-        for (y, chars, color) in &self.rows {
-            for (x, &ch) in chars.iter().enumerate() {
-                if x < buf.width && *y < buf.height {
-                    buf.set(x, *y, Cell::new(ch, *color));
-                }
-            }
-        }
-    }
-}
-
-/// Animate only specific rows with plasma, leave others untouched.
-pub struct RowPlasma {
-    rows: Vec<(usize, Vec<char>)>, // (row_index, chars)
-    palette: Vec<Color>,
+/// Declarative scene builder — describe lines, get a working effect.
+///
+/// ```ignore
+/// let scene = Scene::new()
+///     .line(SceneLine::Static("credit", Color::new(100, 100, 100)))
+///     .line(SceneLine::Blank)
+///     .line(SceneLine::Plasma("BANNER LINE 1", presets::storm()))
+///     .line(SceneLine::Plasma("BANNER LINE 2", presets::storm()))
+///     .line(SceneLine::Blank)
+///     .line(SceneLine::Static("url", Color::new(100, 100, 100)));
+///
+/// scene.run(Duration::from_secs(10)).await;
+/// ```
+pub struct Scene {
+    lines: Vec<SceneLine>,
     seed: f64,
 }
 
-impl RowPlasma {
-    pub fn new(rows: Vec<(usize, &str)>, palette: Vec<Color>, seed: f64) -> Self {
+impl Scene {
+    pub fn new() -> Self {
         Self {
-            rows: rows
-                .into_iter()
-                .map(|(y, text)| (y, text.chars().collect()))
-                .collect(),
-            palette,
-            seed,
+            lines: Vec::new(),
+            seed: 0.0,
         }
+    }
+
+    pub fn seed(mut self, seed: f64) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    pub fn line(mut self, line: SceneLine) -> Self {
+        self.lines.push(line);
+        self
+    }
+
+    /// Add multiple lines from a multiline string, all with the same effect.
+    pub fn text_block(mut self, text: &'static str, make_line: impl Fn(&'static str) -> SceneLine) -> Self {
+        for line in text.lines() {
+            // SAFETY: line is a subslice of a 'static str, so it's 'static
+            let static_line: &'static str = unsafe {
+                std::mem::transmute::<&str, &'static str>(line)
+            };
+            self.lines.push(make_line(static_line));
+        }
+        self
+    }
+
+    pub fn height(&self) -> usize {
+        self.lines.len()
+    }
+
+    pub fn width(&self) -> usize {
+        self.lines.iter().map(|l| match l {
+            SceneLine::Static(s, _) => s.chars().count(),
+            SceneLine::Plasma(s, _) => s.chars().count(),
+            SceneLine::Sparkle(s, _) => s.chars().count(),
+            SceneLine::Blank => 0,
+        }).max().unwrap_or(0)
+    }
+
+    /// Build into an Effect and run with the framebuffer renderer.
+    pub async fn run(self, duration: std::time::Duration) {
+        let width = self.width();
+        let height = self.height();
+        let effect = SceneEffect::new(self);
+        super::framebuffer::run_effect(effect, width, height, duration, 1.0).await;
     }
 }
 
-impl Effect for RowPlasma {
+struct SceneEffect {
+    scene: Scene,
+}
+
+impl SceneEffect {
+    fn new(scene: Scene) -> Self {
+        Self { scene }
+    }
+}
+
+impl Effect for SceneEffect {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        let t = frame as f64 * 0.08;
-        let pal = &self.palette;
-        if pal.is_empty() {
-            return;
-        }
+        let seed = self.scene.seed;
 
-        for (y, chars) in &self.rows {
-            let yf = *y as f64;
-            for (x, &ch) in chars.iter().enumerate() {
-                if x >= buf.width || *y >= buf.height {
-                    continue;
+        for (y, line) in self.scene.lines.iter().enumerate() {
+            match line {
+                SceneLine::Static(text, color) => {
+                    if frame == 0 {
+                        for (x, ch) in text.chars().enumerate() {
+                            if x < buf.width {
+                                buf.set(x, y, Cell::new(ch, *color));
+                            }
+                        }
+                    }
                 }
+                SceneLine::Plasma(text, grad) => {
+                    let pal = grad.palette(256);
+                    let t = frame as f64 * 0.08;
+                    let yf = y as f64;
 
-                let xf = x as f64;
-                let v1 = (xf * 0.08 + t + self.seed).sin();
-                let v2 = (yf * 0.12 + t * 0.6 + self.seed * 1.3).sin();
-                let v3 = ((xf * 0.06 + yf * 0.08 + t * 0.4 + self.seed * 0.7).sin()
-                    + (xf * 0.04 - yf * 0.06 + t * 0.7 + self.seed * 1.9).cos())
-                    * 0.5;
-                let cx = xf - buf.width as f64 / 2.0;
-                let cy = (yf - buf.height as f64 / 2.0) * 2.5;
-                let v4 = ((cx * cx + cy * cy).sqrt() * 0.12 - t * 1.2 + self.seed * 0.5).sin();
+                    for (x, ch) in text.chars().enumerate() {
+                        if x >= buf.width { break; }
 
-                let v = (v1 + v2 + v3 + v4) * 0.25;
-                let idx = ((v + 1.0) * 0.5 + t * 0.05).rem_euclid(1.0);
-                let fi = idx * (pal.len() - 1) as f64;
-                let lo = (fi.floor() as usize).min(pal.len() - 1);
-                let hi = (lo + 1).min(pal.len() - 1);
-                let frac = fi - lo as f64;
-                let color = Color::lerp_rgb(pal[lo], pal[hi], frac);
+                        let xf = x as f64;
+                        let v1 = (xf * 0.08 + t + seed).sin();
+                        let v2 = (yf * 0.12 + t * 0.6 + seed * 1.3).sin();
+                        let v3 = ((xf * 0.06 + yf * 0.08 + t * 0.4 + seed * 0.7).sin()
+                            + (xf * 0.04 - yf * 0.06 + t * 0.7 + seed * 1.9).cos())
+                            * 0.5;
+                        let cx = xf - buf.width as f64 / 2.0;
+                        let cy = (yf - buf.height as f64 / 2.0) * 2.5;
+                        let v4 = ((cx * cx + cy * cy).sqrt() * 0.12 - t * 1.2 + seed * 0.5).sin();
+                        let v = (v1 + v2 + v3 + v4) * 0.25;
 
-                buf.set(x, *y, Cell::new(ch, color));
+                        let idx = ((v + 1.0) * 0.5 + t * 0.05).rem_euclid(1.0);
+                        let fi = idx * (pal.len() - 1) as f64;
+                        let lo = (fi.floor() as usize).min(pal.len() - 1);
+                        let hi = (lo + 1).min(pal.len() - 1);
+                        let frac = fi - lo as f64;
+                        let color = Color::lerp_rgb(pal[lo], pal[hi], frac);
+
+                        buf.set(x, y, Cell::new(ch, color));
+                    }
+                }
+                SceneLine::Sparkle(text, grad) => {
+                    let pal = grad.palette(64);
+                    let t = frame as f64;
+                    let cx = buf.width as f64 / 2.0;
+                    let cy = buf.height as f64 / 2.0;
+                    let max_dist = (cx * cx + (cy * 2.5) * (cy * 2.5)).sqrt();
+
+                    for (x, ch) in text.chars().enumerate() {
+                        if x >= buf.width { break; }
+                        if ch.is_whitespace() {
+                            buf.set(x, y, Cell::space());
+                            continue;
+                        }
+
+                        let dx = x as f64 - cx;
+                        let dy = (y as f64 - cy) * 2.5;
+                        let dist = (dx * dx + dy * dy).sqrt() / max_dist;
+                        let phase = ((x * 3571 + y * 2719) % 997) as f64;
+                        let speed = 0.2 + dist * 0.8;
+                        let cycle = ((t * speed * 0.15 + phase) % 40.0) / 40.0;
+                        let pulse = (cycle * std::f64::consts::TAU).sin() * 0.5 + 0.5;
+                        let brightness = dist * (0.3 + 0.7 * pulse);
+
+                        let color_t = (dist + cycle * 0.3).rem_euclid(1.0);
+                        let fi = color_t * (pal.len() - 1) as f64;
+                        let lo = (fi.floor() as usize).min(pal.len() - 1);
+                        let hi = (lo + 1).min(pal.len() - 1);
+                        let frac = fi - lo as f64;
+                        let base = Color::lerp_rgb(pal[lo], pal[hi], frac);
+                        let color = Color::new(
+                            (base.r as f64 * brightness) as u8,
+                            (base.g as f64 * brightness) as u8,
+                            (base.b as f64 * brightness) as u8,
+                        );
+
+                        buf.set(x, y, Cell::new(ch, color));
+                    }
+                }
+                SceneLine::Blank => {
+                    // Nothing to do — stays as spaces
+                }
             }
         }
     }
