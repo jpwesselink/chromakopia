@@ -84,10 +84,13 @@ async fn main() {
                 delay_frames,
                 Chain::new()
                     .then(fps * 2, Fade::in_from(
-                        Scroll::new(l, mist.clone(), direction, Easing::Elastic(0.25), fps * 2, 0),
+                        Composite::new(
+                            Scroll::new(l, mist.clone(), direction, Easing::Elastic(0.25), fps * 2, 0),
+                            Plasma::new(l, mist.clone(), 42.0),
+                        ),
                         bg, Easing::EaseOut, fps,
                     ))
-                    .then(fps * 100, Glow::new(l, mist.clone()))
+                    .then(fps * 100, Plasma::new(l, mist.clone(), 42.0))
             )));
             current_line += 1;
         }
