@@ -105,7 +105,7 @@ fn elastic_out(t: f64, period: f64) -> f64 {
         return t;
     }
     let p = period.max(0.01);
-    (2.0_f64.powf(-10.0 * t) * ((t - p / 4.0) * std::f64::consts::TAU / p).sin()) + 1.0
+    (2.0_f64.powf(-6.0 * t) * ((t - p / 4.0) * std::f64::consts::TAU / p).sin()) + 1.0
 }
 
 #[cfg(test)]
