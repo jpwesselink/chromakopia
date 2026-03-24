@@ -225,7 +225,7 @@ pub async fn run_effect(
 
     let start_row = get_cursor_row().unwrap_or(1);
 
-    let fps = 60u64;
+    let fps = 30u64;
     let frame_ms = (1000.0 / fps as f64 / speed) as u64;
     let frame_duration = Duration::from_millis(frame_ms.max(1));
 
@@ -345,7 +345,7 @@ pub fn spawn_effect(
 
     let start_row = get_cursor_row().unwrap_or(1);
 
-    let fps = 60u64;
+    let fps = 30u64;
     let frame_ms = (1000.0 / fps as f64 / speed) as u64;
     let frame_duration = Duration::from_millis(frame_ms.max(1));
 
