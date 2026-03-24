@@ -105,6 +105,10 @@ name = "theme_adaptive"
 path = "examples/theme_adaptive.rs"
 
 [[example]]
+name = "moon"
+path = "examples/moon.rs"
+
+[[example]]
 name = "petscii"
 path = "examples/petscii.rs"
 
