@@ -359,7 +359,7 @@ pub async fn run_effect(
 
             let new_frame = m.lock().unwrap().take();
             if let Some(buf) = new_frame {
-                let output = diff_render(prev.as_ref(), &buf, start_row);
+                let mut output = diff_render(prev.as_ref(), &buf, start_row);
                 render_count += 1;
 
                 // Update FPS counter every second
@@ -370,14 +370,13 @@ pub async fn run_effect(
                     last_fps_time = now;
                 }
 
-                let mut stderr = std::io::stderr().lock();
-                if !output.is_empty() {
-                    let _ = write!(stderr, "{}", output);
-                }
-                // FPS overlay in top-right corner
+                // Append FPS overlay — single write, single flush
                 let fps_str = format!(" {}fps ", displayed_fps);
                 let fps_col = term_width.saturating_sub(fps_str.len());
-                let _ = write!(stderr, "\x1B[{};{}H\x1B[90m{}\x1B[0m", start_row, fps_col + 1, fps_str);
+                output.push_str(&format!("\x1B[{};{}H\x1B[90m{}\x1B[0m", start_row, fps_col + 1, fps_str));
+
+                let mut stderr = std::io::stderr().lock();
+                let _ = stderr.write_all(output.as_bytes());
                 let _ = stderr.flush();
 
                 prev = Some(buf);
