@@ -45,9 +45,9 @@ async fn main() {
     let scroll_secs = ((total_lines - 1) * stagger + frames_per_line) as f64 / fps as f64;
     let total = scroll_secs + 10.0;
 
-    // Banner slides in as one block from the left
+    // Banner slides in as one block from the right
     let banner_scroll = animate::scroll_eased_gradient_effect(
-        ScrollDirection::Left, Easing::Elastic(0.25), presets::storm(),
+        ScrollDirection::Right, Easing::Elastic(0.25), presets::storm(),
         frames_per_line,
     );
     let license_scroll = animate::scroll_staggered_effect(
@@ -55,18 +55,19 @@ async fn main() {
         frames_per_line, stagger,
     );
 
-    // Two different plasmas: storm for banner, mist for license
     let seed: f64 = rand::random::<f64>() * 1000.0;
     let bg = chromakopia::bg_color().to_string();
+    let palette = chromakopia::gradient(&[&bg, "#00ccff", "#4466ff", "#aa44ff", &bg]);
+    // Same palette for both, banner shifted 50% in the color cycle
     let plasma_banner = animate::plasma_seeded_effect(
-        presets::starfield(),
-        0.0, seed,
+        palette.clone(), 0.0, seed,
     );
     let plasma_license = animate::plasma_seeded_effect(
-        chromakopia::gradient(&[&bg, "#00ccff", "#4466ff", "#aa44ff", &bg]),
-        banner_lines as f64 + 1.0, seed,
+        palette, banner_lines as f64 + 1.0, seed,
     );
-    let split = banner_lines + 1; // +1 for blank line
+    let split = banner_lines + 1;
+    // Frame offset for 50% palette shift on the banner
+    let palette_offset = 40; // ~half a plasma color cycle
 
     let position_fn = move |text: &str, frame: usize| -> String {
         let lines: Vec<&str> = text.split('\n').collect();
@@ -81,7 +82,7 @@ async fn main() {
         let lines: Vec<&str> = text.split('\n').collect();
         let banner_text = lines[..banner_lines].join("\n");
         let rest_text = lines[split..].join("\n");
-        let banner_out = plasma_banner(&banner_text, frame);
+        let banner_out = plasma_banner(&banner_text, frame + palette_offset);
         let rest_out = plasma_license(&rest_text, frame);
         format!("{}\n\n{}", banner_out, rest_out)
     };
