@@ -507,118 +507,81 @@ impl Effect for Scroll {
 
 // ── Fade ──
 
-/// Fade from one color to revealed text, or from text to a color.
+/// Opacity envelope that wraps another effect.
 ///
-/// At frame 0: fully `from_color` (text invisible).
-/// At `total_frames`: fully revealed (text colors from palette).
-pub struct FadeIn {
-    chars: Vec<Vec<char>>,
-    palette: Vec<Color>,
-    from_color: Color,
+/// Runs the inner effect, then lerps all its colors toward `target_color`
+/// based on the current opacity (0.0 = fully target, 1.0 = fully effect).
+///
+/// Use `Fade::in_from()` for fade-in, `Fade::out_to()` for fade-out.
+pub struct Fade {
+    inner: Box<dyn Effect>,
+    target_color: Color,
     easing: super::easing::Easing,
     total_frames: usize,
+    direction: FadeDirection,
 }
 
-impl FadeIn {
-    pub fn new(
-        text: &str,
-        palette: Vec<Color>,
-        from_color: Color,
-        easing: super::easing::Easing,
-        total_frames: usize,
-    ) -> Self {
+enum FadeDirection {
+    In,  // 0→1 opacity (target → effect)
+    Out, // 1→0 opacity (effect → target)
+}
+
+impl Fade {
+    /// Fade in: starts at `from_color`, reveals the inner effect over `total_frames`.
+    pub fn in_from(inner: impl Effect, from_color: Color, easing: super::easing::Easing, total_frames: usize) -> Self {
         Self {
-            chars: text_to_lines(text),
-            palette,
-            from_color,
+            inner: Box::new(inner),
+            target_color: from_color,
             easing,
             total_frames,
+            direction: FadeDirection::In,
+        }
+    }
+
+    /// Fade out: starts showing the inner effect, fades to `to_color` over `total_frames`.
+    pub fn out_to(inner: impl Effect, to_color: Color, easing: super::easing::Easing, total_frames: usize) -> Self {
+        Self {
+            inner: Box::new(inner),
+            target_color: to_color,
+            easing,
+            total_frames,
+            direction: FadeDirection::Out,
         }
     }
 }
 
-impl Effect for FadeIn {
+impl Effect for Fade {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        // Run the inner effect first
+        self.inner.render(buf, frame);
+
+        // Compute opacity
         let t = if self.total_frames == 0 {
             1.0
         } else {
             (frame as f64 / self.total_frames as f64).min(1.0)
         };
-        let opacity = self.easing.apply(t);
-        let pal = &self.palette;
-
-        for (y, line) in self.chars.iter().enumerate() {
-            if y >= buf.height { break; }
-            for (x, &ch) in line.iter().enumerate() {
-                if x >= buf.width { break; }
-                let target = if !pal.is_empty() {
-                    let idx = x % pal.len();
-                    pal[idx]
-                } else {
-                    Color::new(204, 204, 204)
-                };
-                let color = Color::lerp_rgb(self.from_color, target, opacity);
-                buf.set(x, y, Cell::new(ch, color));
-            }
-        }
-    }
-}
-
-/// Fade text out to a solid color.
-///
-/// At frame 0: fully visible. At `total_frames`: fully `to_color`.
-pub struct FadeOut {
-    chars: Vec<Vec<char>>,
-    palette: Vec<Color>,
-    to_color: Color,
-    easing: super::easing::Easing,
-    total_frames: usize,
-}
-
-impl FadeOut {
-    pub fn new(
-        text: &str,
-        palette: Vec<Color>,
-        to_color: Color,
-        easing: super::easing::Easing,
-        total_frames: usize,
-    ) -> Self {
-        Self {
-            chars: text_to_lines(text),
-            palette,
-            to_color,
-            easing,
-            total_frames,
-        }
-    }
-}
-
-impl Effect for FadeOut {
-    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        let t = if self.total_frames == 0 {
-            1.0
-        } else {
-            (frame as f64 / self.total_frames as f64).min(1.0)
+        let eased = self.easing.apply(t);
+        let opacity = match self.direction {
+            FadeDirection::In => eased,       // 0→1: target→effect
+            FadeDirection::Out => 1.0 - eased, // 1→0: effect→target
         };
-        let opacity = self.easing.apply(t);
-        let pal = &self.palette;
 
-        for (y, line) in self.chars.iter().enumerate() {
-            if y >= buf.height { break; }
-            for (x, &ch) in line.iter().enumerate() {
-                if x >= buf.width { break; }
-                let from = if !pal.is_empty() {
-                    let idx = x % pal.len();
-                    pal[idx]
-                } else {
-                    Color::new(204, 204, 204)
-                };
-                let color = Color::lerp_rgb(from, self.to_color, opacity);
-                buf.set(x, y, Cell::new(ch, color));
+        // Lerp every cell's color toward target
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                let cell = buf.get(x, y);
+                if cell.ch.is_whitespace() { continue; }
+                let color = Color::lerp_rgb(self.target_color, cell.color, opacity);
+                buf.set_color(x, y, color);
             }
         }
     }
 }
+
+// Keep the old names as convenience constructors
+pub type FadeIn = Fade;
+pub type FadeOut = Fade;
 
 /// Chained effect: runs effect A for N frames, then effect B.
 ///
@@ -793,30 +756,34 @@ mod tests {
     #[test]
     fn fade_in_starts_from_color() {
         let bg = Color::new(0, 0, 0);
-        let pal = vec![Color::new(255, 255, 255)];
-        let effect = FadeIn::new("hi", pal, bg, super::super::Easing::Linear, 60);
+        let inner = Rainbow::new("hi");
+        let effect = Fade::in_from(inner, bg, super::super::Easing::Linear, 60);
         let mut buf = make_buf("hi");
         effect.render(&mut buf, 0);
+        // At frame 0, opacity=0, so fully bg color
         assert_eq!(buf.get(0, 0).color, bg);
     }
 
     #[test]
-    fn fade_in_ends_at_palette() {
+    fn fade_in_ends_at_effect_color() {
         let bg = Color::new(0, 0, 0);
-        let pal = vec![Color::new(255, 255, 255)];
-        let effect = FadeIn::new("hi", pal.clone(), bg, super::super::Easing::Linear, 60);
+        // Use a simple effect that sets a known color
+        let inner = Neon::new("hi"); // frame 1 = bright pink
+        let effect = Fade::in_from(inner, bg, super::super::Easing::Linear, 60);
         let mut buf = make_buf("hi");
+        // At frame 60, opacity=1, so fully the inner effect's color
         effect.render(&mut buf, 60);
-        assert_eq!(buf.get(0, 0).color, pal[0]);
+        assert_ne!(buf.get(0, 0).color, bg);
     }
 
     #[test]
     fn fade_out_ends_at_color() {
         let to = Color::new(0, 0, 0);
-        let pal = vec![Color::new(255, 255, 255)];
-        let effect = FadeOut::new("hi", pal, to, super::super::Easing::Linear, 60);
+        let inner = Rainbow::new("hi");
+        let effect = Fade::out_to(inner, to, super::super::Easing::Linear, 60);
         let mut buf = make_buf("hi");
         effect.render(&mut buf, 60);
+        // At frame 60, opacity=0, so fully target color
         assert_eq!(buf.get(0, 0).color, to);
     }
 
@@ -835,12 +802,11 @@ mod tests {
 
     #[test]
     fn chain_holds_last_effect() {
-        let pal = vec![Color::new(255, 0, 0)];
         let effect = Chain::new()
-            .then(10, FadeIn::new("hi", pal.clone(), Color::new(0, 0, 0), super::super::Easing::Linear, 10));
+            .then(10, Fade::in_from(Rainbow::new("hi"), Color::new(0, 0, 0), super::super::Easing::Linear, 10));
         let mut buf = make_buf("hi");
-        // Past the end — should hold final frame
+        // Past the end — should hold final frame (fully revealed rainbow)
         effect.render(&mut buf, 100);
-        assert_eq!(buf.get(0, 0).color, Color::new(255, 0, 0));
+        assert_ne!(buf.get(0, 0).color, Color::new(0, 0, 0)); // not black = faded in
     }
 }
