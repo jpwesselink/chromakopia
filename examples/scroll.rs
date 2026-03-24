@@ -12,7 +12,13 @@ const BANNER: &str = r#"
 #[tokio::main]
 async fn main() {
     let text = BANNER.trim_matches('\n');
-    let anim = animate::scroll_with(presets::storm(), text, 1.0);
-    tokio::time::sleep(Duration::from_secs(8)).await;
+    let anim = animate::scroll_with(
+        presets::storm(),
+        text,
+        Duration::from_secs(2),
+        1.0,
+    );
+    // Hold after the bounce settles
+    tokio::time::sleep(Duration::from_secs(4)).await;
     anim.stop();
 }

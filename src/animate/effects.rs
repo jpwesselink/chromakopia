@@ -312,26 +312,46 @@ pub fn plasma(text: &str, frame: usize, palette: Option<&[Color]>) -> String {
         .join("\n")
 }
 
-/// Horizontal scrolling marquee: all lines shift left together, wrapping around.
+/// Slide-in from the left with bounce easing.
 ///
-/// Each line is padded to the width of the longest line so the scroll
-/// stays uniform. A rainbow gradient is applied on top.
-pub fn scroll(text: &str, frame: usize) -> String {
+/// Text starts off-screen and slides into its final position with a
+/// bounce at the end. `total_frames` controls the animation duration;
+/// after that the text stays in place. A rainbow gradient is applied.
+pub fn scroll(text: &str, frame: usize, total_frames: usize) -> String {
+    scroll_inner(text, frame, total_frames, None)
+}
+
+/// Slide-in from the left with bounce easing and a custom gradient.
+pub fn scroll_with(text: &str, frame: usize, total_frames: usize, gradient: &Gradient) -> String {
+    scroll_inner(text, frame, total_frames, Some(gradient))
+}
+
+fn scroll_inner(text: &str, frame: usize, total_frames: usize, gradient: Option<&Gradient>) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let max_width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
     if max_width == 0 {
         return text.to_string();
     }
 
-    let offset = frame % max_width;
-    let hue = (frame * 3 % 360) as f64;
+    let t = if total_frames == 0 {
+        1.0
+    } else {
+        (frame as f64 / total_frames as f64).min(1.0)
+    };
+    let eased = bounce_out(t);
+
+    // offset = how many chars the text is still shifted off-screen to the left
+    // Starts at max_width (fully hidden), ends at 0 (fully visible).
+    // Bounce can overshoot past 0 (negative = text shifted right, gap on left).
+    let offset = ((1.0 - eased) * max_width as f64).round() as i32;
+
+    let palette = gradient.map(|g| g.palette(max_width.max(2)));
 
     lines
         .iter()
         .map(|line| {
             let chars: Vec<char> = line.chars().collect();
             let width = chars.len();
-            // Pad to max_width with spaces
             let padded: Vec<char> = chars
                 .iter()
                 .copied()
@@ -340,9 +360,20 @@ pub fn scroll(text: &str, frame: usize) -> String {
 
             (0..max_width)
                 .map(|i| {
-                    let ch = padded[(i + offset) % max_width];
-                    let t = i as f64 / max_width as f64;
-                    let c = Color::from_hsv((hue + t * 360.0) % 360.0, 0.9, 1.0);
+                    let src = i as i32 + offset;
+                    let ch = if src >= 0 && (src as usize) < max_width {
+                        padded[src as usize]
+                    } else {
+                        ' '
+                    };
+
+                    let c = if let Some(ref pal) = palette {
+                        pal[i % pal.len()]
+                    } else {
+                        let hue = (i as f64 / max_width as f64) * 360.0;
+                        Color::from_hsv(hue, 0.9, 1.0)
+                    };
+
                     ch.to_string().truecolor(c.r, c.g, c.b).to_string()
                 })
                 .collect::<String>()
@@ -351,39 +382,20 @@ pub fn scroll(text: &str, frame: usize) -> String {
         .join("\n")
 }
 
-/// Horizontal scrolling marquee with a custom gradient.
-pub fn scroll_with(text: &str, frame: usize, gradient: &Gradient) -> String {
-    let lines: Vec<&str> = text.split('\n').collect();
-    let max_width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-    if max_width == 0 {
-        return text.to_string();
+/// Bounce-out easing: overshoots then settles.
+fn bounce_out(t: f64) -> f64 {
+    if t < 1.0 / 2.75 {
+        7.5625 * t * t
+    } else if t < 2.0 / 2.75 {
+        let t = t - 1.5 / 2.75;
+        7.5625 * t * t + 0.75
+    } else if t < 2.5 / 2.75 {
+        let t = t - 2.25 / 2.75;
+        7.5625 * t * t + 0.9375
+    } else {
+        let t = t - 2.625 / 2.75;
+        7.5625 * t * t + 0.984375
     }
-
-    let offset = frame % max_width;
-    let palette = gradient.palette(max_width.max(2));
-
-    lines
-        .iter()
-        .map(|line| {
-            let chars: Vec<char> = line.chars().collect();
-            let width = chars.len();
-            let padded: Vec<char> = chars
-                .iter()
-                .copied()
-                .chain(std::iter::repeat(' ').take(max_width - width))
-                .collect();
-
-            (0..max_width)
-                .map(|i| {
-                    let ch = padded[(i + offset) % max_width];
-                    let color_idx = (i + frame) % palette.len();
-                    let c = palette[color_idx];
-                    ch.to_string().truecolor(c.r, c.g, c.b).to_string()
-                })
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 #[cfg(test)]
@@ -463,35 +475,54 @@ mod tests {
     #[test]
     fn scroll_preserves_line_count() {
         with_color(|| {
-            let output = scroll("abc\ndef\nghi", 0);
+            let output = scroll("abc\ndef\nghi", 30, 60);
             assert_eq!(output.split('\n').count(), 3);
         });
     }
 
     #[test]
     fn scroll_empty_input() {
-        let output = scroll("", 0);
+        let output = scroll("", 0, 60);
         assert_eq!(output, "");
     }
 
     #[test]
-    fn scroll_different_frames_differ() {
+    fn scroll_frame_zero_is_blank() {
         with_color(|| {
-            let a = scroll("hello world", 0);
-            let b = scroll("hello world", 5);
-            assert_ne!(a, b);
+            // At frame 0 the text is fully off-screen
+            let output = scroll("hello", 0, 60);
+            // Should contain only spaces (plus ANSI codes)
+            let stripped: String = output.chars().filter(|c| !c.is_ascii_control() && *c != '[' && *c != 'm' && !c.is_ascii_digit() && *c != ';').collect();
+            assert!(stripped.trim().is_empty(), "frame 0 should be blank, got: {stripped}");
         });
     }
 
     #[test]
-    fn scroll_multiline_pads_to_max_width() {
+    fn scroll_final_frame_shows_text() {
         with_color(|| {
-            // "ab" and "cdef" — both lines should scroll at the same width (4)
-            let a = scroll("ab\ncdef", 0);
-            let b = scroll("ab\ncdef", 2);
-            assert_ne!(a, b);
-            // Both frames should have 2 lines
-            assert_eq!(a.split('\n').count(), 2);
+            let total = 60;
+            let output = scroll("hello", total, total);
+            // After the animation completes, original text should be visible
+            assert!(output.contains('h'));
+            assert!(output.contains('o'));
+        });
+    }
+
+    #[test]
+    fn scroll_past_end_holds_position() {
+        with_color(|| {
+            let total = 60;
+            let a = scroll("hello", total, total);
+            let b = scroll("hello", total + 100, total);
+            assert_eq!(a, b);
+        });
+    }
+
+    #[test]
+    fn scroll_multiline_same_line_count() {
+        with_color(|| {
+            let output = scroll("ab\ncdef", 30, 60);
+            assert_eq!(output.split('\n').count(), 2);
         });
     }
 }

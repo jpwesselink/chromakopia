@@ -486,23 +486,30 @@ impl Sequence {
         self
     }
 
-    /// Horizontal scrolling marquee with rainbow colors.
+    /// Slide-in from the left with bounce easing and rainbow colors.
+    ///
+    /// Text starts off-screen and slides into place with a bounce.
+    /// The animation plays once and holds the final position.
     pub fn scroll(mut self, duration: Duration) -> Self {
+        let fps = 30;
+        let total_frames = (duration.as_secs_f64() * fps as f64) as usize;
         self.push_effect(
-            Box::new(|text, frame| effects::scroll(text, frame)),
+            Box::new(move |text, frame| effects::scroll(text, frame, total_frames)),
             duration,
-            20,
+            fps,
         );
         self
     }
 
-    /// Horizontal scrolling marquee with a custom gradient.
+    /// Slide-in from the left with bounce easing and a custom gradient.
     pub fn scroll_with(mut self, grad: Gradient, duration: Duration) -> Self {
+        let fps = 30;
+        let total_frames = (duration.as_secs_f64() * fps as f64) as usize;
         let gradient = grad.clone();
         self.push_effect(
-            Box::new(move |text, frame| effects::scroll_with(text, frame, &gradient)),
+            Box::new(move |text, frame| effects::scroll_with(text, frame, total_frames, &gradient)),
             duration,
-            20,
+            fps,
         );
         self
     }
@@ -1055,14 +1062,16 @@ pub fn plasma_gradient_effect(grad: Gradient) -> impl Fn(&str, usize) -> String 
     move |text, frame| effects::plasma(text, frame, Some(&palette))
 }
 
-/// Create a rainbow scrolling marquee effect closure for use with [`Sequence::effect`].
-pub fn scroll_effect() -> impl Fn(&str, usize) -> String + Send + 'static {
-    |text, frame| effects::scroll(text, frame)
+/// Create a bounce slide-in effect closure for use with [`Sequence::effect`].
+///
+/// `total_frames` controls how long the slide-in takes; after that the text holds.
+pub fn scroll_effect(total_frames: usize) -> impl Fn(&str, usize) -> String + Send + 'static {
+    move |text, frame| effects::scroll(text, frame, total_frames)
 }
 
-/// Create a scrolling marquee effect closure with a custom gradient for use with [`Sequence::effect`].
-pub fn scroll_gradient_effect(grad: Gradient) -> impl Fn(&str, usize) -> String + Send + 'static {
-    move |text, frame| effects::scroll_with(text, frame, &grad)
+/// Create a bounce slide-in effect closure with a custom gradient for use with [`Sequence::effect`].
+pub fn scroll_gradient_effect(grad: Gradient, total_frames: usize) -> impl Fn(&str, usize) -> String + Send + 'static {
+    move |text, frame| effects::scroll_with(text, frame, total_frames, &grad)
 }
 
 // ── Standalone animations ──
@@ -1116,14 +1125,20 @@ pub fn plasma_with(grad: Gradient, text: &str, speed: f64) -> Animation {
     spawn_animation(text, move |text, frame| effects::plasma(text, frame, Some(&palette)), 30, speed)
 }
 
-/// Start a scrolling marquee animation with rainbow colors.
-pub fn scroll(text: &str, speed: f64) -> Animation {
-    spawn_animation(text, effects::scroll, 20, speed)
+/// Start a slide-in animation with bounce easing and rainbow colors.
+///
+/// Text slides in from the left over `duration`, bounces, then holds.
+pub fn scroll(text: &str, duration: Duration, speed: f64) -> Animation {
+    let fps = 30u64;
+    let total_frames = (duration.as_secs_f64() * fps as f64) as usize;
+    spawn_animation(text, move |text, frame| effects::scroll(text, frame, total_frames), fps, speed)
 }
 
-/// Start a scrolling marquee animation with a custom gradient.
-pub fn scroll_with(grad: Gradient, text: &str, speed: f64) -> Animation {
-    spawn_animation(text, move |text, frame| effects::scroll_with(text, frame, &grad), 20, speed)
+/// Start a slide-in animation with bounce easing and a custom gradient.
+pub fn scroll_with(grad: Gradient, text: &str, duration: Duration, speed: f64) -> Animation {
+    let fps = 30u64;
+    let total_frames = (duration.as_secs_f64() * fps as f64) as usize;
+    spawn_animation(text, move |text, frame| effects::scroll_with(text, frame, total_frames, &grad), fps, speed)
 }
 
 /// Slow glow that sweeps left to right across any gradient.
