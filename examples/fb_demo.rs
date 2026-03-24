@@ -64,7 +64,7 @@ async fn main() {
         // Banner — scroll holds after settling, plasma runs continuously
         .block(&banner_text, Fade::in_from(
             Composite::new(
-                Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 1),
+                Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 0),
                 Plasma::new(&banner_text, storm.clone(), 42.0),
             ),
             bg, Easing::EaseOut, fps,
