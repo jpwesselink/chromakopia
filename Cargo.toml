@@ -103,3 +103,7 @@ path = "examples/plasma.rs"
 [[example]]
 name = "theme_adaptive"
 path = "examples/theme_adaptive.rs"
+
+[[example]]
+name = "showcase"
+path = "examples/showcase.rs"
