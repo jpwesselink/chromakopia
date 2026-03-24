@@ -24,3 +24,37 @@ pub fn gradient(colors: &[&str]) -> Gradient {
         .collect();
     Gradient::new(stops)
 }
+
+/// Pad each line with spaces on the right to fill the terminal width.
+pub fn pad(text: &str) -> String {
+    let w = terminal::terminal_width();
+    text.lines()
+        .map(|line| {
+            let len = line.chars().count();
+            if len < w {
+                format!("{}{}", line, " ".repeat(w - len))
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Center each line within the terminal width by padding left and right.
+pub fn center(text: &str) -> String {
+    let w = terminal::terminal_width();
+    text.lines()
+        .map(|line| {
+            let len = line.chars().count();
+            if len < w {
+                let left = (w - len) / 2;
+                let right = w - len - left;
+                format!("{}{}{}", " ".repeat(left), line, " ".repeat(right))
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
