@@ -20,13 +20,13 @@ async fn main() {
 
     animate::Sequence::new(&full_text)
         .effect(
-            TimeRange::new(0.0, 6.0), 30,
+            TimeRange::new(0.0, 6.0), 100,
             animate::scroll_staggered_effect(
                 ScrollDirection::Left,
                 Easing::Elastic(0.4),
                 presets::storm(),
-                60,  // 2s per line
-                2,   // ~0.05s between lines — steep slant
+                200, // 2s per line at 100fps
+                1,   // 0.01s between lines
             ),
         )
         .run(1.0)
