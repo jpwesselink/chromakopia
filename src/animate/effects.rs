@@ -256,12 +256,19 @@ pub fn fade_out(text: &str, frame: usize, total_frames: usize, target: Color) ->
 /// Each character's color is computed from its (x, y) position and time.
 /// Uses a gradient palette for colors. Pass `None` for rainbow HSV.
 pub fn plasma(text: &str, frame: usize, palette: Option<&[Color]>) -> String {
-    plasma_offset(text, frame, palette, 0.0)
+    plasma_full(text, frame, palette, 0.0, 0.0)
 }
 
-/// Plasma with a vertical offset — shifts the wave origin so different
-/// sections of text get different parts of the plasma field.
+/// Plasma with a vertical offset.
 pub fn plasma_offset(text: &str, frame: usize, palette: Option<&[Color]>, y_offset: f64) -> String {
+    plasma_full(text, frame, palette, y_offset, 0.0)
+}
+
+/// Plasma with vertical offset and deterministic seed.
+///
+/// The seed shifts the phase of all sine waves, producing a completely
+/// different pattern. Same seed always produces the same result.
+pub fn plasma_full(text: &str, frame: usize, palette: Option<&[Color]>, y_offset: f64, seed: f64) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let t = frame as f64 * 0.08;
 
@@ -276,15 +283,15 @@ pub fn plasma_offset(text: &str, frame: usize, palette: Option<&[Color]>, y_offs
                     let xf = x as f64;
 
                     // Four overlapping sine planes — the classic plasma recipe
-                    let v1 = (xf * 0.08 + t).sin();
-                    let v2 = (yf * 0.12 + t * 0.6).sin();
-                    let v3 = ((xf * 0.06 + yf * 0.08 + t * 0.4).sin()
-                        + (xf * 0.04 - yf * 0.06 + t * 0.7).cos())
+                    let v1 = (xf * 0.08 + t + seed).sin();
+                    let v2 = (yf * 0.12 + t * 0.6 + seed * 1.3).sin();
+                    let v3 = ((xf * 0.06 + yf * 0.08 + t * 0.4 + seed * 0.7).sin()
+                        + (xf * 0.04 - yf * 0.06 + t * 0.7 + seed * 1.9).cos())
                         * 0.5;
                     // Radial ripple from center
                     let cx = xf - 30.0;
                     let cy = (yf - 5.0) * 2.5; // exaggerate y for an elongated ripple
-                    let v4 = ((cx * cx + cy * cy).sqrt() * 0.12 - t * 1.2).sin();
+                    let v4 = ((cx * cx + cy * cy).sqrt() * 0.12 - t * 1.2 + seed * 0.5).sin();
 
                     let v = (v1 + v2 + v3 + v4) * 0.25; // -1..1
 

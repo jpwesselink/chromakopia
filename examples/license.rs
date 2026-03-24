@@ -56,13 +56,15 @@ async fn main() {
     );
 
     // Two different plasmas: storm for banner, mist for license
-    let plasma_banner = animate::plasma_gradient_offset_effect(
+    // Same seed so both sections share one plasma field, different palettes
+    let seed = 42.0;
+    let plasma_banner = animate::plasma_seeded_effect(
         chromakopia::gradient(&["#ff0000", "#ff4500", "#ffa500", "#ffd700", "#ffff00"]),
-        0.0,
+        0.0, seed,
     );
-    let plasma_license = animate::plasma_gradient_offset_effect(
+    let plasma_license = animate::plasma_seeded_effect(
         presets::mist(),
-        banner_lines as f64 + 1.0,
+        banner_lines as f64 + 1.0, seed,
     );
     let split = banner_lines + 1; // +1 for blank line
 
