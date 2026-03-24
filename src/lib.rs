@@ -41,19 +41,21 @@ pub fn pad(text: &str) -> String {
         .join("\n")
 }
 
-/// Center each line within the terminal width by padding left and right.
+/// Center a text block within the terminal width.
+///
+/// Uses the widest line to compute a single left-pad, then applies
+/// the same offset to every line so multiline text (like figlet banners)
+/// stays aligned as a block.
 pub fn center(text: &str) -> String {
     let w = terminal::terminal_width();
+    let max_line_width = text.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+    let left = if max_line_width < w { (w - max_line_width) / 2 } else { 0 };
+    let pad_left = " ".repeat(left);
     text.lines()
         .map(|line| {
             let len = line.chars().count();
-            if len < w {
-                let left = (w - len) / 2;
-                let right = w - len - left;
-                format!("{}{}{}", " ".repeat(left), line, " ".repeat(right))
-            } else {
-                line.to_string()
-            }
+            let right = w.saturating_sub(left + len);
+            format!("{}{}{}", pad_left, line, " ".repeat(right))
         })
         .collect::<Vec<_>>()
         .join("\n")
