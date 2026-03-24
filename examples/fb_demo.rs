@@ -31,6 +31,8 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.";
 
+const CREDIT: &str = "(c) 2026 JP Wesselink";
+
 #[tokio::main]
 async fn main() {
     let bg = chromakopia::bg_color();
@@ -38,76 +40,50 @@ async fn main() {
     let storm = presets::storm().palette(256);
     let fire = chromakopia::gradient(&[&bg_hex, "#ff69b4", "#8b4513", "#ff6600", "#ffff00", "#ffffff", "#ffff00", "#ff6600", "#8b4513", "#ff69b4", &bg_hex]).palette(256);
     let fps = 60;
-    let alinea_delay = fps / 2; // 0.5s between alineas
 
-    // Split license into alineas (paragraphs separated by blank lines)
-    let alineas: Vec<&str> = LICENSE.split("\n\n").collect();
-
-    // Build full text block: banner + blank + license
-    let full = format!("{}\n\n{}", BANNER, LICENSE);
+    // Center everything as a block
+    let full = format!("{}\n\n{}\n\n{}", CREDIT, BANNER, LICENSE);
     let centered = center(&full);
     let centered_lines: Vec<&str> = centered.lines().collect();
 
     let banner_height = BANNER.lines().count();
-    let total_height = centered_lines.len() as f64;
-    let total_width = centered_lines.iter().map(|l| l.len()).max().unwrap_or(80) as f64;
+    let credit = centered_lines[0];
 
-    let mut scene = Scene::new();
+    // Centered banner text
+    let banner_text: String = centered_lines[2..2 + banner_height].join("\n");
+    // Centered license text
+    let license_start = 2 + banner_height + 1;
+    let license_text: String = centered_lines[license_start..].join("\n");
 
-    // Banner — elastic scroll + plasma composite
-    let banner_centered: Vec<&str> = centered_lines[..banner_height].to_vec();
-    for l in &banner_centered {
-        scene = scene.line(Line::full(l, Chain::new()
+    Scene::new()
+        // Credit — fades in over rainbow
+        .line(Line::full(credit,
+            Fade::in_from(Rainbow::new(credit), bg, Easing::EaseOut, fps)
+        ))
+        .line(Line::blank())
+        // Banner — one block, elastic scroll + plasma composite
+        .block(&banner_text, Chain::new()
             .then(fps * 3, Fade::in_from(
                 Composite::new(
-                    Scroll::new(l, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 1),
-                    Plasma::new(l, storm.clone(), 42.0).with_scene_size(total_width, total_height),
+                    Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 1),
+                    Plasma::new(&banner_text, storm.clone(), 42.0),
                 ),
                 bg, Easing::EaseOut, fps,
             ))
-            .then(fps * 100, Plasma::new(l, storm.clone(), 42.0).with_scene_size(total_width, total_height))
-        ));
-    }
-
-    scene = scene.line(Line::blank());
-
-    // License — each alinea alternates left/right, delayed by 0.5s per alinea
-    let license_start_line = banner_height + 1; // after banner + blank
-    let mut current_line = license_start_line;
-    let mut y_offset = (banner_height + 1) as f64; // track vertical offset for plasma continuity
-    for (alinea_idx, alinea) in alineas.iter().enumerate() {
-        let direction = if alinea_idx % 2 == 0 { ScrollDirection::Left } else { ScrollDirection::Right };
-        let delay_frames = alinea_idx * alinea_delay;
-        let alinea_lines: Vec<&str> = alinea.lines().collect();
-
-        for _ in &alinea_lines {
-            let l = centered_lines[current_line];
-            scene = scene.line(Line::full(l, DelayedStart::new(
-                delay_frames,
-                Chain::new()
-                    .then(fps * 2, Fade::in_from(
-                        Composite::new(
-                            Scroll::new(l, fire.clone(), direction, Easing::Elastic(0.25), fps * 2, 0),
-                            Plasma::new(l, fire.clone(), 42.0).with_y_offset(y_offset).with_scene_size(total_width, total_height),
-                        ),
-                        bg, Easing::EaseOut, fps,
-                    ))
-                    .then(fps * 100, Plasma::new(l, fire.clone(), 42.0).with_y_offset(y_offset).with_scene_size(total_width, total_height))
-            )));
-            y_offset += 1.0;
-            current_line += 1;
-        }
-
-        // Blank line between alineas (if not the last)
-        if alinea_idx < alineas.len() - 1 {
-            scene = scene.line(Line::blank());
-            current_line += 1;
-        }
-    }
-
-    // Total duration: wait for last alinea to finish
-    let last_delay = alineas.len() * alinea_delay;
-    let total_secs = ((last_delay + fps * 3) as f64 / fps as f64) + 5.0;
-
-    scene.run(Duration::from_secs(total_secs as u64)).await;
+            .then(fps * 100, Plasma::new(&banner_text, storm.clone(), 42.0))
+        )
+        .line(Line::blank())
+        // License — one block, unified plasma field
+        .block(&license_text, Chain::new()
+            .then(fps * 2, Fade::in_from(
+                Composite::new(
+                    Scroll::new(&license_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2),
+                    Plasma::new(&license_text, fire.clone(), 42.0),
+                ),
+                bg, Easing::EaseOut, fps,
+            ))
+            .then(fps * 100, Plasma::new(&license_text, fire.clone(), 42.0))
+        )
+        .run(Duration::from_secs(15))
+        .await;
 }
