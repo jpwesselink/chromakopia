@@ -1124,6 +1124,17 @@ pub fn plasma_seeded_effect(grad: Gradient, y_offset: f64, seed: f64) -> impl Fn
     move |text, frame| effects::plasma_full(text, frame, Some(&palette), y_offset, seed)
 }
 
+/// Create a sparkle effect closure with default white/blue stars.
+pub fn sparkle_effect() -> impl Fn(&str, usize) -> String + Send + 'static {
+    |text, frame| effects::sparkle(text, frame, None)
+}
+
+/// Create a sparkle effect closure with a custom star palette.
+pub fn sparkle_gradient_effect(grad: Gradient) -> impl Fn(&str, usize) -> String + Send + 'static {
+    let palette = grad.palette(64);
+    move |text, frame| effects::sparkle(text, frame, Some(&palette))
+}
+
 /// Create a bounce slide-in effect closure for use with [`Sequence::effect`].
 ///
 /// `total_frames` controls how long the slide-in takes; after that the text holds.
@@ -1327,6 +1338,17 @@ pub fn plasma_with(grad: Gradient, text: &str, speed: f64) -> Animation {
 }
 
 /// Start a slide-in animation with bounce easing and rainbow colors.
+/// Start a sparkle animation with default white/blue stars.
+pub fn sparkle(text: &str, speed: f64) -> Animation {
+    spawn_animation(text, |text, frame| effects::sparkle(text, frame, None), 15, speed)
+}
+
+/// Start a sparkle animation with a custom palette.
+pub fn sparkle_with(grad: Gradient, text: &str, speed: f64) -> Animation {
+    let palette = grad.palette(64);
+    spawn_animation(text, move |text, frame| effects::sparkle(text, frame, Some(&palette)), 15, speed)
+}
+
 pub fn scroll(direction: effects::ScrollDirection, text: &str, duration: Duration, speed: f64) -> Animation {
     let fps = 30u64;
     let total_frames = (duration.as_secs_f64() * fps as f64) as usize;

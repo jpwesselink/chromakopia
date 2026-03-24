@@ -334,6 +334,73 @@ pub enum ScrollDirection {
     Bottom,
 }
 
+/// Starfield sparkle: random characters briefly flash bright against a dark base.
+///
+/// Each non-space character has a chance to "spark" — briefly flashing to a
+/// bright color from the palette, then fading back to the base color.
+/// Creates a twinkling star field effect.
+pub fn sparkle(text: &str, frame: usize, palette: Option<&[Color]>) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let t = frame as f64;
+
+    lines
+        .iter()
+        .enumerate()
+        .map(|(y, line)| {
+            line.chars()
+                .enumerate()
+                .map(|(x, ch)| {
+                    if ch.is_whitespace() {
+                        return ch.to_string();
+                    }
+
+                    // Deterministic pseudo-random per (x, y, frame) — no rand needed
+                    let hash = ((x * 7919 + y * 6271 + frame * 1013) % 10007) as f64 / 10007.0;
+
+                    // Each star has its own cycle phase
+                    let phase = ((x * 3571 + y * 2719) % 997) as f64;
+                    let cycle = ((t * 0.3 + phase) % 60.0) / 60.0;
+
+                    // Spark probability — most chars are dim, a few are bright
+                    let brightness = if hash < 0.08 {
+                        // This char is sparking this frame
+                        let spark_t = (cycle * std::f64::consts::TAU).sin() * 0.5 + 0.5;
+                        0.3 + 0.7 * spark_t
+                    } else {
+                        // Dim base — subtle shimmer
+                        0.05 + 0.1 * ((t * 0.1 + phase * 0.01).sin() * 0.5 + 0.5)
+                    };
+
+                    let c = if let Some(pal) = palette {
+                        if pal.is_empty() {
+                            Color::new(0, 0, 0)
+                        } else {
+                            // Pick a color from palette based on position
+                            let idx = (x * 131 + y * 97) % pal.len();
+                            let base = pal[idx];
+                            Color::new(
+                                (base.r as f64 * brightness) as u8,
+                                (base.g as f64 * brightness) as u8,
+                                (base.b as f64 * brightness) as u8,
+                            )
+                        }
+                    } else {
+                        // Default: white/blue stars
+                        let blue_tint = ((x * 4799 + y * 3137) % 100) as f64 / 100.0;
+                        let r = (255.0 * brightness * (0.7 + 0.3 * blue_tint)) as u8;
+                        let g = (255.0 * brightness * (0.8 + 0.2 * blue_tint)) as u8;
+                        let b = (255.0 * brightness) as u8;
+                        Color::new(r, g, b)
+                    };
+
+                    ch.to_string().truecolor(c.r, c.g, c.b).to_string()
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Slide-in with bounce easing and rainbow gradient.
 pub fn scroll(text: &str, frame: usize, total_frames: usize, direction: ScrollDirection) -> String {
     scroll_inner(text, frame, total_frames, direction, None, crate::animate::Easing::BounceOut)

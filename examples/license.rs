@@ -47,7 +47,7 @@ async fn main() {
 
     // Banner slides from right, license from left
     let banner_scroll = animate::scroll_staggered_effect(
-        ScrollDirection::Right, Easing::Elastic(0.25), presets::storm(),
+        ScrollDirection::Top, Easing::Elastic(0.25), presets::storm(),
         frames_per_line, stagger,
     );
     let license_scroll = animate::scroll_staggered_effect(
