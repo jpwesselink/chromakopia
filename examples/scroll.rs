@@ -26,7 +26,7 @@ async fn main() {
                 Easing::Elastic(0.4),
                 presets::storm(),
                 60,  // 2s per line
-                15,  // 0.5s delay between lines
+                3,   // 0.1s between lines — creates a slant
             ),
         )
         .run(1.0)
