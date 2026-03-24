@@ -333,7 +333,7 @@ pub async fn run_effect(
     let r = running.clone();
     let anim_handle = tokio::spawn(async move {
         let mut frame: usize = 0;
-        let delay = Duration::from_millis((33.0 / speed) as u64);
+        let delay = Duration::from_millis((10.0 / speed) as u64);
         while r.load(Ordering::Relaxed) {
             let mut buf = FrameBuffer::new(width, height);
             effect.render(&mut buf, frame);
