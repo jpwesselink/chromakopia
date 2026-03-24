@@ -34,8 +34,9 @@ SOFTWARE.";
 #[tokio::main]
 async fn main() {
     let bg = chromakopia::bg_color();
+    let bg_hex = bg.to_string();
     let storm = presets::storm().palette(256);
-    let mist = presets::mist().palette(256);
+    let fire = chromakopia::gradient(&[&bg_hex, "#ff69b4", "#8b4513", "#ff6600", "#ffff00", "#ffffff", "#ffff00", "#ff6600", "#8b4513", "#ff69b4", &bg_hex]).palette(256);
     let fps = 60;
     let alinea_delay = fps / 2; // 0.5s between alineas
 
@@ -85,12 +86,12 @@ async fn main() {
                 Chain::new()
                     .then(fps * 2, Fade::in_from(
                         Composite::new(
-                            Scroll::new(l, mist.clone(), direction, Easing::Elastic(0.25), fps * 2, 0),
-                            Plasma::new(l, mist.clone(), 42.0),
+                            Scroll::new(l, fire.clone(), direction, Easing::Elastic(0.25), fps * 2, 0),
+                            Plasma::new(l, fire.clone(), 42.0),
                         ),
                         bg, Easing::EaseOut, fps,
                     ))
-                    .then(fps * 100, Plasma::new(l, mist.clone(), 42.0))
+                    .then(fps * 100, Plasma::new(l, fire.clone(), 42.0))
             )));
             current_line += 1;
         }
