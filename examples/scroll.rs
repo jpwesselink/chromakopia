@@ -17,7 +17,15 @@ const LINE3: &str = "github.com/jpwesselink/chromakopia  crates.io/crates/chroma
 async fn main() {
     let banner = BANNER.trim_matches('\n');
     let banner_lines = banner.lines().count();
-    let full_text = format!("{}\n{}\n{}", LINE1, banner, LINE3);
+    let max_width = banner.lines().map(|l| l.len()).max().unwrap_or(0);
+
+    // Center line1 and line3 to match banner width
+    let pad1 = (max_width.saturating_sub(LINE1.len())) / 2;
+    let pad3 = (max_width.saturating_sub(LINE3.len())) / 2;
+    let line1_centered = format!("{:>width$}{}", "", LINE1, width = pad1);
+    let line3_centered = format!("{:>width$}{}", "", LINE3, width = pad3);
+
+    let full_text = format!("{}\n{}\n{}", line1_centered, banner, line3_centered);
 
     let fps = 30;
     let line1_scroll = animate::scroll_eased_gradient_effect(
