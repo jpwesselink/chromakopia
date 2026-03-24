@@ -323,12 +323,23 @@ pub enum ScrollDirection {
 
 /// Slide-in with bounce easing and rainbow gradient.
 pub fn scroll(text: &str, frame: usize, total_frames: usize, direction: ScrollDirection) -> String {
-    scroll_inner(text, frame, total_frames, direction, None)
+    scroll_inner(text, frame, total_frames, direction, None, crate::animate::Easing::BounceOut)
 }
 
 /// Slide-in with bounce easing and a custom gradient.
 pub fn scroll_with(text: &str, frame: usize, total_frames: usize, direction: ScrollDirection, gradient: &Gradient) -> String {
-    scroll_inner(text, frame, total_frames, direction, Some(gradient))
+    scroll_inner(text, frame, total_frames, direction, Some(gradient), crate::animate::Easing::BounceOut)
+}
+
+/// Slide-in with a specific easing and rainbow gradient.
+#[allow(dead_code)]
+pub fn scroll_eased(text: &str, frame: usize, total_frames: usize, direction: ScrollDirection, easing: crate::animate::Easing) -> String {
+    scroll_inner(text, frame, total_frames, direction, None, easing)
+}
+
+/// Slide-in with a specific easing and a custom gradient.
+pub fn scroll_eased_with(text: &str, frame: usize, total_frames: usize, direction: ScrollDirection, easing: crate::animate::Easing, gradient: &Gradient) -> String {
+    scroll_inner(text, frame, total_frames, direction, Some(gradient), easing)
 }
 
 fn scroll_inner(
@@ -337,6 +348,7 @@ fn scroll_inner(
     total_frames: usize,
     direction: ScrollDirection,
     gradient: Option<&Gradient>,
+    easing: crate::animate::Easing,
 ) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let line_count = lines.len();
@@ -350,7 +362,7 @@ fn scroll_inner(
     } else {
         (frame as f64 / total_frames as f64).min(1.0)
     };
-    let eased = crate::animate::Easing::BounceOut.apply(t);
+    let eased = easing.apply(t);
 
     let palette = gradient.map(|g| g.palette(max_width.max(2)));
 

@@ -1121,6 +1121,11 @@ pub fn scroll_gradient_effect(direction: effects::ScrollDirection, grad: Gradien
     move |text, frame| effects::scroll_with(text, frame, total_frames, direction, &grad)
 }
 
+/// Create a slide-in effect closure with a specific easing and gradient.
+pub fn scroll_eased_gradient_effect(direction: effects::ScrollDirection, easing: Easing, grad: Gradient, total_frames: usize) -> impl Fn(&str, usize) -> String + Send + 'static {
+    move |text, frame| effects::scroll_eased_with(text, frame, total_frames, direction, easing, &grad)
+}
+
 // ── Standalone animations ──
 
 /// Start a rainbow animation. Speed is a multiplier (1.0 = default).

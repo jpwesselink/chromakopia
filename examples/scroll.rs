@@ -1,5 +1,7 @@
 use chromakopia::{animate, presets};
-use chromakopia::animate::{ScrollDirection, TimeRange};
+use chromakopia::animate::{Easing, ScrollDirection, TimeRange};
+
+const LINE1: &str = "MIT License (c) 2026 JP Wesselink";
 
 const BANNER: &str = r#"
    ________  ______  ____  __  ______    __ ______  ____  _______
@@ -9,39 +11,57 @@ const BANNER: &str = r#"
 \____/_/ /_/_/ |_|\____/_/  /_/_/  |_/_/ |_\____/_/   /___/_/  |_|
 "#;
 
-const TAGLINE: &str =
-    "MIT License (c) 2026 JP Wesselink https://github.com/jpwesselink/chromakopia";
+const LINE3: &str = "github.com/jpwesselink/chromakopia  crates.io/crates/chromakopia";
 
 #[tokio::main]
 async fn main() {
     let banner = BANNER.trim_matches('\n');
     let banner_lines = banner.lines().count();
-    // Combine banner + blank line + tagline as one text block
-    let full_text = format!("{}\n\n{}", banner, TAGLINE);
+    let full_text = format!("{}\n{}\n{}", LINE1, banner, LINE3);
 
-    let banner_scroll = animate::scroll_gradient_effect(ScrollDirection::Left, presets::storm(), 60);
-    let tagline_scroll = animate::scroll_gradient_effect(ScrollDirection::Right, presets::mist(), 45);
+    let fps = 30;
+    let line1_scroll = animate::scroll_eased_gradient_effect(
+        ScrollDirection::Left, Easing::ElasticOut, presets::mist(), fps * 2,
+    );
+    let banner_scroll = animate::scroll_eased_gradient_effect(
+        ScrollDirection::Right, Easing::ElasticOut, presets::storm(), fps * 2,
+    );
+    let line3_scroll = animate::scroll_eased_gradient_effect(
+        ScrollDirection::Left, Easing::ElasticOut, presets::mist(), fps * 2,
+    );
 
     let composite = move |text: &str, frame: usize| -> String {
         let lines: Vec<&str> = text.split('\n').collect();
-        let banner_text = lines[..banner_lines].join("\n");
-        let tagline_text = lines[banner_lines + 1..].join("\n");
+        let l1 = lines[0];
+        let banner_text = lines[1..=banner_lines].join("\n");
+        let l3 = lines[banner_lines + 1];
 
-        let banner_out = banner_scroll(&banner_text, frame);
+        // Stagger: line1 starts immediately, banner 0.5s later, line3 1s later
+        let delay_banner = 15;
+        let delay_line3 = 30;
 
-        // Tagline starts 30 frames (1s) after the banner
-        let tagline_delay = 30;
-        let tagline_out = if frame >= tagline_delay {
-            tagline_scroll(&tagline_text, frame - tagline_delay)
+        let l1_out = line1_scroll(l1, frame);
+        let banner_out = if frame >= delay_banner {
+            banner_scroll(&banner_text, frame - delay_banner)
         } else {
-            " ".repeat(tagline_text.len())
+            " ".repeat(banner_text.lines().next().map_or(0, |l| l.len()))
+                .lines()
+                .cycle()
+                .take(banner_lines)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let l3_out = if frame >= delay_line3 {
+            line3_scroll(l3, frame - delay_line3)
+        } else {
+            " ".repeat(l3.len())
         };
 
-        format!("{}\n\n{}", banner_out, tagline_out)
+        format!("{}\n{}\n{}", l1_out, banner_out, l3_out)
     };
 
     animate::Sequence::new(&full_text)
-        .effect(TimeRange::new(0.0, 6.0), 30, composite)
+        .effect(TimeRange::new(0.0, 6.0), fps as u64, composite)
         .run(1.0)
         .await;
 }
