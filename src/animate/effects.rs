@@ -634,6 +634,75 @@ impl Effect for Chain {
     }
 }
 
+// ── FadeEnvelope ──
+
+/// Fade in, hold, fade out — one smooth opacity envelope over an inner effect.
+///
+/// The inner effect runs continuously with a single frame counter (no restart).
+/// Opacity: 0→1 over `fade_in` frames, holds at 1, then 1→0 over `fade_out` frames.
+pub struct FadeEnvelope {
+    inner: Box<dyn Effect>,
+    target_color: Color,
+    fade_in_frames: usize,
+    fade_out_frames: usize,
+    total_frames: usize,
+    ease_in: super::easing::Easing,
+    ease_out: super::easing::Easing,
+}
+
+impl FadeEnvelope {
+    pub fn new(
+        inner: impl Effect,
+        target_color: Color,
+        fade_in_frames: usize,
+        fade_out_frames: usize,
+        total_frames: usize,
+        ease_in: super::easing::Easing,
+        ease_out: super::easing::Easing,
+    ) -> Self {
+        Self {
+            inner: Box::new(inner),
+            target_color,
+            fade_in_frames,
+            fade_out_frames,
+            total_frames,
+            ease_in,
+            ease_out,
+        }
+    }
+}
+
+impl Effect for FadeEnvelope {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        self.inner.render(buf, frame);
+
+        let fade_out_start = self.total_frames.saturating_sub(self.fade_out_frames);
+
+        let opacity = if frame < self.fade_in_frames {
+            // Fading in
+            let t = frame as f64 / self.fade_in_frames.max(1) as f64;
+            self.ease_in.apply(t)
+        } else if frame >= fade_out_start && self.fade_out_frames > 0 {
+            // Fading out
+            let t = (frame - fade_out_start) as f64 / self.fade_out_frames as f64;
+            1.0 - self.ease_out.apply(t.min(1.0))
+        } else {
+            1.0 // Fully visible
+        };
+
+        if opacity < 1.0 {
+            for y in 0..buf.height {
+                for x in 0..buf.width {
+                    let cell = buf.get(x, y);
+                    if cell.ch.is_whitespace() { continue; }
+                    let color = Color::lerp_rgb(self.target_color, cell.color, opacity);
+                    buf.set_color(x, y, color);
+                }
+            }
+        }
+    }
+}
+
 // ── DelayedStart ──
 
 /// Shows nothing for `delay` frames, then runs the inner effect.

@@ -41,9 +41,8 @@ async fn main() {
     let storm = presets::storm().palette(256);
     let fire = chromakopia::gradient(&[&bg_hex, "#ff71ce", "#01cdfe", "#05ffa1", "#b967ff", "#fffb96", "#ff71ce", &bg_hex]).palette(256);
     let fps = 30;
-    let fg_pal = vec![fg];
+    let total = fps * 15;
 
-    // Left-align, pad to terminal width
     let full = pad(&format!("{}\n\n{}\n\n{}", CREDIT, BANNER, LICENSE));
     let lines: Vec<&str> = full.lines().collect();
 
@@ -53,48 +52,30 @@ async fn main() {
     let license_start = 2 + banner_height + 1;
     let license_text: String = lines[license_start..].join("\n");
 
-    let total_secs = 15;
-    let fade_out_start = (total_secs - 2) * fps;
-
     Scene::new()
-        // Credit — fades in over plasma, fades out to fg at the end
-        .line(Line::full(credit, Chain::new()
-            .then(fade_out_start, Fade::in_from(Plasma::new(credit, fire.clone(), 42.0), bg, Easing::EaseOut, fps))
-            .then(fps * 2, Fade::out_to(Plasma::new(credit, fire.clone(), 42.0), fg, Easing::EaseInOut, fps * 2))
-            .then(fps * 100, Glow::new(credit, fg_pal.clone()))
+        // Credit — plasma with fade envelope
+        .line(Line::full(credit, FadeEnvelope::new(
+            Plasma::new(credit, fire.clone(), 42.0),
+            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
+        )))
+        .line(Line::blank())
+        // Banner — scroll + plasma composite with fade envelope
+        .block(&banner_text, FadeEnvelope::new(
+            Composite::new(
+                Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 0),
+                Plasma::new(&banner_text, storm.clone(), 42.0),
+            ),
+            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .line(Line::blank())
-        // Banner — scroll + plasma, fades to fg at the end
-        .block(&banner_text, Chain::new()
-            .then(fade_out_start, Fade::in_from(
-                Composite::new(
-                    Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 0),
-                    Plasma::new(&banner_text, storm.clone(), 42.0),
-                ),
-                bg, Easing::EaseOut, fps,
-            ))
-            .then(fps * 2, Fade::out_to(
-                Plasma::new(&banner_text, storm.clone(), 42.0),
-                fg, Easing::EaseInOut, fps * 2,
-            ))
-            .then(fps * 100, Glow::new(&banner_text, fg_pal.clone()))
-        )
-        .line(Line::blank())
-        // License — scroll + plasma, fades to fg at the end
-        .block(&license_text, Chain::new()
-            .then(fade_out_start, Fade::in_from(
-                Composite::new(
-                    Scroll::new(&license_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2),
-                    Plasma::new(&license_text, fire.clone(), 42.0),
-                ),
-                bg, Easing::EaseOut, fps,
-            ))
-            .then(fps * 2, Fade::out_to(
+        // License — scroll + plasma composite with fade envelope
+        .block(&license_text, FadeEnvelope::new(
+            Composite::new(
+                Scroll::new(&license_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2),
                 Plasma::new(&license_text, fire.clone(), 42.0),
-                fg, Easing::EaseInOut, fps * 2,
-            ))
-            .then(fps * 100, Glow::new(&license_text, fg_pal.clone()))
-        )
-        .run(Duration::from_secs(total_secs as u64))
+            ),
+            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
+        ))
+        .run(Duration::from_secs(15))
         .await;
 }
