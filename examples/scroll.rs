@@ -10,7 +10,7 @@ const BANNER: &str = r#"
 "#;
 
 const TAGLINE: &str =
-    "  MIT License (c) 2026 JP Wesselink https://github.com/jpwesselink/chromakopia";
+    "MIT License (c) 2026 JP Wesselink https://github.com/jpwesselink/chromakopia";
 
 #[tokio::main]
 async fn main() {
