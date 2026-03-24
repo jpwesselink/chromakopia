@@ -346,7 +346,8 @@ pub fn petscii(text: &str, frame: usize, pattern: &str, gradient: Option<&Gradie
                 .enumerate()
                 .map(|(x, ch)| {
                     let out_ch = if ch.is_whitespace() {
-                        ch
+                        // Whitespace gets the first cycle char (background)
+                        cycle[0]
                     } else {
                         // Phase offset by position creates the kaleidoscope
                         let phase = (frame + x * 3 + y * 7) % cycle_len;
@@ -593,11 +594,11 @@ mod tests {
     }
 
     #[test]
-    fn petscii_spaces_stay_spaces() {
+    fn petscii_spaces_become_background() {
         with_color(|| {
             let output = petscii("a b", 0, "blocks", None);
-            // The space in the middle should remain a space (not replaced by a block char)
-            assert!(output.contains(' '));
+            // The space becomes the first cycle char (░ for blocks)
+            assert!(output.contains('░'));
         });
     }
 
