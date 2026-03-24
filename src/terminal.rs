@@ -5,6 +5,7 @@ use crate::color::Color;
 static BG_COLOR: OnceLock<Color> = OnceLock::new();
 static FG_COLOR: OnceLock<Color> = OnceLock::new();
 static PROBED_COLORS: OnceLock<(Option<Color>, Option<Color>)> = OnceLock::new();
+static SYSTEM_THEME: OnceLock<(Color, Color)> = OnceLock::new();
 
 fn probed_osc() -> &'static (Option<Color>, Option<Color>) {
     PROBED_COLORS.get_or_init(probe_osc_colors)
@@ -238,6 +239,40 @@ fn parse_hex_component(s: &str) -> Option<u8> {
     })
 }
 
+/// Detect system theme and return conservative fg/bg color pair.
+///
+/// On macOS, queries `defaults read -globalDomain AppleInterfaceStyle`.
+/// Cached in its own `OnceLock` so the command runs at most once.
+fn system_theme_colors() -> (Color, Color) {
+    *SYSTEM_THEME.get_or_init(detect_system_theme)
+}
+
+#[cfg(target_os = "macos")]
+fn detect_system_theme() -> (Color, Color) {
+    let is_dark = std::process::Command::new("defaults")
+        .args(["read", "-globalDomain", "AppleInterfaceStyle"])
+        .output()
+        .ok()
+        .and_then(|o| if o.status.success() {
+            String::from_utf8(o.stdout).ok()
+        } else {
+            None
+        })
+        .is_some_and(|s| s.trim().eq_ignore_ascii_case("dark"));
+
+    if is_dark {
+        (Color::new(204, 204, 204), Color::new(30, 30, 30))
+    } else {
+        (Color::new(51, 51, 51), Color::new(255, 255, 255))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn detect_system_theme() -> (Color, Color) {
+    // Non-macOS: assume dark theme (most developer terminals are dark)
+    (Color::new(204, 204, 204), Color::new(0, 0, 0))
+}
+
 /// Eagerly probe and cache both terminal colors.
 ///
 /// Call this before hiding the cursor or writing any escape sequences,
@@ -261,7 +296,7 @@ pub fn bg_color() -> Color {
         if let Some((_, bg)) = parse_colorfgbg() {
             return bg;
         }
-        Color::new(0, 0, 0)
+        system_theme_colors().1
     })
 }
 
@@ -277,7 +312,7 @@ pub fn fg_color() -> Color {
         if let Some((fg, _)) = parse_colorfgbg() {
             return fg;
         }
-        Color::new(204, 204, 204)
+        system_theme_colors().0
     })
 }
 
@@ -391,6 +426,16 @@ mod tests {
             parse_osc_response_for_code(combined, 11),
             Some(Color::new(0x1c, 0x1c, 0x1c))
         );
+    }
+
+    #[test]
+    fn macos_theme_fg_lighter_than_bg_in_dark_mode_or_vice_versa() {
+        let (fg, bg) = system_theme_colors();
+        // fg and bg should have distinct brightness — one light, one dark
+        let fg_luma = fg.luma();
+        let bg_luma = bg.luma();
+        assert!((fg_luma - bg_luma).abs() > 0.3,
+            "fg luma ({fg_luma}) and bg luma ({bg_luma}) should differ significantly");
     }
 
     #[test]
