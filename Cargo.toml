@@ -21,5 +21,13 @@ name = "demo"
 path = "examples/demo.rs"
 
 [[example]]
+name = "rainbow"
+path = "examples/rainbow.rs"
+
+[[example]]
+name = "plasma"
+path = "examples/plasma.rs"
+
+[[example]]
 name = "fb_demo"
 path = "examples/fb_demo.rs"

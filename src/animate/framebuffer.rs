@@ -297,6 +297,115 @@ pub async fn run_effect(
     }
 }
 
+/// Handle for a running animation. Call `.stop()` to end it.
+pub struct AnimationHandle {
+    running: Arc<std::sync::atomic::AtomicBool>,
+    height: usize,
+    start_row: usize,
+}
+
+impl AnimationHandle {
+    /// Stop the animation and clean up the terminal.
+    pub fn stop(&self) {
+        use std::io::Write;
+        self.running.store(false, std::sync::atomic::Ordering::Relaxed);
+        // Give tasks a moment to finish, then restore cursor
+        std::thread::sleep(Duration::from_millis(50));
+        let mut stderr = std::io::stderr().lock();
+        let _ = write!(stderr, "\x1B[{};1H\x1B[?25h", self.start_row + self.height);
+        let _ = stderr.flush();
+    }
+}
+
+/// Spawn an effect that runs until stopped. Returns a handle.
+///
+/// Use this for the standalone `animate::rainbow(text, speed)` style API.
+pub fn spawn_effect(
+    effect: impl Effect,
+    width: usize,
+    height: usize,
+    speed: f64,
+) -> AnimationHandle {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let mailbox: Mailbox = Arc::new(Mutex::new(None));
+    let running = Arc::new(AtomicBool::new(true));
+
+    // Hide cursor and reserve space
+    {
+        let mut stderr = std::io::stderr().lock();
+        let _ = write!(stderr, "\x1B[?25l");
+        for _ in 0..height {
+            let _ = write!(stderr, "\n");
+        }
+        let _ = write!(stderr, "\x1B[{}A", height);
+        let _ = stderr.flush();
+    }
+
+    let start_row = get_cursor_row().unwrap_or(1);
+
+    let fps = 60u64;
+    let frame_ms = (1000.0 / fps as f64 / speed) as u64;
+    let frame_duration = Duration::from_millis(frame_ms.max(1));
+
+    // Animation task
+    let m = mailbox.clone();
+    let r = running.clone();
+    tokio::spawn(async move {
+        let mut frame: usize = 0;
+        let mut buf = FrameBuffer::new(width, height);
+        let mut interval = tokio::time::interval(frame_duration);
+        while r.load(Ordering::Relaxed) {
+            interval.tick().await;
+            effect.render(&mut buf, frame);
+            *m.lock().unwrap() = Some(buf.clone());
+            frame += 1;
+        }
+    });
+
+    // Render task
+    let m = mailbox.clone();
+    let r = running.clone();
+    let term_width = crate::terminal::terminal_width();
+    tokio::spawn(async move {
+        let mut prev: Option<FrameBuffer> = None;
+        let mut interval = tokio::time::interval(frame_duration);
+        let mut last_fps_time = std::time::Instant::now();
+        let mut render_count: u32 = 0;
+        let mut displayed_fps: u32 = 0;
+
+        while r.load(Ordering::Relaxed) {
+            interval.tick().await;
+
+            let new_frame = m.lock().unwrap().take();
+            if let Some(buf) = new_frame {
+                let mut output = diff_render(prev.as_ref(), &buf, start_row);
+                render_count += 1;
+
+                let now = std::time::Instant::now();
+                if now.duration_since(last_fps_time) >= Duration::from_secs(1) {
+                    displayed_fps = render_count;
+                    render_count = 0;
+                    last_fps_time = now;
+                }
+
+                let fps_str = format!(" {}fps ", displayed_fps);
+                let fps_col = term_width.saturating_sub(fps_str.len());
+                output.push_str(&format!("\x1B[{};{}H\x1B[90m{}\x1B[0m", start_row, fps_col + 1, fps_str));
+
+                let mut stderr = std::io::stderr().lock();
+                let _ = stderr.write_all(output.as_bytes());
+                let _ = stderr.flush();
+
+                prev = Some(buf);
+            }
+        }
+    });
+
+    AnimationHandle { running, height, start_row }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
