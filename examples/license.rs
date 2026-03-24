@@ -1,4 +1,4 @@
-use chromakopia::{animate, center};
+use chromakopia::animate;
 use chromakopia::animate::{Easing, ScrollDirection, TimeRange};
 
 const LICENSE: &str = "\
@@ -26,7 +26,7 @@ SOFTWARE.";
 
 #[tokio::main]
 async fn main() {
-    let full_text = center(LICENSE);
+    let full_text = chromakopia::pad(LICENSE);
     let line_count = full_text.lines().count();
 
     let fps = 30;
