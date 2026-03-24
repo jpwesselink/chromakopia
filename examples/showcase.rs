@@ -22,6 +22,9 @@ const BANNER: &str = r#"
 async fn main() {
     let text = BANNER.trim_matches('\n');
 
+    // Clear screen and move cursor to top-left
+    eprint!("\x1B[2J\x1B[H");
+
     let flap_settled = Color::new(0xff, 0xcc, 0x00);
     let flap_flip = Color::new(0x99, 0x7a, 0x00);
 
