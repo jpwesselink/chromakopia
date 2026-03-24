@@ -39,7 +39,7 @@ async fn main() {
     let bg_hex = bg.to_string();
     let storm = presets::storm().palette(256);
     let fire = chromakopia::gradient(&[&bg_hex, "#ff69b4", "#8b4513", "#ff6600", "#ffff00", "#ffffff", "#ffff00", "#ff6600", "#8b4513", "#ff69b4", &bg_hex]).palette(256);
-    let fps = 60;
+    let fps = 30;
 
     // Center everything as a block
     let full = format!("{}\n\n{}\n\n{}", CREDIT, BANNER, LICENSE);
