@@ -95,6 +95,12 @@ pub struct Plasma {
     palette: Vec<Color>,
     seed: f64,
     y_offset: f64,
+    /// Total scene height — used for radial ripple center.
+    /// If 0, uses buf.height.
+    total_height: f64,
+    /// Total scene width — used for radial ripple center.
+    /// If 0, uses buf.width.
+    total_width: f64,
 }
 
 impl Plasma {
@@ -104,11 +110,21 @@ impl Plasma {
             palette,
             seed,
             y_offset: 0.0,
+            total_height: 0.0,
+            total_width: 0.0,
         }
     }
 
     pub fn with_y_offset(mut self, y_offset: f64) -> Self {
         self.y_offset = y_offset;
+        self
+    }
+
+    /// Set the total scene dimensions for radial ripple centering.
+    /// Without this, each sub-buffer computes its own center.
+    pub fn with_scene_size(mut self, width: f64, height: f64) -> Self {
+        self.total_width = width;
+        self.total_height = height;
         self
     }
 }
@@ -118,6 +134,9 @@ impl Effect for Plasma {
         let t = frame as f64 * 0.08;
         let pal = &self.palette;
         if pal.is_empty() { return; }
+
+        let scene_w = if self.total_width > 0.0 { self.total_width } else { buf.width as f64 };
+        let scene_h = if self.total_height > 0.0 { self.total_height } else { buf.height as f64 };
 
         for (y, line) in self.chars.iter().enumerate() {
             if y >= buf.height { break; }
@@ -132,8 +151,8 @@ impl Effect for Plasma {
                 let v3 = ((xf * 0.06 + yf * 0.08 + t * 0.4 + self.seed * 0.7).sin()
                     + (xf * 0.04 - yf * 0.06 + t * 0.7 + self.seed * 1.9).cos())
                     * 0.5;
-                let cx = xf - buf.width as f64 / 2.0;
-                let cy = (yf - buf.height as f64 / 2.0) * 2.5;
+                let cx = xf - scene_w / 2.0;
+                let cy = (yf - scene_h / 2.0) * 2.5;
                 let v4 = ((cx * cx + cy * cy).sqrt() * 0.12 - t * 1.2 + self.seed * 0.5).sin();
 
                 let v = (v1 + v2 + v3 + v4) * 0.25;

@@ -49,6 +49,8 @@ async fn main() {
     let centered_lines: Vec<&str> = centered.lines().collect();
 
     let banner_height = BANNER.lines().count();
+    let total_height = centered_lines.len() as f64;
+    let total_width = centered_lines.iter().map(|l| l.len()).max().unwrap_or(80) as f64;
 
     let mut scene = Scene::new();
 
@@ -59,11 +61,11 @@ async fn main() {
             .then(fps * 3, Fade::in_from(
                 Composite::new(
                     Scroll::new(l, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 1),
-                    Plasma::new(l, storm.clone(), 42.0),
+                    Plasma::new(l, storm.clone(), 42.0).with_scene_size(total_width, total_height),
                 ),
                 bg, Easing::EaseOut, fps,
             ))
-            .then(fps * 100, Plasma::new(l, storm.clone(), 42.0))
+            .then(fps * 100, Plasma::new(l, storm.clone(), 42.0).with_scene_size(total_width, total_height))
         ));
     }
 
@@ -86,11 +88,11 @@ async fn main() {
                     .then(fps * 2, Fade::in_from(
                         Composite::new(
                             Scroll::new(l, fire.clone(), direction, Easing::Elastic(0.25), fps * 2, 0),
-                            Plasma::new(l, fire.clone(), 42.0).with_y_offset(y_offset),
+                            Plasma::new(l, fire.clone(), 42.0).with_y_offset(y_offset).with_scene_size(total_width, total_height),
                         ),
                         bg, Easing::EaseOut, fps,
                     ))
-                    .then(fps * 100, Plasma::new(l, fire.clone(), 42.0).with_y_offset(y_offset))
+                    .then(fps * 100, Plasma::new(l, fire.clone(), 42.0).with_y_offset(y_offset).with_scene_size(total_width, total_height))
             )));
             y_offset += 1.0;
             current_line += 1;
