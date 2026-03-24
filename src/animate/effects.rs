@@ -619,6 +619,48 @@ impl Effect for Chain {
     }
 }
 
+// ── Composite ──
+
+/// Combine two effects: one controls character positions, the other controls colors.
+///
+/// The `position` effect renders first (sets chars + positions).
+/// The `color` effect renders into a separate buffer, then its colors
+/// are applied to any non-space cells from the position buffer.
+pub struct Composite {
+    position: Box<dyn Effect>,
+    color: Box<dyn Effect>,
+}
+
+impl Composite {
+    pub fn new(position: impl Effect, color: impl Effect) -> Self {
+        Self {
+            position: Box::new(position),
+            color: Box::new(color),
+        }
+    }
+}
+
+impl Effect for Composite {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        // Position effect sets chars
+        self.position.render(buf, frame);
+
+        // Color effect renders into a scratch buffer
+        let mut color_buf = FrameBuffer::new(buf.width, buf.height);
+        self.color.render(&mut color_buf, frame);
+
+        // Apply colors from color_buf to non-space cells in buf
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                let cell = buf.get(x, y);
+                if !cell.ch.is_whitespace() {
+                    buf.set_color(x, y, color_buf.get(x, y).color);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

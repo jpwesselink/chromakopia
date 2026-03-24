@@ -1,5 +1,5 @@
 use chromakopia::animate::*;
-use chromakopia::{center, presets, Color};
+use chromakopia::{center, presets};
 use std::time::Duration;
 
 const BANNER: &str = r#"   ________  ______  ____  __  ______    __ ______  ____  _______
@@ -36,11 +36,14 @@ async fn main() {
     ));
     scene = scene.line(Line::blank());
 
-    // Banner — elastic scroll in, then plasma
+    // Banner — scroll (position) + plasma (color) composited, with fade, aggressive elastic
     for l in banner_lines {
         scene = scene.line(Line::full(l, Chain::new()
-            .then(fps * 2, Fade::in_from(
-                Scroll::new(l, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.3), fps * 2, 1),
+            .then(fps * 3, Fade::in_from(
+                Composite::new(
+                    Scroll::new(l, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 1),
+                    Plasma::new(l, storm.clone(), 42.0),
+                ),
                 bg, Easing::EaseOut, fps,
             ))
             .then(fps * 100, Plasma::new(l, storm.clone(), 42.0))
