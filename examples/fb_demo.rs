@@ -1,5 +1,5 @@
 use chromakopia::animate::*;
-use chromakopia::{center, presets};
+use chromakopia::{pad, presets};
 use std::time::Duration;
 
 const BANNER: &str = r#"   ________  ______  ____  __  ______    __ ______  ____  _______
@@ -36,48 +36,65 @@ const CREDIT: &str = "(c) 2026 JP Wesselink";
 #[tokio::main]
 async fn main() {
     let bg = chromakopia::bg_color();
+    let fg = chromakopia::fg_color();
     let bg_hex = bg.to_string();
     let storm = presets::storm().palette(256);
     let fire = chromakopia::gradient(&[&bg_hex, "#ff71ce", "#01cdfe", "#05ffa1", "#b967ff", "#fffb96", "#ff71ce", &bg_hex]).palette(256);
     let fps = 30;
+    let fg_pal = vec![fg];
 
-    // Center everything as a block
-    let full = format!("{}\n\n{}\n\n{}", CREDIT, BANNER, LICENSE);
-    let centered = center(&full);
-    let centered_lines: Vec<&str> = centered.lines().collect();
+    // Left-align, pad to terminal width
+    let full = pad(&format!("{}\n\n{}\n\n{}", CREDIT, BANNER, LICENSE));
+    let lines: Vec<&str> = full.lines().collect();
 
     let banner_height = BANNER.lines().count();
-    let credit = centered_lines[0];
-
-    // Centered banner text
-    let banner_text: String = centered_lines[2..2 + banner_height].join("\n");
-    // Centered license text
+    let credit = lines[0];
+    let banner_text: String = lines[2..2 + banner_height].join("\n");
     let license_start = 2 + banner_height + 1;
-    let license_text: String = centered_lines[license_start..].join("\n");
+    let license_text: String = lines[license_start..].join("\n");
+
+    let total_secs = 15;
+    let fade_out_start = (total_secs - 2) * fps;
 
     Scene::new()
-        // Credit — fades in over rainbow
-        .line(Line::full(credit,
-            Fade::in_from(Rainbow::new(credit), bg, Easing::EaseOut, fps)
+        // Credit — fades in over rainbow, fades out to fg at the end
+        .line(Line::full(credit, Chain::new()
+            .then(fade_out_start, Fade::in_from(Rainbow::new(credit), bg, Easing::EaseOut, fps))
+            .then(fps * 2, Fade::out_to(Rainbow::new(credit), fg, Easing::EaseInOut, fps * 2))
+            .then(fps * 100, Glow::new(credit, fg_pal.clone()))
         ))
         .line(Line::blank())
-        // Banner — scroll holds after settling, plasma runs continuously
-        .block(&banner_text, Fade::in_from(
-            Composite::new(
-                Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 0),
+        // Banner — scroll + plasma, fades to fg at the end
+        .block(&banner_text, Chain::new()
+            .then(fade_out_start, Fade::in_from(
+                Composite::new(
+                    Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 0),
+                    Plasma::new(&banner_text, storm.clone(), 42.0),
+                ),
+                bg, Easing::EaseOut, fps,
+            ))
+            .then(fps * 2, Fade::out_to(
                 Plasma::new(&banner_text, storm.clone(), 42.0),
-            ),
-            bg, Easing::EaseOut, fps,
-        ))
+                fg, Easing::EaseInOut, fps * 2,
+            ))
+            .then(fps * 100, Glow::new(&banner_text, fg_pal.clone()))
+        )
         .line(Line::blank())
-        // License — same: scroll holds, plasma continuous
-        .block(&license_text, Fade::in_from(
-            Composite::new(
-                Scroll::new(&license_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2),
+        // License — scroll + plasma, fades to fg at the end
+        .block(&license_text, Chain::new()
+            .then(fade_out_start, Fade::in_from(
+                Composite::new(
+                    Scroll::new(&license_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2),
+                    Plasma::new(&license_text, fire.clone(), 42.0),
+                ),
+                bg, Easing::EaseOut, fps,
+            ))
+            .then(fps * 2, Fade::out_to(
                 Plasma::new(&license_text, fire.clone(), 42.0),
-            ),
-            bg, Easing::EaseOut, fps,
-        ))
-        .run(Duration::from_secs(15))
+                fg, Easing::EaseInOut, fps * 2,
+            ))
+            .then(fps * 100, Glow::new(&license_text, fg_pal.clone()))
+        )
+        .run(Duration::from_secs(total_secs as u64))
         .await;
 }
