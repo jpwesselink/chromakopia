@@ -1,4 +1,4 @@
-use chromakopia::{animate, center, presets};
+use chromakopia::{animate, center};
 use chromakopia::animate::{Easing, ScrollDirection, TimeRange};
 
 const LICENSE: &str = "\
@@ -27,16 +27,23 @@ SOFTWARE.";
 #[tokio::main]
 async fn main() {
     let full_text = center(LICENSE);
+    let line_count = full_text.lines().count();
+
+    let fps = 30;
+    let frames_per_line = 60;
+    let stagger = 1;
+    // Total time = (last line start + animation duration) / fps
+    let total_secs = ((line_count - 1) * stagger + frames_per_line) as f64 / fps as f64;
 
     animate::Sequence::new(&full_text)
         .effect(
-            TimeRange::new(0.0, 8.0), 30,
+            TimeRange::new(0.0, total_secs), fps as u64,
             animate::scroll_staggered_effect(
                 ScrollDirection::Left,
                 Easing::Elastic(0.4),
-                presets::mist(),
-                60,  // 2s per line
-                1,   // 1 frame stagger — slant effect
+                chromakopia::gradient(&["#cccccc", "#cccccc"]),
+                frames_per_line,
+                stagger,
             ),
         )
         .run(1.0)
