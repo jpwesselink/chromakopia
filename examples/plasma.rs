@@ -9,7 +9,7 @@ const BANNER: &str = r#"
  / /   / /_/ / /_/ / / / / /|_/ / /| | / ,< / / / / /_/ // // /| |
 / /___/ __  / _, _/ /_/ / /  / / ___ |/ /| / /_/ / ____// // ___ |
 \____/_/ /_/_/ |_|\____/_/  /_/_/  |_/_/ |_\____/_/   /___/_/  |_|
-              MIT License (c) 2026 JP Wesselink — crates.io/crates/chromakopia
+     (c) 2026 JP Wesselink — github.com/jpwesselink/chromakopia — MIT License
 "#;
 
 #[tokio::main]
