@@ -146,7 +146,7 @@ fn parse_osc_response_for_code(response: &[u8], osc_code: u8) -> Option<Color> {
         .or_else(|| {
             sub.find("\x1B\\").map(|i| i + 2)
         })?;
-    parse_osc_color_response(sub[..end].as_bytes())
+    parse_osc_color_response(&sub.as_bytes()[..end])
 }
 
 /// Try to parse the `COLORFGBG` environment variable.
@@ -192,7 +192,7 @@ fn ansi_index_to_color(idx: u8) -> Color {
             let i = idx - 16;
             let r = if i / 36 == 0 { 0 } else { 55 + 40 * (i / 36) };
             let g = if (i % 36) / 6 == 0 { 0 } else { 55 + 40 * ((i % 36) / 6) };
-            let b = if i % 6 == 0 { 0 } else { 55 + 40 * (i % 6) };
+            let b = if i.is_multiple_of(6) { 0 } else { 55 + 40 * (i % 6) };
             Color::new(r, g, b)
         }
         // Grayscale ramp

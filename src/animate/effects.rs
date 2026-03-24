@@ -153,7 +153,7 @@ pub fn radar(text: &str, frame: usize) -> String {
 
 /// Render a neon frame: flickering between dim and bright.
 pub fn neon(text: &str, frame: usize) -> String {
-    if frame % 2 == 0 {
+    if frame.is_multiple_of(2) {
         // Dim
         apply_solid(text, Color::new(88, 80, 85))
     } else {
@@ -250,6 +250,141 @@ pub fn fade_out(text: &str, frame: usize, total_frames: usize, target: Color) ->
             ch.to_string().truecolor(c.r, c.g, c.b).to_string()
         }).collect::<String>()
     }).collect::<Vec<_>>().join("\n")
+}
+
+/// Demoscene plasma: overlapping sine waves create a flowing 2D color field.
+/// Each character's color is computed from its (x, y) position and time.
+/// Uses a gradient palette for colors. Pass `None` for rainbow HSV.
+pub fn plasma(text: &str, frame: usize, palette: Option<&[Color]>) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let t = frame as f64 * 0.08;
+
+    lines
+        .iter()
+        .enumerate()
+        .map(|(y, line)| {
+            let yf = y as f64;
+            line.chars()
+                .enumerate()
+                .map(|(x, ch)| {
+                    let xf = x as f64;
+
+                    // Four overlapping sine planes — the classic plasma recipe
+                    let v1 = (xf * 0.08 + t).sin();
+                    let v2 = (yf * 0.12 + t * 0.6).sin();
+                    let v3 = ((xf * 0.06 + yf * 0.08 + t * 0.4).sin()
+                        + (xf * 0.04 - yf * 0.06 + t * 0.7).cos())
+                        * 0.5;
+                    // Radial ripple from center
+                    let cx = xf - 30.0;
+                    let cy = (yf - 5.0) * 2.5; // exaggerate y for an elongated ripple
+                    let v4 = ((cx * cx + cy * cy).sqrt() * 0.12 - t * 1.2).sin();
+
+                    let v = (v1 + v2 + v3 + v4) * 0.25; // -1..1
+
+                    let c = if let Some(pal) = palette {
+                        if pal.is_empty() {
+                            Color::new(0, 0, 0)
+                        } else if pal.len() == 1 {
+                            pal[0]
+                        } else {
+                            // Map -1..1 → 0..1, then cycle through palette
+                            let idx = ((v + 1.0) * 0.5 + t * 0.05).rem_euclid(1.0);
+                            let fi = idx * (pal.len() - 1) as f64;
+                            let lo = (fi.floor() as usize).min(pal.len() - 1);
+                            let hi = (lo + 1).min(pal.len() - 1);
+                            let frac = fi - lo as f64;
+                            Color::lerp_rgb(pal[lo], pal[hi], frac)
+                        }
+                    } else {
+                        // Rainbow HSV
+                        let hue = ((v + 1.0) * 180.0 + t * 20.0) % 360.0;
+                        let sat = 0.8 + 0.2 * (v * std::f64::consts::PI).cos();
+                        let val = 0.7 + 0.3 * (v * 2.0 * std::f64::consts::PI + t).sin();
+                        Color::from_hsv(hue, sat, val)
+                    };
+
+                    ch.to_string().truecolor(c.r, c.g, c.b).to_string()
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_color<F: FnOnce()>(f: F) {
+        colored::control::set_override(true);
+        f();
+    }
+
+    #[test]
+    fn plasma_preserves_line_structure() {
+        with_color(|| {
+            let output = plasma("ab\ncd", 0, None);
+            let lines: Vec<&str> = output.split('\n').collect();
+            assert_eq!(lines.len(), 2);
+        });
+    }
+
+    #[test]
+    fn plasma_empty_input() {
+        let output = plasma("", 0, None);
+        assert_eq!(output, "");
+    }
+
+    #[test]
+    fn plasma_single_char() {
+        with_color(|| {
+            let output = plasma("x", 0, None);
+            assert!(!output.is_empty());
+            assert!(output.contains('x'));
+        });
+    }
+
+    #[test]
+    fn plasma_deterministic() {
+        with_color(|| {
+            let a = plasma("hello\nworld", 10, None);
+            let b = plasma("hello\nworld", 10, None);
+            assert_eq!(a, b);
+        });
+    }
+
+    #[test]
+    fn plasma_different_frames_differ() {
+        with_color(|| {
+            let a = plasma("hello", 0, None);
+            let b = plasma("hello", 50, None);
+            assert_ne!(a, b);
+        });
+    }
+
+    #[test]
+    fn plasma_empty_palette_no_panic() {
+        let output = plasma("test", 0, Some(&[]));
+        assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn plasma_single_color_palette() {
+        let pal = [Color::new(255, 0, 0)];
+        let output = plasma("test", 0, Some(&pal));
+        assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn plasma_with_palette() {
+        with_color(|| {
+            let pal = [Color::new(255, 0, 0), Color::new(0, 0, 255)];
+            let output = plasma("ab\ncd", 0, Some(&pal));
+            let lines: Vec<&str> = output.split('\n').collect();
+            assert_eq!(lines.len(), 2);
+        });
+    }
 }
 
 fn apply_solid(text: &str, c: Color) -> String {

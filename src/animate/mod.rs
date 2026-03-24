@@ -1,4 +1,4 @@
-//! Animated terminal gradients — rainbow, pulse, glitch, radar, neon, karaoke.
+//! Animated terminal effects — text coloring, transitions, and demoscene-style animations.
 //!
 //! ```no_run
 //! # async fn example() {
@@ -167,6 +167,9 @@ where
 
     let handle = tokio::spawn(async move {
         let mut local_lines_printed: usize = 0;
+
+        // Eagerly probe terminal colors before any output
+        crate::terminal::probe_colors();
 
         // Hide cursor
         {
@@ -455,9 +458,30 @@ impl Sequence {
     /// Rainbow effect.
     pub fn rainbow(mut self, duration: Duration) -> Self {
         self.push_effect(
-            Box::new(|text, frame| effects::rainbow(text, frame)),
+            Box::new(effects::rainbow),
             duration,
             15,
+        );
+        self
+    }
+
+    /// Demoscene plasma effect with rainbow colors.
+    pub fn plasma(mut self, duration: Duration) -> Self {
+        self.push_effect(
+            Box::new(|text, frame| effects::plasma(text, frame, None)),
+            duration,
+            30,
+        );
+        self
+    }
+
+    /// Demoscene plasma effect with a custom gradient.
+    pub fn plasma_with(mut self, grad: Gradient, duration: Duration) -> Self {
+        let palette = grad.palette(256);
+        self.push_effect(
+            Box::new(move |text, frame| effects::plasma(text, frame, Some(&palette))),
+            duration,
+            30,
         );
         self
     }
@@ -691,6 +715,9 @@ impl Sequence {
     pub async fn run(self, speed: f64) {
         let text = self.text;
 
+        // Eagerly probe terminal colors before any output
+        crate::terminal::probe_colors();
+
         // Hide cursor
         {
             let mut stderr = std::io::stderr().lock();
@@ -799,8 +826,8 @@ fn apply_fade_toward(s: &str, opacity: f64, target: crate::color::Color) -> Stri
             }
             if i < bytes.len() {
                 let seq = &s[seq_start..i];
-                if seq.starts_with("38;2;") {
-                    let parts: Vec<&str> = seq[5..].split(';').collect();
+                if let Some(rgb) = seq.strip_prefix("38;2;") {
+                    let parts: Vec<&str> = rgb.split(';').collect();
                     if parts.len() == 3 {
                         if let (Ok(r), Ok(g), Ok(b)) = (
                             parts[0].parse::<u8>(),
@@ -862,8 +889,8 @@ fn apply_fade_toward_gradient(s: &str, opacity: f64, grad: &Gradient, text: &str
             }
             if i < bytes.len() {
                 let seq = &s[seq_start..i];
-                if seq.starts_with("38;2;") {
-                    let parts: Vec<&str> = seq[5..].split(';').collect();
+                if let Some(rgb) = seq.strip_prefix("38;2;") {
+                    let parts: Vec<&str> = rgb.split(';').collect();
                     if parts.len() == 3 {
                         if let (Ok(r), Ok(g), Ok(b)) = (
                             parts[0].parse::<u8>(),
@@ -996,6 +1023,17 @@ pub fn flap_effect(settled: crate::color::Color, flipping: crate::color::Color) 
     move |text, frame| effects::flap(text, frame, settled, flipping)
 }
 
+/// Create a rainbow plasma effect closure for use with [`Sequence::effect`].
+pub fn plasma_effect() -> impl Fn(&str, usize) -> String + Send + 'static {
+    |text, frame| effects::plasma(text, frame, None)
+}
+
+/// Create a plasma effect closure with a custom gradient for use with [`Sequence::effect`].
+pub fn plasma_gradient_effect(grad: Gradient) -> impl Fn(&str, usize) -> String + Send + 'static {
+    let palette = grad.palette(256);
+    move |text, frame| effects::plasma(text, frame, Some(&palette))
+}
+
 // ── Standalone animations ──
 
 /// Start a rainbow animation. Speed is a multiplier (1.0 = default).
@@ -1026,6 +1064,25 @@ pub fn neon(text: &str, speed: f64) -> Animation {
 /// Start a karaoke animation (progressive highlight).
 pub fn karaoke(text: &str, speed: f64) -> Animation {
     spawn_animation(text, effects::karaoke, 50, speed)
+}
+
+/// Start a plasma animation (demoscene-style flowing color field).
+///
+/// Overlapping sine waves create a 2D plasma pattern that flows
+/// through the text. Works best with multiline ASCII art.
+///
+/// ```no_run
+/// let anim = chromakopia::animate::plasma("Hello!", 1.0);
+/// anim.stop();
+/// ```
+pub fn plasma(text: &str, speed: f64) -> Animation {
+    spawn_animation(text, |text, frame| effects::plasma(text, frame, None), 30, speed)
+}
+
+/// Start a plasma animation with a custom gradient.
+pub fn plasma_with(grad: Gradient, text: &str, speed: f64) -> Animation {
+    let palette = grad.palette(256);
+    spawn_animation(text, move |text, frame| effects::plasma(text, frame, Some(&palette)), 30, speed)
 }
 
 /// Slow glow that sweeps left to right across any gradient.

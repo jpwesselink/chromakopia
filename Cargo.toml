@@ -91,3 +91,11 @@ path = "examples/breathe.rs"
 [[example]]
 name = "cinematic"
 path = "examples/cinematic.rs"
+
+[[example]]
+name = "plasma"
+path = "examples/plasma.rs"
+
+[[example]]
+name = "theme_adaptive"
+path = "examples/theme_adaptive.rs"
