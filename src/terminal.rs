@@ -287,6 +287,13 @@ fn detect_system_theme() -> (Color, Color) {
 
 /// Eagerly probe and cache both terminal colors.
 ///
+/// Detection chain (first match wins):
+/// 1. OSC 10/11 query via `/dev/tty` (most accurate — returns exact RGB)
+/// 2. `COLORFGBG` environment variable (ANSI index → approximate RGB)
+/// 3. `TERM_PROGRAM` heuristics (known default themes)
+/// 4. System theme detection — macOS `defaults read` (dark/light → conservative colors)
+/// 5. Hardcoded defaults (light gray fg, black bg — non-macOS only)
+///
 /// Call this before hiding the cursor or writing any escape sequences,
 /// because the OSC probe reads from the terminal and stray escape output
 /// could corrupt the response. Safe to call multiple times — only probes
@@ -298,8 +305,7 @@ pub fn probe_colors() {
 
 /// Get the terminal background color.
 ///
-/// Probes the terminal via OSC 11 on first call, falls back to `COLORFGBG`
-/// env var, then defaults to black. Caches the result.
+/// Uses the detection chain described in [`probe_colors`]. Caches the result.
 pub fn bg_color() -> Color {
     *BG_COLOR.get_or_init(|| {
         if let Some(c) = probed_osc().1 {
@@ -319,8 +325,7 @@ pub fn bg_color() -> Color {
 
 /// Get the terminal foreground color.
 ///
-/// Probes the terminal via OSC 10 on first call, falls back to `COLORFGBG`
-/// env var, then defaults to light gray. Caches the result.
+/// Uses the detection chain described in [`probe_colors`]. Caches the result.
 pub fn fg_color() -> Color {
     *FG_COLOR.get_or_init(|| {
         if let Some(c) = probed_osc().0 {
