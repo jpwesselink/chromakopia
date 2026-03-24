@@ -117,5 +117,9 @@ name = "scroll"
 path = "examples/scroll.rs"
 
 [[example]]
+name = "fb_demo"
+path = "examples/fb_demo.rs"
+
+[[example]]
 name = "showcase"
 path = "examples/showcase.rs"

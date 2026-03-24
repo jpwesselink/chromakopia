@@ -11,6 +11,7 @@
 mod effects;
 mod easing;
 pub mod framebuffer;
+pub mod fb_effects;
 
 pub use easing::Easing;
 pub use effects::ScrollDirection;
