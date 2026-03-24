@@ -334,13 +334,17 @@ pub enum ScrollDirection {
     Bottom,
 }
 
-/// Starfield sparkle: random characters briefly flash bright against a dark base.
+/// Starfield warp: stars radiate outward from a central vanishing point.
 ///
-/// Each non-space character has a chance to "spark" — briefly flashing to a
-/// bright color from the palette, then fading back to the base color.
-/// Creates a twinkling star field effect.
+/// Characters near the center are dim and slow. Characters near the edges
+/// are bright and streak fast — like flying through a star tunnel.
 pub fn sparkle(text: &str, frame: usize, palette: Option<&[Color]>) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
+    let line_count = lines.len();
+    let max_width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1).max(1);
+    let cx = max_width as f64 / 2.0;
+    let cy = line_count as f64 / 2.0;
+    let max_dist = (cx * cx + (cy * 2.5) * (cy * 2.5)).sqrt();
     let t = frame as f64;
 
     lines
@@ -354,30 +358,34 @@ pub fn sparkle(text: &str, frame: usize, palette: Option<&[Color]>) -> String {
                         return ch.to_string();
                     }
 
-                    // Deterministic pseudo-random per (x, y, frame) — no rand needed
-                    let hash = ((x * 7919 + y * 6271 + frame * 1013) % 10007) as f64 / 10007.0;
+                    let dx = x as f64 - cx;
+                    let dy = (y as f64 - cy) * 2.5; // stretch y (chars are taller)
+                    let dist = (dx * dx + dy * dy).sqrt() / max_dist; // 0=center, 1=edge
 
-                    // Each star has its own cycle phase
+                    // Each star has a unique phase based on position
                     let phase = ((x * 3571 + y * 2719) % 997) as f64;
-                    let cycle = ((t * 0.3 + phase) % 60.0) / 60.0;
 
-                    // Spark probability — most chars are dim, a few are bright
-                    let brightness = if hash < 0.08 {
-                        // This char is sparking this frame
-                        let spark_t = (cycle * std::f64::consts::TAU).sin() * 0.5 + 0.5;
-                        0.3 + 0.7 * spark_t
-                    } else {
-                        // Dim base — subtle shimmer
-                        0.05 + 0.1 * ((t * 0.1 + phase * 0.01).sin() * 0.5 + 0.5)
-                    };
+                    // Stars move outward over time — the "warp" cycle
+                    // Near center: slow cycle. Near edge: fast cycle.
+                    let speed = 0.2 + dist * 0.8;
+                    let cycle = ((t * speed * 0.15 + phase) % 40.0) / 40.0;
+
+                    // Brightness: edges are brighter, center is dimmer
+                    // Plus a pulsing sparkle based on the cycle
+                    let pulse = (cycle * std::f64::consts::TAU).sin() * 0.5 + 0.5;
+                    let brightness = dist * (0.3 + 0.7 * pulse);
 
                     let c = if let Some(pal) = palette {
                         if pal.is_empty() {
                             Color::new(0, 0, 0)
                         } else {
-                            // Pick a color from palette based on position
-                            let idx = (x * 131 + y * 97) % pal.len();
-                            let base = pal[idx];
+                            // Pick color based on distance — center is deep, edges are hot
+                            let color_t = (dist + cycle * 0.3).rem_euclid(1.0);
+                            let fi = color_t * (pal.len() - 1) as f64;
+                            let lo = (fi.floor() as usize).min(pal.len() - 1);
+                            let hi = (lo + 1).min(pal.len() - 1);
+                            let frac = fi - lo as f64;
+                            let base = Color::lerp_rgb(pal[lo], pal[hi], frac);
                             Color::new(
                                 (base.r as f64 * brightness) as u8,
                                 (base.g as f64 * brightness) as u8,
@@ -385,10 +393,8 @@ pub fn sparkle(text: &str, frame: usize, palette: Option<&[Color]>) -> String {
                             )
                         }
                     } else {
-                        // Default: white/blue stars
-                        let blue_tint = ((x * 4799 + y * 3137) % 100) as f64 / 100.0;
-                        let r = (255.0 * brightness * (0.7 + 0.3 * blue_tint)) as u8;
-                        let g = (255.0 * brightness * (0.8 + 0.2 * blue_tint)) as u8;
+                        let r = (200.0 * brightness + 55.0 * dist) as u8;
+                        let g = (220.0 * brightness + 35.0 * dist) as u8;
                         let b = (255.0 * brightness) as u8;
                         Color::new(r, g, b)
                     };
