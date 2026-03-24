@@ -1140,6 +1140,126 @@ pub fn scroll_staggered_effect(
     move |text, frame| effects::scroll_staggered(text, frame, total_frames, direction, Some(&grad), easing, line_delay)
 }
 
+// ── Compositing ──
+
+/// Combine two effects: one controls character position, the other controls color.
+///
+/// Useful for running a movement effect (like scroll) and a color effect
+/// (like plasma) simultaneously. The `position` effect determines which
+/// characters appear where; the `color` effect determines what color they are.
+///
+/// ```no_run
+/// # async fn example() {
+/// use chromakopia::{animate, presets};
+/// use chromakopia::animate::{Easing, ScrollDirection, TimeRange};
+///
+/// let scroll = animate::scroll_staggered_effect(
+///     ScrollDirection::Left, Easing::Elastic(0.25), presets::storm(), 60, 1,
+/// );
+/// let plasma = animate::plasma_gradient_effect(presets::storm());
+/// let combined = animate::composite(scroll, plasma);
+///
+/// animate::Sequence::new("Hello!")
+///     .effect(TimeRange::new(0.0, 5.0), 30, combined)
+///     .run(1.0).await;
+/// # }
+/// ```
+pub fn composite<P, C>(position: P, color: C) -> impl Fn(&str, usize) -> String + Send + 'static
+where
+    P: Fn(&str, usize) -> String + Send + 'static,
+    C: Fn(&str, usize) -> String + Send + 'static,
+{
+    move |text, frame| {
+        let positioned = position(text, frame);
+        let colored = color(text, frame);
+        merge_position_and_color(&positioned, &colored)
+    }
+}
+
+/// Take character positions from one ANSI string and colors from another.
+fn merge_position_and_color(positioned: &str, colored: &str) -> String {
+    let pos_lines: Vec<&str> = positioned.split('\n').collect();
+    let col_lines: Vec<&str> = colored.split('\n').collect();
+
+    pos_lines.iter().enumerate().map(|(y, pos_line)| {
+        let col_line = col_lines.get(y).copied().unwrap_or("");
+        let pos_chars = extract_visible_chars(pos_line);
+        let col_colors = extract_colors(col_line);
+        let mut result = String::new();
+
+        for (i, ch) in pos_chars.iter().enumerate() {
+            if ch.is_whitespace() {
+                result.push(*ch);
+            } else if let Some(&(r, g, b)) = col_colors.get(i) {
+                result.push_str(&format!("\x1B[38;2;{};{};{}m{}\x1B[0m", r, g, b, ch));
+            } else {
+                result.push(*ch);
+            }
+        }
+        result
+    }).collect::<Vec<_>>().join("\n")
+}
+
+/// Extract visible characters from an ANSI string, skipping escape sequences.
+fn extract_visible_chars(s: &str) -> Vec<char> {
+    let mut chars = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1B && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'm' { i += 1; }
+            if i < bytes.len() { i += 1; }
+        } else {
+            let byte = bytes[i];
+            let char_len = if byte < 0x80 { 1 } else if byte < 0xE0 { 2 } else if byte < 0xF0 { 3 } else { 4 };
+            let end = (i + char_len).min(bytes.len());
+            if let Ok(ch_str) = std::str::from_utf8(&bytes[i..end]) {
+                if let Some(ch) = ch_str.chars().next() {
+                    chars.push(ch);
+                }
+            }
+            i = end;
+        }
+    }
+    chars
+}
+
+/// Extract the truecolor RGB at each visible character position from an ANSI string.
+fn extract_colors(s: &str) -> Vec<(u8, u8, u8)> {
+    let mut colors = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut current = (255u8, 255u8, 255u8);
+    while i < bytes.len() {
+        if bytes[i] == 0x1B && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            i += 2;
+            let seq_start = i;
+            while i < bytes.len() && bytes[i] != b'm' { i += 1; }
+            if i < bytes.len() {
+                let seq = &s[seq_start..i];
+                if let Some(rgb) = seq.strip_prefix("38;2;") {
+                    let parts: Vec<&str> = rgb.split(';').collect();
+                    if parts.len() == 3 {
+                        if let (Ok(r), Ok(g), Ok(b)) = (
+                            parts[0].parse(), parts[1].parse(), parts[2].parse()
+                        ) {
+                            current = (r, g, b);
+                        }
+                    }
+                }
+                i += 1;
+            }
+        } else {
+            let byte = bytes[i];
+            let char_len = if byte < 0x80 { 1 } else if byte < 0xE0 { 2 } else if byte < 0xF0 { 3 } else { 4 };
+            colors.push(current);
+            i = (i + char_len).min(bytes.len());
+        }
+    }
+    colors
+}
+
 // ── Standalone animations ──
 
 /// Start a rainbow animation. Speed is a multiplier (1.0 = default).
