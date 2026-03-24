@@ -113,8 +113,11 @@ impl Scene {
     }
 
     /// Run the scene with the framebuffer renderer.
+    ///
+    /// Width is clamped to terminal width so scroll/elastic have room to overshoot.
     pub async fn run(self, duration: Duration) {
-        let width = self.width();
+        let term_width = crate::terminal::terminal_width();
+        let width = self.width().max(term_width);
         let height = self.height();
         if width == 0 || height == 0 { return; }
         let effect = SceneEffect { scene: self };
@@ -149,16 +152,19 @@ impl Effect for SceneEffect {
                     }
                     Segment::Animated { chars, effect } => {
                         let seg_width = chars.len();
-                        // Create a tiny sub-buffer for this segment
-                        let mut sub = FrameBuffer::new(seg_width, 1);
+                        // Sub-buffer gets remaining width so scroll/elastic can overshoot
+                        let sub_width = buf.width.saturating_sub(x_offset).max(seg_width);
+                        let mut sub = FrameBuffer::new(sub_width, 1);
                         // Initialize with the segment's chars
                         for (i, &ch) in chars.iter().enumerate() {
-                            sub.set(i, 0, Cell::new(ch, Color::new(204, 204, 204)));
+                            if i < sub_width {
+                                sub.set(i, 0, Cell::new(ch, Color::new(204, 204, 204)));
+                            }
                         }
                         // Let the effect write to the sub-buffer
                         effect.render(&mut sub, frame);
                         // Copy sub-buffer into main buffer at the right offset
-                        for i in 0..seg_width {
+                        for i in 0..sub_width {
                             let x = x_offset + i;
                             if x < buf.width {
                                 buf.set(x, y, sub.get(i, 0));
