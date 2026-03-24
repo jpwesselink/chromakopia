@@ -38,7 +38,7 @@ async fn main() {
     let bg = chromakopia::bg_color();
     let bg_hex = bg.to_string();
     let storm = presets::storm().palette(256);
-    let fire = chromakopia::gradient(&["#ffffff", "#8b4513", "#ff6600", "#ff69b4", "#a0522d", &bg_hex]).palette(256);
+    let fire = chromakopia::gradient(&["#ffffff", "#8b4513", "#8800cc", "#ff69b4", "#a0522d", &bg_hex]).palette(256);
     let fps = 30;
 
     // Center everything as a block
