@@ -14,7 +14,7 @@ const TEXT: &str = r#"
 #[tokio::main]
 async fn main() {
     let text = TEXT.trim_matches('\n');
-    let anim = animate::sparkle_with(presets::starfield(), text, 1.0);
+    let anim = animate::sparkle_with(presets::starfield(), text, 3.0);
     tokio::time::sleep(Duration::from_secs(10)).await;
     anim.stop();
 }
