@@ -105,6 +105,10 @@ name = "theme_adaptive"
 path = "examples/theme_adaptive.rs"
 
 [[example]]
+name = "license"
+path = "examples/license.rs"
+
+[[example]]
 name = "scroll"
 path = "examples/scroll.rs"
 
