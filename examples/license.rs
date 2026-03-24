@@ -56,14 +56,14 @@ async fn main() {
     );
 
     // Two different plasmas: storm for banner, mist for license
-    // Random seed — different pattern each run, but both sections share it
     let seed: f64 = rand::random::<f64>() * 1000.0;
+    let bg = chromakopia::bg_color().to_string();
     let plasma_banner = animate::plasma_seeded_effect(
-        chromakopia::gradient(&["#000000", "#ff0000", "#ffff00", "#ff0000", "#000000"]),
+        chromakopia::gradient(&[&bg, "#ff0000", "#ffff00", "#ff0000", &bg]),
         0.0, seed,
     );
     let plasma_license = animate::plasma_seeded_effect(
-        chromakopia::gradient(&["#000000", "#00ccff", "#4466ff", "#aa44ff", "#000000"]),
+        chromakopia::gradient(&[&bg, "#00ccff", "#4466ff", "#aa44ff", &bg]),
         banner_lines as f64 + 1.0, seed,
     );
     let split = banner_lines + 1; // +1 for blank line
