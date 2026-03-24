@@ -366,21 +366,34 @@ fn scroll_inner(
 
     let palette = gradient.map(|g| g.palette(max_width.max(2)));
 
-    // Use terminal width for horizontal travel so elastic/bounce overshoot
-    // looks consistent regardless of text length
     let term_width = crate::terminal::terminal_width();
 
-    // Horizontal offset (for Left/Right)
+    // Start just off-screen (text width), but overshoot relative to terminal width.
+    // eased goes 0→1 (with elastic/bounce possibly overshooting past 1.0).
+    // At eased=0: offset = max_width (fully hidden)
+    // At eased=1: offset = 0 (in place)
+    // At eased>1: offset goes negative by (eased-1)*term_width (overshoot)
     let h_offset = match direction {
-        ScrollDirection::Left => ((1.0 - eased) * term_width as f64).round() as i32,
-        ScrollDirection::Right => -((1.0 - eased) * term_width as f64).round() as i32,
+        ScrollDirection::Left | ScrollDirection::Right => {
+            let sign = if matches!(direction, ScrollDirection::Left) { 1.0 } else { -1.0 };
+            if eased <= 1.0 {
+                (sign * (1.0 - eased) * max_width as f64).round() as i32
+            } else {
+                (sign * (1.0 - eased) * term_width as f64).round() as i32
+            }
+        }
         _ => 0,
     };
 
-    // Vertical offset (for Top/Bottom)
     let v_offset = match direction {
-        ScrollDirection::Top => ((1.0 - eased) * line_count as f64).round() as i32,
-        ScrollDirection::Bottom => -((1.0 - eased) * line_count as f64).round() as i32,
+        ScrollDirection::Top | ScrollDirection::Bottom => {
+            let sign = if matches!(direction, ScrollDirection::Top) { 1.0 } else { -1.0 };
+            if eased <= 1.0 {
+                (sign * (1.0 - eased) * line_count as f64).round() as i32
+            } else {
+                (sign * (1.0 - eased) * line_count as f64).round() as i32
+            }
+        }
         _ => 0,
     };
 
