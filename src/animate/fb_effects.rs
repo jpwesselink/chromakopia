@@ -137,3 +137,121 @@ impl Effect for Sparkle {
         }
     }
 }
+
+/// Compose multiple effects — each one writes to the buffer in order.
+/// Later effects overwrite earlier ones (last-write-wins per cell).
+pub struct LayeredEffect {
+    layers: Vec<Box<dyn Effect>>,
+}
+
+impl LayeredEffect {
+    pub fn new() -> Self {
+        Self { layers: Vec::new() }
+    }
+
+    pub fn add(mut self, effect: impl Effect) -> Self {
+        self.layers.push(Box::new(effect));
+        self
+    }
+}
+
+impl Effect for LayeredEffect {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        for layer in &self.layers {
+            layer.render(buf, frame);
+        }
+    }
+}
+
+/// Write static text into the buffer — only on the first frame.
+/// After that, leaves cells untouched so animated effects can own them.
+pub struct StaticText {
+    rows: Vec<(usize, Vec<char>, Color)>, // (row_index, chars, color)
+}
+
+impl StaticText {
+    /// Create from text where specific rows are static.
+    /// `row_map` is a list of (row_index, text, color).
+    pub fn new(rows: Vec<(usize, &str, Color)>) -> Self {
+        Self {
+            rows: rows
+                .into_iter()
+                .map(|(y, text, color)| (y, text.chars().collect(), color))
+                .collect(),
+        }
+    }
+}
+
+impl Effect for StaticText {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        if frame > 0 {
+            return; // only write on first frame
+        }
+        for (y, chars, color) in &self.rows {
+            for (x, &ch) in chars.iter().enumerate() {
+                if x < buf.width && *y < buf.height {
+                    buf.set(x, *y, Cell::new(ch, *color));
+                }
+            }
+        }
+    }
+}
+
+/// Animate only specific rows with plasma, leave others untouched.
+pub struct RowPlasma {
+    rows: Vec<(usize, Vec<char>)>, // (row_index, chars)
+    palette: Vec<Color>,
+    seed: f64,
+}
+
+impl RowPlasma {
+    pub fn new(rows: Vec<(usize, &str)>, palette: Vec<Color>, seed: f64) -> Self {
+        Self {
+            rows: rows
+                .into_iter()
+                .map(|(y, text)| (y, text.chars().collect()))
+                .collect(),
+            palette,
+            seed,
+        }
+    }
+}
+
+impl Effect for RowPlasma {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        let t = frame as f64 * 0.08;
+        let pal = &self.palette;
+        if pal.is_empty() {
+            return;
+        }
+
+        for (y, chars) in &self.rows {
+            let yf = *y as f64;
+            for (x, &ch) in chars.iter().enumerate() {
+                if x >= buf.width || *y >= buf.height {
+                    continue;
+                }
+
+                let xf = x as f64;
+                let v1 = (xf * 0.08 + t + self.seed).sin();
+                let v2 = (yf * 0.12 + t * 0.6 + self.seed * 1.3).sin();
+                let v3 = ((xf * 0.06 + yf * 0.08 + t * 0.4 + self.seed * 0.7).sin()
+                    + (xf * 0.04 - yf * 0.06 + t * 0.7 + self.seed * 1.9).cos())
+                    * 0.5;
+                let cx = xf - buf.width as f64 / 2.0;
+                let cy = (yf - buf.height as f64 / 2.0) * 2.5;
+                let v4 = ((cx * cx + cy * cy).sqrt() * 0.12 - t * 1.2 + self.seed * 0.5).sin();
+
+                let v = (v1 + v2 + v3 + v4) * 0.25;
+                let idx = ((v + 1.0) * 0.5 + t * 0.05).rem_euclid(1.0);
+                let fi = idx * (pal.len() - 1) as f64;
+                let lo = (fi.floor() as usize).min(pal.len() - 1);
+                let hi = (lo + 1).min(pal.len() - 1);
+                let frac = fi - lo as f64;
+                let color = Color::lerp_rgb(pal[lo], pal[hi], frac);
+
+                buf.set(x, *y, Cell::new(ch, color));
+            }
+        }
+    }
+}
