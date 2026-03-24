@@ -57,7 +57,7 @@ async fn main() {
 
     let seed: f64 = rand::random::<f64>() * 1000.0;
     let bg = chromakopia::bg_color().to_string();
-    let palette = chromakopia::gradient(&[&bg, "#00ccff", "#4466ff", "#aa44ff", &bg]);
+    let palette = chromakopia::gradient(&[&bg, "#cc0000", "#ff2200", "#ff6600", "#ffaa00", "#ffdd00", "#ffffff", "#ffdd00", "#ffaa00", "#ff2200", &bg]);
     // Same palette for both, banner shifted 50% in the color cycle
     let plasma_banner = animate::plasma_seeded_effect(
         palette.clone(), 0.0, seed,
