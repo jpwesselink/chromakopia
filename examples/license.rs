@@ -56,10 +56,14 @@ async fn main() {
     );
 
     // Two different plasmas: storm for banner, mist for license
-    let plasma_banner = animate::plasma_gradient_effect(
+    let plasma_banner = animate::plasma_gradient_offset_effect(
         chromakopia::gradient(&["#ff0000", "#ff4500", "#ffa500", "#ffd700", "#ffff00"]),
+        0.0,
     );
-    let plasma_license = animate::plasma_gradient_effect(presets::mist());
+    let plasma_license = animate::plasma_gradient_offset_effect(
+        presets::mist(),
+        banner_lines as f64 + 1.0,
+    );
     let split = banner_lines + 1; // +1 for blank line
 
     let position_fn = move |text: &str, frame: usize| -> String {

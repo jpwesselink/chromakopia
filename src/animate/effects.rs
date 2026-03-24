@@ -256,6 +256,12 @@ pub fn fade_out(text: &str, frame: usize, total_frames: usize, target: Color) ->
 /// Each character's color is computed from its (x, y) position and time.
 /// Uses a gradient palette for colors. Pass `None` for rainbow HSV.
 pub fn plasma(text: &str, frame: usize, palette: Option<&[Color]>) -> String {
+    plasma_offset(text, frame, palette, 0.0)
+}
+
+/// Plasma with a vertical offset — shifts the wave origin so different
+/// sections of text get different parts of the plasma field.
+pub fn plasma_offset(text: &str, frame: usize, palette: Option<&[Color]>, y_offset: f64) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let t = frame as f64 * 0.08;
 
@@ -263,7 +269,7 @@ pub fn plasma(text: &str, frame: usize, palette: Option<&[Color]>) -> String {
         .iter()
         .enumerate()
         .map(|(y, line)| {
-            let yf = y as f64;
+            let yf = y as f64 + y_offset;
             line.chars()
                 .enumerate()
                 .map(|(x, ch)| {

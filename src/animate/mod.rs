@@ -1109,6 +1109,15 @@ pub fn plasma_gradient_effect(grad: Gradient) -> impl Fn(&str, usize) -> String 
     move |text, frame| effects::plasma(text, frame, Some(&palette))
 }
 
+/// Create a plasma effect with a gradient and vertical offset.
+///
+/// The offset shifts the wave origin so different sections of text
+/// get different parts of the plasma field.
+pub fn plasma_gradient_offset_effect(grad: Gradient, y_offset: f64) -> impl Fn(&str, usize) -> String + Send + 'static {
+    let palette = grad.palette(256);
+    move |text, frame| effects::plasma_offset(text, frame, Some(&palette), y_offset)
+}
+
 /// Create a bounce slide-in effect closure for use with [`Sequence::effect`].
 ///
 /// `total_frames` controls how long the slide-in takes; after that the text holds.
