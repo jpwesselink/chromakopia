@@ -55,8 +55,9 @@ async fn main() {
         frames_per_line, stagger,
     );
 
-    // Composite: pick direction per line, plasma colors everything
-    let plasma = animate::plasma_gradient_effect(presets::storm());
+    // Two different plasmas: storm for banner, mist for license
+    let plasma_banner = animate::plasma_gradient_effect(presets::storm());
+    let plasma_license = animate::plasma_gradient_effect(presets::mist());
     let split = banner_lines + 1; // +1 for blank line
 
     let position_fn = move |text: &str, frame: usize| -> String {
@@ -65,11 +66,19 @@ async fn main() {
         let rest_text = lines[split..].join("\n");
         let banner_out = banner_scroll(&banner_text, frame);
         let rest_out = license_scroll(&rest_text, frame);
-        // Blank line between them
         format!("{}\n\n{}", banner_out, rest_out)
     };
 
-    let combined = animate::composite(position_fn, plasma);
+    let color_fn = move |text: &str, frame: usize| -> String {
+        let lines: Vec<&str> = text.split('\n').collect();
+        let banner_text = lines[..banner_lines].join("\n");
+        let rest_text = lines[split..].join("\n");
+        let banner_out = plasma_banner(&banner_text, frame);
+        let rest_out = plasma_license(&rest_text, frame);
+        format!("{}\n\n{}", banner_out, rest_out)
+    };
+
+    let combined = animate::composite(position_fn, color_fn);
 
     animate::Sequence::new(&full_text)
         .effect(TimeRange::new(0.0, total), fps as u64, combined)
