@@ -20,7 +20,7 @@ println!("{}", presets::rainbow().apply("Rainbow text"));
 println!("{}", presets::atlas().multiline(ascii_art));
 ```
 
-17 presets: `atlas`, `cristal`, `teen`, `mind`, `morning`, `vice`, `passion`, `fruit`, `instagram`, `retro`, `summer`, `rainbow`, `pastel`, `dark_n_stormy`, `mist`, `relic`, `flughafen`
+18 presets: `atlas`, `cristal`, `teen`, `mind`, `morning`, `vice`, `passion`, `fruit`, `instagram`, `retro`, `summer`, `rainbow`, `pastel`, `dark_n_stormy`, `mist`, `relic`, `storm`, `flughafen`
 
 ## Animations
 
@@ -37,7 +37,7 @@ anim.stop();
 
 Effects: `rainbow`, `pulse`, `glitch`, `radar`, `neon`, `karaoke`
 
-Gradient-parameterized: `glow(gradient, ...)`, `cycle(gradient, ...)`
+Gradient-parameterized: `glow(gradient, ...)`, `cycle(gradient, ...)`, `plasma(...)`, `plasma_with(gradient, ...)`
 
 Split-flap board: `flap(...)`, `flap_with(gradient, ...)`
 
@@ -62,6 +62,8 @@ animate::Sequence::new("Hello, world!")
 - `.glow(gradient, duration)` — sweeping glow
 - `.rainbow(duration)` — HSV hue shift
 - `.cycle(gradient, duration)` — scrolling gradient
+- `.plasma(duration)` — demoscene-style flowing color field
+- `.plasma_with(gradient, duration)` — plasma with custom gradient
 - `.flap(duration)` — split-flap departure board
 - `.flap_with(gradient, duration)` — split-flap with custom colors
 - `.hold(color, duration)` — static colored text
@@ -117,23 +119,49 @@ Sequence::new("Hello!")
     .await;
 ```
 
-Effect factories: `rainbow_effect()`, `glow_effect(gradient)`, `cycle_effect(gradient)`, `flap_effect(settled, flipping)`
+Effect factories: `rainbow_effect()`, `glow_effect(gradient)`, `cycle_effect(gradient)`, `flap_effect(settled, flipping)`, `plasma_effect()`, `plasma_gradient_effect(gradient)`
 
 ### Terminal detection
 
-Auto-detects terminal background (OSC 11) and foreground (OSC 10) colors for seamless fades. Override with `set_bg_color()` / `set_fg_color()`.
+Auto-detects terminal colors using a 5-tier fallback chain:
+
+1. OSC 10/11 query via `/dev/tty` (exact RGB)
+2. `COLORFGBG` environment variable
+3. `TERM_PROGRAM` heuristics (known terminal defaults)
+4. macOS system theme (`defaults read`)
+5. Hardcoded defaults
+
+```rust
+use chromakopia::{bg_color, is_dark_theme, Color};
+
+let bg = bg_color();
+println!("Background luma: {:.2}", bg.luma());
+
+if is_dark_theme() {
+    // use light gradients
+} else {
+    // use dark gradients
+}
+```
+
+Override with `set_bg_color()` / `set_fg_color()`.
 
 ## Examples
 
 ```sh
-cargo run --example demo          # static gradients and presets
-cargo run --example ascii_art     # animated ASCII art banners
-cargo run --example loading       # simulated CLI loading flow
-cargo run --example sequence      # chained glow + rainbow with fades
-cargo run --example settle        # glow settling into gradient with easing
-cargo run --example layers        # power-user layer API with explicit time ranges
-cargo run --example flap_fade     # split-flap with fade
-cargo run --example fade_in       # fade-in effect
+cargo run --example demo             # static gradients and presets
+cargo run --example ascii_art        # animated ASCII art banners
+cargo run --example loading          # simulated CLI loading flow
+cargo run --example theme_adaptive   # adapts to light/dark terminal theme
+cargo run --example sequence         # chained glow + rainbow with fades
+cargo run --example settle           # glow settling into gradient with easing
+cargo run --example layers           # power-user layer API with explicit time ranges
+cargo run --example cinematic        # multi-act sequence with custom easing
+cargo run --example plasma           # demoscene-style plasma effect
+cargo run --example breathe          # rhythmic breathing pulse
+cargo run --example emerge           # text materializing from darkness
+cargo run --example flap_fade        # split-flap with fade
+cargo run --example fade_in          # fade-in effect
 
 # Individual animations
 cargo run --example rainbow

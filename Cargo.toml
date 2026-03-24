@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Beautiful terminal string gradients and animations for Rust"
 license = "MIT"
+repository = "https://github.com/jpwesselink/chromakopia"
+homepage = "https://github.com/jpwesselink/chromakopia"
+keywords = ["terminal", "color", "gradient", "animation", "cli"]
+categories = ["command-line-interface"]
 
 [dependencies]
 colored = "3"
