@@ -312,6 +312,80 @@ pub fn plasma(text: &str, frame: usize, palette: Option<&[Color]>) -> String {
         .join("\n")
 }
 
+/// Horizontal scrolling marquee: all lines shift left together, wrapping around.
+///
+/// Each line is padded to the width of the longest line so the scroll
+/// stays uniform. A rainbow gradient is applied on top.
+pub fn scroll(text: &str, frame: usize) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let max_width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    if max_width == 0 {
+        return text.to_string();
+    }
+
+    let offset = frame % max_width;
+    let hue = (frame * 3 % 360) as f64;
+
+    lines
+        .iter()
+        .map(|line| {
+            let chars: Vec<char> = line.chars().collect();
+            let width = chars.len();
+            // Pad to max_width with spaces
+            let padded: Vec<char> = chars
+                .iter()
+                .copied()
+                .chain(std::iter::repeat(' ').take(max_width - width))
+                .collect();
+
+            (0..max_width)
+                .map(|i| {
+                    let ch = padded[(i + offset) % max_width];
+                    let t = i as f64 / max_width as f64;
+                    let c = Color::from_hsv((hue + t * 360.0) % 360.0, 0.9, 1.0);
+                    ch.to_string().truecolor(c.r, c.g, c.b).to_string()
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Horizontal scrolling marquee with a custom gradient.
+pub fn scroll_with(text: &str, frame: usize, gradient: &Gradient) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let max_width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    if max_width == 0 {
+        return text.to_string();
+    }
+
+    let offset = frame % max_width;
+    let palette = gradient.palette(max_width.max(2));
+
+    lines
+        .iter()
+        .map(|line| {
+            let chars: Vec<char> = line.chars().collect();
+            let width = chars.len();
+            let padded: Vec<char> = chars
+                .iter()
+                .copied()
+                .chain(std::iter::repeat(' ').take(max_width - width))
+                .collect();
+
+            (0..max_width)
+                .map(|i| {
+                    let ch = padded[(i + offset) % max_width];
+                    let color_idx = (i + frame) % palette.len();
+                    let c = palette[color_idx];
+                    ch.to_string().truecolor(c.r, c.g, c.b).to_string()
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,6 +457,41 @@ mod tests {
             let output = plasma("ab\ncd", 0, Some(&pal));
             let lines: Vec<&str> = output.split('\n').collect();
             assert_eq!(lines.len(), 2);
+        });
+    }
+
+    #[test]
+    fn scroll_preserves_line_count() {
+        with_color(|| {
+            let output = scroll("abc\ndef\nghi", 0);
+            assert_eq!(output.split('\n').count(), 3);
+        });
+    }
+
+    #[test]
+    fn scroll_empty_input() {
+        let output = scroll("", 0);
+        assert_eq!(output, "");
+    }
+
+    #[test]
+    fn scroll_different_frames_differ() {
+        with_color(|| {
+            let a = scroll("hello world", 0);
+            let b = scroll("hello world", 5);
+            assert_ne!(a, b);
+        });
+    }
+
+    #[test]
+    fn scroll_multiline_pads_to_max_width() {
+        with_color(|| {
+            // "ab" and "cdef" — both lines should scroll at the same width (4)
+            let a = scroll("ab\ncdef", 0);
+            let b = scroll("ab\ncdef", 2);
+            assert_ne!(a, b);
+            // Both frames should have 2 lines
+            assert_eq!(a.split('\n').count(), 2);
         });
     }
 }

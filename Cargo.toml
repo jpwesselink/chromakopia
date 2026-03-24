@@ -105,5 +105,9 @@ name = "theme_adaptive"
 path = "examples/theme_adaptive.rs"
 
 [[example]]
+name = "scroll"
+path = "examples/scroll.rs"
+
+[[example]]
 name = "showcase"
 path = "examples/showcase.rs"

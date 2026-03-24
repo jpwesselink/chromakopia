@@ -486,6 +486,27 @@ impl Sequence {
         self
     }
 
+    /// Horizontal scrolling marquee with rainbow colors.
+    pub fn scroll(mut self, duration: Duration) -> Self {
+        self.push_effect(
+            Box::new(|text, frame| effects::scroll(text, frame)),
+            duration,
+            20,
+        );
+        self
+    }
+
+    /// Horizontal scrolling marquee with a custom gradient.
+    pub fn scroll_with(mut self, grad: Gradient, duration: Duration) -> Self {
+        let gradient = grad.clone();
+        self.push_effect(
+            Box::new(move |text, frame| effects::scroll_with(text, frame, &gradient)),
+            duration,
+            20,
+        );
+        self
+    }
+
     /// Split-flap departure board with flughafen colors.
     pub fn flap(mut self, duration: Duration) -> Self {
         use crate::color::Color;
@@ -1034,6 +1055,16 @@ pub fn plasma_gradient_effect(grad: Gradient) -> impl Fn(&str, usize) -> String 
     move |text, frame| effects::plasma(text, frame, Some(&palette))
 }
 
+/// Create a rainbow scrolling marquee effect closure for use with [`Sequence::effect`].
+pub fn scroll_effect() -> impl Fn(&str, usize) -> String + Send + 'static {
+    |text, frame| effects::scroll(text, frame)
+}
+
+/// Create a scrolling marquee effect closure with a custom gradient for use with [`Sequence::effect`].
+pub fn scroll_gradient_effect(grad: Gradient) -> impl Fn(&str, usize) -> String + Send + 'static {
+    move |text, frame| effects::scroll_with(text, frame, &grad)
+}
+
 // ── Standalone animations ──
 
 /// Start a rainbow animation. Speed is a multiplier (1.0 = default).
@@ -1083,6 +1114,16 @@ pub fn plasma(text: &str, speed: f64) -> Animation {
 pub fn plasma_with(grad: Gradient, text: &str, speed: f64) -> Animation {
     let palette = grad.palette(256);
     spawn_animation(text, move |text, frame| effects::plasma(text, frame, Some(&palette)), 30, speed)
+}
+
+/// Start a scrolling marquee animation with rainbow colors.
+pub fn scroll(text: &str, speed: f64) -> Animation {
+    spawn_animation(text, effects::scroll, 20, speed)
+}
+
+/// Start a scrolling marquee animation with a custom gradient.
+pub fn scroll_with(grad: Gradient, text: &str, speed: f64) -> Animation {
+    spawn_animation(text, move |text, frame| effects::scroll_with(text, frame, &grad), 20, speed)
 }
 
 /// Slow glow that sweeps left to right across any gradient.
