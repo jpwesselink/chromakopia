@@ -346,9 +346,13 @@ pub async fn run_effect(
     // Render task
     let m = mailbox.clone();
     let r = running.clone();
+    let term_width = crate::terminal::terminal_width();
     let render_handle = tokio::spawn(async move {
         let mut prev: Option<FrameBuffer> = None;
         let mut interval = tokio::time::interval(frame_duration);
+        let mut last_fps_time = std::time::Instant::now();
+        let mut render_count: u32 = 0;
+        let mut displayed_fps: u32 = 0;
 
         while r.load(Ordering::Relaxed) {
             interval.tick().await;
@@ -356,11 +360,26 @@ pub async fn run_effect(
             let new_frame = m.lock().unwrap().take();
             if let Some(buf) = new_frame {
                 let output = diff_render(prev.as_ref(), &buf, start_row);
-                if !output.is_empty() {
-                    let mut stderr = std::io::stderr().lock();
-                    let _ = write!(stderr, "{}", output);
-                    let _ = stderr.flush();
+                render_count += 1;
+
+                // Update FPS counter every second
+                let now = std::time::Instant::now();
+                if now.duration_since(last_fps_time) >= Duration::from_secs(1) {
+                    displayed_fps = render_count;
+                    render_count = 0;
+                    last_fps_time = now;
                 }
+
+                let mut stderr = std::io::stderr().lock();
+                if !output.is_empty() {
+                    let _ = write!(stderr, "{}", output);
+                }
+                // FPS overlay in top-right corner
+                let fps_str = format!(" {}fps ", displayed_fps);
+                let fps_col = term_width.saturating_sub(fps_str.len());
+                let _ = write!(stderr, "\x1B[{};{}H\x1B[90m{}\x1B[0m", start_row, fps_col + 1, fps_str);
+                let _ = stderr.flush();
+
                 prev = Some(buf);
             }
         }
