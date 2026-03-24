@@ -40,7 +40,7 @@ async fn main() {
             TimeRange::new(0.0, total_secs), fps as u64,
             animate::scroll_staggered_effect(
                 ScrollDirection::Left,
-                Easing::Elastic(0.4),
+                Easing::Elastic(0.25),
                 chromakopia::gradient(&["#ffffff", "#ffffff"]),
                 frames_per_line,
                 stagger,
