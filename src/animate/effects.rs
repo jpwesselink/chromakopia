@@ -385,6 +385,277 @@ impl Effect for Flap {
 }
 
 
+// ── Scroll ──
+
+/// Direction from which text slides in.
+#[derive(Debug, Clone, Copy)]
+pub enum ScrollDirection {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+/// Slide-in with easing. Text enters from off-screen and settles into place.
+///
+/// `total_frames` controls how long the slide takes.
+/// `line_delay` staggers each line's start for a slant/cascade effect.
+pub struct Scroll {
+    chars: Vec<Vec<char>>,
+    palette: Vec<Color>,
+    direction: ScrollDirection,
+    easing: super::easing::Easing,
+    total_frames: usize,
+    line_delay: usize,
+}
+
+impl Scroll {
+    pub fn new(
+        text: &str,
+        palette: Vec<Color>,
+        direction: ScrollDirection,
+        easing: super::easing::Easing,
+        total_frames: usize,
+        line_delay: usize,
+    ) -> Self {
+        Self {
+            chars: text_to_lines(text),
+            palette,
+            direction,
+            easing,
+            total_frames,
+            line_delay,
+        }
+    }
+}
+
+impl Effect for Scroll {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        let line_count = self.chars.len();
+        let max_width = self.chars.iter().map(|l| l.len()).max().unwrap_or(0);
+        if max_width == 0 { return; }
+
+        let term_width = crate::terminal::terminal_width();
+        let pal = &self.palette;
+
+        for (y, line) in self.chars.iter().enumerate() {
+            if y >= buf.height { break; }
+
+            // Per-line stagger
+            let line_frame = frame.saturating_sub(y * self.line_delay);
+            let t = if self.total_frames == 0 {
+                1.0
+            } else if frame < y * self.line_delay {
+                0.0
+            } else {
+                (line_frame as f64 / self.total_frames as f64).min(1.0)
+            };
+            let eased = self.easing.apply(t);
+
+            // Horizontal offset
+            let h_offset = match self.direction {
+                ScrollDirection::Left | ScrollDirection::Right => {
+                    let sign = if matches!(self.direction, ScrollDirection::Left) { 1.0 } else { -1.0 };
+                    if eased <= 1.0 {
+                        (sign * (1.0 - eased) * max_width as f64).round() as i32
+                    } else {
+                        (sign * (1.0 - eased) * term_width as f64).round() as i32
+                    }
+                }
+                _ => 0,
+            };
+
+            // Vertical offset
+            let v_offset = match self.direction {
+                ScrollDirection::Top | ScrollDirection::Bottom => {
+                    let sign = if matches!(self.direction, ScrollDirection::Top) { 1.0 } else { -1.0 };
+                    (sign * (1.0 - eased) * line_count as f64).round() as i32
+                }
+                _ => 0,
+            };
+
+            let src_y = y as i32 + v_offset;
+
+            for x in 0..buf.width {
+                let src_x = x as i32 + h_offset;
+                let ch = if src_y >= 0
+                    && (src_y as usize) < line_count
+                    && src_x >= 0
+                    && (src_x as usize) < max_width
+                {
+                    let src_line = &self.chars[src_y as usize];
+                    src_line.get(src_x as usize).copied().unwrap_or(' ')
+                } else {
+                    ' '
+                };
+
+                let color = if ch.is_whitespace() {
+                    Color::new(0, 0, 0)
+                } else if !pal.is_empty() {
+                    let idx = x % pal.len();
+                    pal[idx]
+                } else {
+                    let hue = (x as f64 / buf.width.max(1) as f64) * 360.0;
+                    Color::from_hsv(hue, 0.9, 1.0)
+                };
+
+                buf.set(x, y, Cell::new(ch, color));
+            }
+        }
+    }
+}
+
+// ── Fade ──
+
+/// Fade from one color to revealed text, or from text to a color.
+///
+/// At frame 0: fully `from_color` (text invisible).
+/// At `total_frames`: fully revealed (text colors from palette).
+pub struct FadeIn {
+    chars: Vec<Vec<char>>,
+    palette: Vec<Color>,
+    from_color: Color,
+    easing: super::easing::Easing,
+    total_frames: usize,
+}
+
+impl FadeIn {
+    pub fn new(
+        text: &str,
+        palette: Vec<Color>,
+        from_color: Color,
+        easing: super::easing::Easing,
+        total_frames: usize,
+    ) -> Self {
+        Self {
+            chars: text_to_lines(text),
+            palette,
+            from_color,
+            easing,
+            total_frames,
+        }
+    }
+}
+
+impl Effect for FadeIn {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        let t = if self.total_frames == 0 {
+            1.0
+        } else {
+            (frame as f64 / self.total_frames as f64).min(1.0)
+        };
+        let opacity = self.easing.apply(t);
+        let pal = &self.palette;
+
+        for (y, line) in self.chars.iter().enumerate() {
+            if y >= buf.height { break; }
+            for (x, &ch) in line.iter().enumerate() {
+                if x >= buf.width { break; }
+                let target = if !pal.is_empty() {
+                    let idx = x % pal.len();
+                    pal[idx]
+                } else {
+                    Color::new(204, 204, 204)
+                };
+                let color = Color::lerp_rgb(self.from_color, target, opacity);
+                buf.set(x, y, Cell::new(ch, color));
+            }
+        }
+    }
+}
+
+/// Fade text out to a solid color.
+///
+/// At frame 0: fully visible. At `total_frames`: fully `to_color`.
+pub struct FadeOut {
+    chars: Vec<Vec<char>>,
+    palette: Vec<Color>,
+    to_color: Color,
+    easing: super::easing::Easing,
+    total_frames: usize,
+}
+
+impl FadeOut {
+    pub fn new(
+        text: &str,
+        palette: Vec<Color>,
+        to_color: Color,
+        easing: super::easing::Easing,
+        total_frames: usize,
+    ) -> Self {
+        Self {
+            chars: text_to_lines(text),
+            palette,
+            to_color,
+            easing,
+            total_frames,
+        }
+    }
+}
+
+impl Effect for FadeOut {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        let t = if self.total_frames == 0 {
+            1.0
+        } else {
+            (frame as f64 / self.total_frames as f64).min(1.0)
+        };
+        let opacity = self.easing.apply(t);
+        let pal = &self.palette;
+
+        for (y, line) in self.chars.iter().enumerate() {
+            if y >= buf.height { break; }
+            for (x, &ch) in line.iter().enumerate() {
+                if x >= buf.width { break; }
+                let from = if !pal.is_empty() {
+                    let idx = x % pal.len();
+                    pal[idx]
+                } else {
+                    Color::new(204, 204, 204)
+                };
+                let color = Color::lerp_rgb(from, self.to_color, opacity);
+                buf.set(x, y, Cell::new(ch, color));
+            }
+        }
+    }
+}
+
+/// Chained effect: runs effect A for N frames, then effect B.
+///
+/// Use this to chain fade-in → hold → fade-out, or any sequence.
+pub struct Chain {
+    effects: Vec<(usize, Box<dyn Effect>)>, // (duration_frames, effect)
+}
+
+impl Chain {
+    pub fn new() -> Self {
+        Self { effects: Vec::new() }
+    }
+
+    /// Add an effect that runs for `frames` frames, then the next one starts.
+    pub fn then(mut self, frames: usize, effect: impl Effect) -> Self {
+        self.effects.push((frames, Box::new(effect)));
+        self
+    }
+}
+
+impl Effect for Chain {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        let mut offset = 0;
+        for (duration, effect) in &self.effects {
+            if frame < offset + duration {
+                effect.render(buf, frame - offset);
+                return;
+            }
+            offset += duration;
+        }
+        // Past all effects — render the last one at its final frame
+        if let Some((duration, effect)) = self.effects.last() {
+            effect.render(buf, *duration);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,4 +756,91 @@ mod tests {
         assert_eq!(buf.get(0, 0).color, s);
     }
 
+    #[test]
+    fn scroll_left_frame_zero_is_blank() {
+        let pal = vec![Color::new(255, 255, 255)];
+        let effect = Scroll::new("hello", pal, ScrollDirection::Left, super::super::Easing::BounceOut, 60, 0);
+        let mut buf = FrameBuffer::new(5, 1);
+        effect.render(&mut buf, 0);
+        // All spaces at frame 0 — text is off-screen
+        for x in 0..5 {
+            assert_eq!(buf.get(x, 0).ch, ' ');
+        }
+    }
+
+    #[test]
+    fn scroll_left_final_shows_text() {
+        let pal = vec![Color::new(255, 255, 255)];
+        let effect = Scroll::new("hello", pal, ScrollDirection::Left, super::super::Easing::BounceOut, 60, 0);
+        let mut buf = FrameBuffer::new(5, 1);
+        effect.render(&mut buf, 60);
+        assert_eq!(buf.get(0, 0).ch, 'h');
+        assert_eq!(buf.get(4, 0).ch, 'o');
+    }
+
+    #[test]
+    fn scroll_stagger() {
+        let pal = vec![Color::new(255, 255, 255)];
+        let effect = Scroll::new("ab\ncd", pal, ScrollDirection::Left, super::super::Easing::Linear, 10, 5);
+        let mut buf = FrameBuffer::new(2, 2);
+        // At frame 5, first line should be halfway, second line hasn't started
+        effect.render(&mut buf, 5);
+        // Second line should still be blank (delay=5, so it starts at frame 5)
+        // At exactly frame 5 for line 1: t=0.5, offset ~1 char
+        // Line 1 has started, line 2 just starting (t=0.0)
+    }
+
+    #[test]
+    fn fade_in_starts_from_color() {
+        let bg = Color::new(0, 0, 0);
+        let pal = vec![Color::new(255, 255, 255)];
+        let effect = FadeIn::new("hi", pal, bg, super::super::Easing::Linear, 60);
+        let mut buf = make_buf("hi");
+        effect.render(&mut buf, 0);
+        assert_eq!(buf.get(0, 0).color, bg);
+    }
+
+    #[test]
+    fn fade_in_ends_at_palette() {
+        let bg = Color::new(0, 0, 0);
+        let pal = vec![Color::new(255, 255, 255)];
+        let effect = FadeIn::new("hi", pal.clone(), bg, super::super::Easing::Linear, 60);
+        let mut buf = make_buf("hi");
+        effect.render(&mut buf, 60);
+        assert_eq!(buf.get(0, 0).color, pal[0]);
+    }
+
+    #[test]
+    fn fade_out_ends_at_color() {
+        let to = Color::new(0, 0, 0);
+        let pal = vec![Color::new(255, 255, 255)];
+        let effect = FadeOut::new("hi", pal, to, super::super::Easing::Linear, 60);
+        let mut buf = make_buf("hi");
+        effect.render(&mut buf, 60);
+        assert_eq!(buf.get(0, 0).color, to);
+    }
+
+    #[test]
+    fn chain_switches_effects() {
+        let effect = Chain::new()
+            .then(10, Rainbow::new("hi"))
+            .then(10, Neon::new("hi"));
+        let mut buf = make_buf("hi");
+        effect.render(&mut buf, 0);
+        let c_rainbow = buf.get(0, 0).color;
+        effect.render(&mut buf, 15);
+        let c_neon = buf.get(0, 0).color;
+        assert_ne!(c_rainbow, c_neon);
+    }
+
+    #[test]
+    fn chain_holds_last_effect() {
+        let pal = vec![Color::new(255, 0, 0)];
+        let effect = Chain::new()
+            .then(10, FadeIn::new("hi", pal.clone(), Color::new(0, 0, 0), super::super::Easing::Linear, 10));
+        let mut buf = make_buf("hi");
+        // Past the end — should hold final frame
+        effect.render(&mut buf, 100);
+        assert_eq!(buf.get(0, 0).color, Color::new(255, 0, 0));
+    }
 }

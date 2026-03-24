@@ -17,7 +17,7 @@ pub mod framebuffer;
 mod scene;
 
 pub use easing::Easing;
-pub use effects::{Rainbow, Glow, Plasma, Pulse, Glitch, Radar, Neon, Karaoke, Flap};
+pub use effects::{Rainbow, Glow, Plasma, Pulse, Glitch, Radar, Neon, Karaoke, Flap, Scroll, ScrollDirection, FadeIn, FadeOut, Chain};
 pub use framebuffer::{Cell, Effect, FrameBuffer, AnimationHandle, run_effect, spawn_effect};
 pub use scene::{Scene, Line};
 
