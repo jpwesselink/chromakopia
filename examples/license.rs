@@ -1,4 +1,4 @@
-use chromakopia::animate;
+use chromakopia::{animate, presets};
 use chromakopia::animate::{Easing, FadeKind, FadeTarget, ScrollDirection, TimeRange};
 
 const LICENSE: &str = "\
@@ -32,24 +32,31 @@ async fn main() {
     let fps = 30;
     let frames_per_line = 90;
     let stagger = 1;
-    // Total time = (last line start + animation duration) / fps
-    let total_secs = ((line_count - 1) * stagger + frames_per_line) as f64 / fps as f64;
+    let scroll_secs = ((line_count - 1) * stagger + frames_per_line) as f64 / fps as f64;
+    let plasma_end = scroll_secs + 5.0;
 
     animate::Sequence::new(&full_text)
+        // Slide in with elastic
         .effect(
-            TimeRange::new(0.0, total_secs), fps as u64,
+            TimeRange::new(0.0, scroll_secs), fps as u64,
             animate::scroll_staggered_effect(
                 ScrollDirection::Left,
                 Easing::Elastic(0.25),
-                chromakopia::gradient(&["#ffffff", "#ffffff"]),
+                presets::storm(),
                 frames_per_line,
                 stagger,
             ),
         )
+        // Plasma takes over once text is in place
+        .effect(
+            TimeRange::new(scroll_secs, plasma_end), 30,
+            animate::plasma_gradient_effect(presets::storm()),
+        )
+        // Fade to foreground to settle
         .fade(
-            TimeRange::new(total_secs - 0.5, total_secs),
+            TimeRange::new(plasma_end - 2.0, plasma_end),
             FadeKind::FadeTo(FadeTarget::Foreground),
-            Easing::Linear,
+            Easing::EaseInOut,
         )
         .run(1.0)
         .await;
