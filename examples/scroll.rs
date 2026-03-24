@@ -16,7 +16,7 @@ const LINE3: &str = "github.com/jpwesselink/chromakopia  crates.io/crates/chroma
 #[tokio::main]
 async fn main() {
     let banner = BANNER.trim_matches('\n');
-    let full_text = center(&format!("{}\n{}\n{}", LINE1, banner, LINE3));
+    let full_text = center(&format!("{}\n\n{}\n\n{}", LINE1, banner, LINE3));
 
     animate::Sequence::new(&full_text)
         .effect(
