@@ -316,6 +316,20 @@ pub fn fg_color() -> Color {
     })
 }
 
+/// Returns `true` if the terminal background appears light (luma > 0.5).
+///
+/// Uses the same detection chain as [`bg_color()`].
+pub fn is_light_theme() -> bool {
+    bg_color().luma() > 0.5
+}
+
+/// Returns `true` if the terminal background appears dark (luma ≤ 0.5).
+///
+/// Uses the same detection chain as [`bg_color()`].
+pub fn is_dark_theme() -> bool {
+    !is_light_theme()
+}
+
 /// Manually set the background color (overrides auto-detection).
 pub fn set_bg_color(color: Color) {
     let _ = BG_COLOR.set(color);
@@ -436,6 +450,13 @@ mod tests {
         let bg_luma = bg.luma();
         assert!((fg_luma - bg_luma).abs() > 0.3,
             "fg luma ({fg_luma}) and bg luma ({bg_luma}) should differ significantly");
+    }
+
+    #[test]
+    fn theme_detection_is_consistent() {
+        let light = is_light_theme();
+        let dark = is_dark_theme();
+        assert!(light != dark);
     }
 
     #[test]

@@ -6,7 +6,7 @@ pub mod presets;
 
 pub use color::Color;
 pub use gradient::{Gradient, HsvSpin, Interpolation};
-pub use terminal::{bg_color, fg_color, set_bg_color, set_fg_color};
+pub use terminal::{bg_color, fg_color, is_dark_theme, is_light_theme, probe_colors, set_bg_color, set_fg_color};
 
 /// Create a gradient from a slice of colors.
 ///
