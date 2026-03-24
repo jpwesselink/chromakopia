@@ -254,19 +254,65 @@ fn render_frame(buf: &mut String, rendered: &str, lines_printed: usize) -> usize
     let rendered = rendered.trim_end_matches('\n');
     let rendered_lines: Vec<&str> = rendered.split('\n').collect();
     let line_count = rendered_lines.len();
+    let term_width = crate::terminal::terminal_width();
 
     if lines_printed > 0 {
         buf.push_str(&format!("\x1B[{}F", lines_printed));
     }
     for (i, line) in rendered_lines.iter().enumerate() {
         buf.push('\r');
-        buf.push_str(line);
+        buf.push_str(&truncate_ansi(line, term_width));
         buf.push_str("\x1B[K");
         if i < line_count - 1 {
             buf.push('\n');
         }
     }
     line_count - 1
+}
+
+/// Truncate a string containing ANSI escape codes to `max_visible` visible characters.
+///
+/// Preserves escape sequences but stops emitting visible characters once the limit
+/// is reached. Appends a reset sequence if truncation happened mid-color.
+fn truncate_ansi(s: &str, max_visible: usize) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut visible = 0;
+    let bytes = s.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if visible >= max_visible {
+            // Append reset so we don't leak color into the next line
+            result.push_str("\x1B[0m");
+            break;
+        }
+
+        if bytes[i] == 0x1B && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            // ANSI escape sequence — copy it through without counting as visible
+            let start = i;
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'm' {
+                i += 1;
+            }
+            if i < bytes.len() {
+                i += 1; // skip the 'm'
+            }
+            result.push_str(&s[start..i]);
+        } else {
+            // Visible character (handle multi-byte UTF-8)
+            let byte = bytes[i];
+            let char_len = if byte < 0x80 { 1 }
+                else if byte < 0xE0 { 2 }
+                else if byte < 0xF0 { 3 }
+                else { 4 };
+            let end = (i + char_len).min(bytes.len());
+            result.push_str(&s[i..end]);
+            visible += 1;
+            i = end;
+        }
+    }
+
+    result
 }
 
 // ── Sequence builder ──

@@ -357,6 +357,35 @@ pub fn is_dark_theme() -> bool {
     !is_light_theme()
 }
 
+/// Get the terminal width in columns.
+///
+/// Returns 80 if detection fails.
+#[cfg(unix)]
+pub fn terminal_width() -> usize {
+    unsafe {
+        let mut ws: libc::winsize = std::mem::zeroed();
+        if libc::ioctl(2, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 {
+            ws.ws_col as usize
+        } else {
+            std::env::var("COLUMNS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(80)
+        }
+    }
+}
+
+/// Get the terminal width in columns.
+///
+/// Returns 80 if detection fails.
+#[cfg(not(unix))]
+pub fn terminal_width() -> usize {
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(80)
+}
+
 /// Manually set the background color (overrides auto-detection).
 pub fn set_bg_color(color: Color) {
     let _ = BG_COLOR.set(color);
