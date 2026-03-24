@@ -72,6 +72,7 @@ async fn main() {
     // License — each alinea alternates left/right, delayed by 0.5s per alinea
     let license_start_line = banner_height + 1; // after banner + blank
     let mut current_line = license_start_line;
+    let mut y_offset = (banner_height + 1) as f64; // track vertical offset for plasma continuity
     for (alinea_idx, alinea) in alineas.iter().enumerate() {
         let direction = if alinea_idx % 2 == 0 { ScrollDirection::Left } else { ScrollDirection::Right };
         let delay_frames = alinea_idx * alinea_delay;
@@ -79,20 +80,19 @@ async fn main() {
 
         for _ in &alinea_lines {
             let l = centered_lines[current_line];
-            // Scroll starts at delay_frames. Before that: invisible (blank).
-            // After scroll settles: glow.
             scene = scene.line(Line::full(l, DelayedStart::new(
                 delay_frames,
                 Chain::new()
                     .then(fps * 2, Fade::in_from(
                         Composite::new(
                             Scroll::new(l, fire.clone(), direction, Easing::Elastic(0.25), fps * 2, 0),
-                            Plasma::new(l, fire.clone(), 42.0),
+                            Plasma::new(l, fire.clone(), 42.0).with_y_offset(y_offset),
                         ),
                         bg, Easing::EaseOut, fps,
                     ))
-                    .then(fps * 100, Plasma::new(l, fire.clone(), 42.0))
+                    .then(fps * 100, Plasma::new(l, fire.clone(), 42.0).with_y_offset(y_offset))
             )));
+            y_offset += 1.0;
             current_line += 1;
         }
 
