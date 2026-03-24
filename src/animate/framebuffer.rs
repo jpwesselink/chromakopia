@@ -333,11 +333,12 @@ pub async fn run_effect(
     let r = running.clone();
     let anim_handle = tokio::spawn(async move {
         let mut frame: usize = 0;
+        let mut buf = FrameBuffer::new(width, height);
         let delay = Duration::from_millis((10.0 / speed) as u64);
         while r.load(Ordering::Relaxed) {
-            let mut buf = FrameBuffer::new(width, height);
             effect.render(&mut buf, frame);
-            *m.lock().unwrap() = Some(buf);
+            // Clone into mailbox so we keep our persistent buffer
+            *m.lock().unwrap() = Some(buf.clone());
             frame += 1;
             tokio::time::sleep(delay).await;
         }
