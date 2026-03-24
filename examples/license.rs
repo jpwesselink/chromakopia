@@ -67,8 +67,6 @@ async fn main() {
     );
     let split = banner_lines + 1;
     // Frame offset for 50% palette shift on the banner
-    let palette_offset = 40; // ~half a plasma color cycle
-
     let position_fn = move |text: &str, frame: usize| -> String {
         let lines: Vec<&str> = text.split('\n').collect();
         let banner_text = lines[..banner_lines].join("\n");
@@ -82,7 +80,7 @@ async fn main() {
         let lines: Vec<&str> = text.split('\n').collect();
         let banner_text = lines[..banner_lines].join("\n");
         let rest_text = lines[split..].join("\n");
-        let banner_out = plasma_banner(&banner_text, frame + palette_offset);
+        let banner_out = plasma_banner(&banner_text, frame);
         let rest_out = plasma_license(&rest_text, frame);
         format!("{}\n\n{}", banner_out, rest_out)
     };
