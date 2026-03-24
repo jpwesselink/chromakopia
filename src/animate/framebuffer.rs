@@ -1,3 +1,9 @@
+//! Framebuffer-based terminal renderer.
+//!
+//! Two tasks at the same fixed framerate:
+//! - Animation task: runs effects, writes to a grid, posts to mailbox
+//! - Render task: diffs grid against previous frame, flushes changed cells
+
 use crate::color::Color;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -60,19 +66,16 @@ impl FrameBuffer {
         self.cells[y * self.width + x] = cell;
     }
 
-    /// Set just the color at (x, y), keeping the character.
     #[inline]
     pub fn set_color(&mut self, x: usize, y: usize, color: Color) {
         self.cells[y * self.width + x].color = color;
     }
 
-    /// Set just the character at (x, y), keeping the color.
     #[inline]
     pub fn set_char(&mut self, x: usize, y: usize, ch: char) {
         self.cells[y * self.width + x].ch = ch;
     }
 
-    /// Write a line of text at row y with a color.
     pub fn write_line(&mut self, y: usize, text: &str, color: Color) {
         for (x, ch) in text.chars().enumerate() {
             if x < self.width {
@@ -81,17 +84,20 @@ impl FrameBuffer {
         }
     }
 
-    /// Clear all cells to spaces.
     pub fn clear(&mut self) {
         self.cells.fill(Cell::space());
     }
 }
 
+/// A framebuffer-based effect: writes directly to a grid.
+pub trait Effect: Send + 'static {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize);
+}
+
 /// Shared mailbox between animation and renderer.
 type Mailbox = Arc<Mutex<Option<FrameBuffer>>>;
 
-/// Try to get the current cursor row using ANSI DSR (Device Status Report).
-/// Returns 1-based row number, or None if detection fails.
+/// Get current cursor row via ANSI DSR (Device Status Report).
 #[cfg(unix)]
 fn get_cursor_row() -> Option<usize> {
     use std::fs::OpenOptions;
@@ -119,7 +125,6 @@ fn get_cursor_row() -> Option<usize> {
         libc::tcsetattr(fd, libc::TCSANOW, &raw);
     }
 
-    // Send DSR: ESC[6n — terminal responds with ESC[row;colR
     let _ = tty.write_all(b"\x1B[6n");
     let _ = tty.flush();
 
@@ -140,7 +145,6 @@ fn get_cursor_row() -> Option<usize> {
     unsafe { libc::tcsetattr(fd, libc::TCSANOW, &old); }
 
     let s = std::str::from_utf8(&buf[..len]).ok()?;
-    // Parse ESC[row;colR
     let inner = s.strip_prefix("\x1B[")?.strip_suffix('R')?;
     let row_str = inner.split(';').next()?;
     row_str.parse().ok()
@@ -153,7 +157,6 @@ fn get_cursor_row() -> Option<usize> {
 
 /// Diff two framebuffers and produce minimal ANSI output.
 ///
-/// `start_row` is the 1-based terminal row where the framebuffer starts.
 /// Uses absolute cursor positioning — no newlines, no scrolling.
 fn diff_render(prev: Option<&FrameBuffer>, curr: &FrameBuffer, start_row: usize) -> String {
     let mut out = String::with_capacity(curr.width * curr.height * 4);
@@ -164,13 +167,13 @@ fn diff_render(prev: Option<&FrameBuffer>, curr: &FrameBuffer, start_row: usize)
 
         for x in 0..curr.width {
             let cell = curr.get(x, y);
-            let changed = prev.map_or(true, |p| {
-                y < p.height && x < p.width && p.get(x, y) != cell
-            }) || prev.is_none();
+            let changed = match prev {
+                Some(p) if y < p.height && x < p.width => p.get(x, y) != cell,
+                _ => true,
+            };
 
             if changed {
                 if need_position {
-                    // Absolute cursor position: ESC[row;colH (1-based)
                     out.push_str(&format!("\x1B[{};{}H", start_row + y, x + 1));
                 }
                 need_position = false;
@@ -192,102 +195,10 @@ fn diff_render(prev: Option<&FrameBuffer>, curr: &FrameBuffer, start_row: usize)
     out
 }
 
-/// A framebuffer-based effect: writes directly to a grid instead of returning ANSI strings.
-pub trait Effect: Send + 'static {
-    /// Render frame into the buffer. Called by the animation loop.
-    fn render(&self, buf: &mut FrameBuffer, frame: usize);
-}
-
-/// Adapt an old-style `fn(&str, usize) -> String` effect to the framebuffer system.
-/// This is a bridge so existing effects work without rewriting them.
-pub struct LegacyEffect<F: Fn(&str, usize) -> String + Send + 'static> {
-    text: String,
-    func: F,
-}
-
-impl<F: Fn(&str, usize) -> String + Send + 'static> LegacyEffect<F> {
-    pub fn new(text: &str, func: F) -> Self {
-        Self {
-            text: text.to_string(),
-            func,
-        }
-    }
-}
-
-impl<F: Fn(&str, usize) -> String + Send + 'static> Effect for LegacyEffect<F> {
-    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        let rendered = (self.func)(&self.text, frame);
-        // Parse ANSI output back into the buffer
-        let mut x = 0;
-        let mut y = 0;
-        let mut color = Color::new(204, 204, 204);
-        let bytes = rendered.as_bytes();
-        let mut i = 0;
-
-        while i < bytes.len() {
-            if bytes[i] == b'\n' {
-                // Fill rest of line with spaces
-                while x < buf.width {
-                    buf.set(x, y, Cell::new(' ', Color::new(0, 0, 0)));
-                    x += 1;
-                }
-                y += 1;
-                x = 0;
-                i += 1;
-                if y >= buf.height {
-                    break;
-                }
-            } else if bytes[i] == 0x1B && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
-                // Parse ANSI escape
-                i += 2;
-                let seq_start = i;
-                while i < bytes.len() && bytes[i] != b'm' {
-                    i += 1;
-                }
-                if i < bytes.len() {
-                    let seq = &rendered[seq_start..i];
-                    if let Some(rgb) = seq.strip_prefix("38;2;") {
-                        let parts: Vec<&str> = rgb.split(';').collect();
-                        if parts.len() == 3 {
-                            if let (Ok(r), Ok(g), Ok(b)) = (
-                                parts[0].parse(),
-                                parts[1].parse(),
-                                parts[2].parse(),
-                            ) {
-                                color = Color::new(r, g, b);
-                            }
-                        }
-                    } else if seq == "0" {
-                        color = Color::new(204, 204, 204);
-                    }
-                    i += 1;
-                }
-            } else {
-                // Visible character
-                let byte = bytes[i];
-                let char_len = if byte < 0x80 { 1 }
-                    else if byte < 0xE0 { 2 }
-                    else if byte < 0xF0 { 3 }
-                    else { 4 };
-                let end = (i + char_len).min(bytes.len());
-                if let Ok(ch_str) = std::str::from_utf8(&bytes[i..end]) {
-                    if let Some(ch) = ch_str.chars().next() {
-                        if x < buf.width && y < buf.height {
-                            buf.set(x, y, Cell::new(ch, color));
-                        }
-                        x += 1;
-                    }
-                }
-                i = end;
-            }
-        }
-    }
-}
-
 /// Run an effect with the two-loop framebuffer renderer.
 ///
-/// - Animation loop: runs the effect, posts frames to the mailbox
-/// - Render loop: 25fps fixed tick, diffs and flushes to stderr
+/// Both animation and render run at the same fixed framerate (60fps).
+/// Animation produces a frame, render consumes it — no overproduction.
 pub async fn run_effect(
     effect: impl Effect,
     width: usize,
@@ -301,50 +212,39 @@ pub async fn run_effect(
     let mailbox: Mailbox = Arc::new(Mutex::new(None));
     let running = Arc::new(AtomicBool::new(true));
 
-    // Hide cursor and reserve space by printing blank lines
+    // Hide cursor and reserve space
     {
         let mut stderr = std::io::stderr().lock();
         let _ = write!(stderr, "\x1B[?25l");
-        // Print empty lines to reserve space, then save cursor row
         for _ in 0..height {
             let _ = write!(stderr, "\n");
         }
-        // Move back up to where we started
         let _ = write!(stderr, "\x1B[{}A", height);
         let _ = stderr.flush();
     }
 
-    // Query current cursor row via DSR — or just use a simple approach:
-    // save the cursor position and use it as our start row
-    // Since we can't reliably query, we'll use \x1B[s/\x1B[u (save/restore)
-    // and track position via the row count we moved.
-    //
-    // Simpler: use \x1B7 to save position, render with absolute positioning
-    // relative to saved position. Actually simplest: just get cursor row.
-    //
-    // For now, get cursor position via ANSI DSR or fall back to row 1.
     let start_row = get_cursor_row().unwrap_or(1);
 
     let fps = 60u64;
-    let frame_duration = Duration::from_millis(1000 / fps);
+    let frame_ms = (1000.0 / fps as f64 / speed) as u64;
+    let frame_duration = Duration::from_millis(frame_ms.max(1));
 
-    // Animation task
+    // Animation task — same framerate as renderer
     let m = mailbox.clone();
     let r = running.clone();
     let anim_handle = tokio::spawn(async move {
         let mut frame: usize = 0;
         let mut buf = FrameBuffer::new(width, height);
-        let delay = Duration::from_millis((10.0 / speed) as u64);
+        let mut interval = tokio::time::interval(frame_duration);
         while r.load(Ordering::Relaxed) {
+            interval.tick().await;
             effect.render(&mut buf, frame);
-            // Clone into mailbox so we keep our persistent buffer
             *m.lock().unwrap() = Some(buf.clone());
             frame += 1;
-            tokio::time::sleep(delay).await;
         }
     });
 
-    // Render task
+    // Render task — same framerate
     let m = mailbox.clone();
     let r = running.clone();
     let term_width = crate::terminal::terminal_width();
@@ -363,7 +263,6 @@ pub async fn run_effect(
                 let mut output = diff_render(prev.as_ref(), &buf, start_row);
                 render_count += 1;
 
-                // Update FPS counter every second
                 let now = std::time::Instant::now();
                 if now.duration_since(last_fps_time) >= Duration::from_secs(1) {
                     displayed_fps = render_count;
@@ -371,7 +270,6 @@ pub async fn run_effect(
                     last_fps_time = now;
                 }
 
-                // Append FPS overlay — single write, single flush
                 let fps_str = format!(" {}fps ", displayed_fps);
                 let fps_col = term_width.saturating_sub(fps_str.len());
                 output.push_str(&format!("\x1B[{};{}H\x1B[90m{}\x1B[0m", start_row, fps_col + 1, fps_str));
@@ -385,14 +283,13 @@ pub async fn run_effect(
         }
     });
 
-    // Wait for duration
     tokio::time::sleep(duration).await;
     running.store(false, Ordering::Relaxed);
 
     let _ = anim_handle.await;
     let _ = render_handle.await;
 
-    // Move cursor below rendered area and show it
+    // Show cursor, move below rendered area
     {
         let mut stderr = std::io::stderr().lock();
         let _ = write!(stderr, "\x1B[{};1H\x1B[?25h", start_row + height);
@@ -433,7 +330,6 @@ mod tests {
     fn diff_render_no_change() {
         let buf = FrameBuffer::from_text("hi", Color::new(255, 255, 255));
         let output = diff_render(Some(&buf), &buf, 1);
-        // No visible chars should be emitted — nothing changed
         assert!(!output.contains('h'));
     }
 
@@ -443,7 +339,7 @@ mod tests {
         let mut buf2 = buf1.clone();
         buf2.set(1, 0, Cell::new('o', Color::new(255, 0, 0)));
         let output = diff_render(Some(&buf1), &buf2, 1);
-        assert!(!output.contains('h')); // unchanged
-        assert!(output.contains('o'));  // changed
+        assert!(!output.contains('h'));
+        assert!(output.contains('o'));
     }
 }
