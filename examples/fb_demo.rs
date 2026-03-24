@@ -61,29 +61,23 @@ async fn main() {
             Fade::in_from(Rainbow::new(credit), bg, Easing::EaseOut, fps)
         ))
         .line(Line::blank())
-        // Banner — one block, elastic scroll + plasma composite
-        .block(&banner_text, Chain::new()
-            .then(fps * 3, Fade::in_from(
-                Composite::new(
-                    Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 1),
-                    Plasma::new(&banner_text, storm.clone(), 42.0),
-                ),
-                bg, Easing::EaseOut, fps,
-            ))
-            .then(fps * 100, Plasma::new(&banner_text, storm.clone(), 42.0))
-        )
+        // Banner — scroll holds after settling, plasma runs continuously
+        .block(&banner_text, Fade::in_from(
+            Composite::new(
+                Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 1),
+                Plasma::new(&banner_text, storm.clone(), 42.0),
+            ),
+            bg, Easing::EaseOut, fps,
+        ))
         .line(Line::blank())
-        // License — one block, unified plasma field
-        .block(&license_text, Chain::new()
-            .then(fps * 2, Fade::in_from(
-                Composite::new(
-                    Scroll::new(&license_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2),
-                    Plasma::new(&license_text, fire.clone(), 42.0),
-                ),
-                bg, Easing::EaseOut, fps,
-            ))
-            .then(fps * 100, Plasma::new(&license_text, fire.clone(), 42.0))
-        )
+        // License — same: scroll holds, plasma continuous
+        .block(&license_text, Fade::in_from(
+            Composite::new(
+                Scroll::new(&license_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2),
+                Plasma::new(&license_text, fire.clone(), 42.0),
+            ),
+            bg, Easing::EaseOut, fps,
+        ))
         .run(Duration::from_secs(15))
         .await;
 }
