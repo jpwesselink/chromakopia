@@ -12,6 +12,7 @@ mod effects;
 mod easing;
 
 pub use easing::Easing;
+pub use effects::ScrollDirection;
 
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -532,28 +533,28 @@ impl Sequence {
         self
     }
 
-    /// Slide-in from the left with bounce easing and rainbow colors.
+    /// Slide-in with bounce easing and rainbow colors.
     ///
-    /// Text starts off-screen and slides into place with a bounce.
+    /// Text slides in from the given direction with a bounce at the end.
     /// The animation plays once and holds the final position.
-    pub fn scroll(mut self, duration: Duration) -> Self {
+    pub fn scroll(mut self, direction: effects::ScrollDirection, duration: Duration) -> Self {
         let fps = 30;
         let total_frames = (duration.as_secs_f64() * fps as f64) as usize;
         self.push_effect(
-            Box::new(move |text, frame| effects::scroll(text, frame, total_frames)),
+            Box::new(move |text, frame| effects::scroll(text, frame, total_frames, direction)),
             duration,
             fps,
         );
         self
     }
 
-    /// Slide-in from the left with bounce easing and a custom gradient.
-    pub fn scroll_with(mut self, grad: Gradient, duration: Duration) -> Self {
+    /// Slide-in with bounce easing and a custom gradient.
+    pub fn scroll_with(mut self, direction: effects::ScrollDirection, grad: Gradient, duration: Duration) -> Self {
         let fps = 30;
         let total_frames = (duration.as_secs_f64() * fps as f64) as usize;
         let gradient = grad.clone();
         self.push_effect(
-            Box::new(move |text, frame| effects::scroll_with(text, frame, total_frames, &gradient)),
+            Box::new(move |text, frame| effects::scroll_with(text, frame, total_frames, direction, &gradient)),
             duration,
             fps,
         );
@@ -1111,13 +1112,13 @@ pub fn plasma_gradient_effect(grad: Gradient) -> impl Fn(&str, usize) -> String 
 /// Create a bounce slide-in effect closure for use with [`Sequence::effect`].
 ///
 /// `total_frames` controls how long the slide-in takes; after that the text holds.
-pub fn scroll_effect(total_frames: usize) -> impl Fn(&str, usize) -> String + Send + 'static {
-    move |text, frame| effects::scroll(text, frame, total_frames)
+pub fn scroll_effect(direction: effects::ScrollDirection, total_frames: usize) -> impl Fn(&str, usize) -> String + Send + 'static {
+    move |text, frame| effects::scroll(text, frame, total_frames, direction)
 }
 
 /// Create a bounce slide-in effect closure with a custom gradient for use with [`Sequence::effect`].
-pub fn scroll_gradient_effect(grad: Gradient, total_frames: usize) -> impl Fn(&str, usize) -> String + Send + 'static {
-    move |text, frame| effects::scroll_with(text, frame, total_frames, &grad)
+pub fn scroll_gradient_effect(direction: effects::ScrollDirection, grad: Gradient, total_frames: usize) -> impl Fn(&str, usize) -> String + Send + 'static {
+    move |text, frame| effects::scroll_with(text, frame, total_frames, direction, &grad)
 }
 
 // ── Standalone animations ──
@@ -1172,19 +1173,17 @@ pub fn plasma_with(grad: Gradient, text: &str, speed: f64) -> Animation {
 }
 
 /// Start a slide-in animation with bounce easing and rainbow colors.
-///
-/// Text slides in from the left over `duration`, bounces, then holds.
-pub fn scroll(text: &str, duration: Duration, speed: f64) -> Animation {
+pub fn scroll(direction: effects::ScrollDirection, text: &str, duration: Duration, speed: f64) -> Animation {
     let fps = 30u64;
     let total_frames = (duration.as_secs_f64() * fps as f64) as usize;
-    spawn_animation(text, move |text, frame| effects::scroll(text, frame, total_frames), fps, speed)
+    spawn_animation(text, move |text, frame| effects::scroll(text, frame, total_frames, direction), fps, speed)
 }
 
 /// Start a slide-in animation with bounce easing and a custom gradient.
-pub fn scroll_with(grad: Gradient, text: &str, duration: Duration, speed: f64) -> Animation {
+pub fn scroll_with(direction: effects::ScrollDirection, grad: Gradient, text: &str, duration: Duration, speed: f64) -> Animation {
     let fps = 30u64;
     let total_frames = (duration.as_secs_f64() * fps as f64) as usize;
-    spawn_animation(text, move |text, frame| effects::scroll_with(text, frame, total_frames, &grad), fps, speed)
+    spawn_animation(text, move |text, frame| effects::scroll_with(text, frame, total_frames, direction, &grad), fps, speed)
 }
 
 /// Slow glow that sweeps left to right across any gradient.

@@ -34,7 +34,7 @@ async fn main() {
         // Text enters from the left with a bounce at the end
         .effect(
             TimeRange::new(0.0, 3.0), 30,
-            animate::scroll_gradient_effect(presets::storm(), 60),
+            animate::scroll_gradient_effect(animate::ScrollDirection::Left, presets::storm(), 60),
         )
         .fade(
             TimeRange::new(2.5, 3.0),

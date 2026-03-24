@@ -1,5 +1,5 @@
 use chromakopia::{animate, presets};
-use chromakopia::animate::TimeRange;
+use chromakopia::animate::{ScrollDirection, TimeRange};
 
 const BANNER: &str = r#"
    ________  ______  ____  __  ______    __ ______  ____  _______
@@ -19,8 +19,8 @@ async fn main() {
     // Combine banner + blank line + tagline as one text block
     let full_text = format!("{}\n\n{}", banner, TAGLINE);
 
-    let banner_scroll = animate::scroll_gradient_effect(presets::storm(), 60); // 2s at 30fps
-    let tagline_scroll = animate::scroll_gradient_effect(presets::mist(), 45); // 1.5s at 30fps
+    let banner_scroll = animate::scroll_gradient_effect(ScrollDirection::Left, presets::storm(), 60);
+    let tagline_scroll = animate::scroll_gradient_effect(ScrollDirection::Right, presets::mist(), 45);
 
     let composite = move |text: &str, frame: usize| -> String {
         let lines: Vec<&str> = text.split('\n').collect();
