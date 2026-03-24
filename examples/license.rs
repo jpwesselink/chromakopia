@@ -1,6 +1,14 @@
 use chromakopia::{animate, presets};
 use chromakopia::animate::{Easing, FadeKind, FadeTarget, ScrollDirection, TimeRange};
 
+const BANNER: &str = r#"
+   ________  ______  ____  __  ______    __ ______  ____  _______
+  / ____/ / / / __ \/ __ \/  |/  /   |  / //_/ __ \/ __ \/  _/   |
+ / /   / /_/ / /_/ / / / / /|_/ / /| | / ,< / / / / /_/ // // /| |
+/ /___/ __  / _, _/ /_/ / /  / / ___ |/ /| / /_/ / ____// // ___ |
+\____/_/ /_/_/ |_|\____/_/  /_/_/  |_/_/ |_\____/_/   /___/_/  |_|
+"#;
+
 const LICENSE: &str = "\
 MIT License
 
@@ -26,22 +34,42 @@ SOFTWARE.";
 
 #[tokio::main]
 async fn main() {
-    let full_text = chromakopia::pad(LICENSE);
-    let line_count = full_text.lines().count();
+    let banner = BANNER.trim_matches('\n');
+    let full_text = chromakopia::pad(&format!("{}\n\n{}", banner, LICENSE));
+    let banner_lines = banner.lines().count();
+    let total_lines = full_text.lines().count();
 
     let fps = 30;
     let frames_per_line = 90;
     let stagger = 1;
-    let scroll_secs = ((line_count - 1) * stagger + frames_per_line) as f64 / fps as f64;
+    let scroll_secs = ((total_lines - 1) * stagger + frames_per_line) as f64 / fps as f64;
     let total = scroll_secs + 5.0;
 
-    let combined = animate::composite(
-        animate::scroll_staggered_effect(
-            ScrollDirection::Left, Easing::Elastic(0.25), presets::storm(),
-            frames_per_line, stagger,
-        ),
-        animate::plasma_gradient_effect(presets::storm()),
+    // Banner slides from right, license from left
+    let banner_scroll = animate::scroll_staggered_effect(
+        ScrollDirection::Right, Easing::Elastic(0.25), presets::storm(),
+        frames_per_line, stagger,
     );
+    let license_scroll = animate::scroll_staggered_effect(
+        ScrollDirection::Left, Easing::Elastic(0.25), presets::storm(),
+        frames_per_line, stagger,
+    );
+
+    // Composite: pick direction per line, plasma colors everything
+    let plasma = animate::plasma_gradient_effect(presets::storm());
+    let split = banner_lines + 1; // +1 for blank line
+
+    let position_fn = move |text: &str, frame: usize| -> String {
+        let lines: Vec<&str> = text.split('\n').collect();
+        let banner_text = lines[..banner_lines].join("\n");
+        let rest_text = lines[split..].join("\n");
+        let banner_out = banner_scroll(&banner_text, frame);
+        let rest_out = license_scroll(&rest_text, frame);
+        // Blank line between them
+        format!("{}\n\n{}", banner_out, rest_out)
+    };
+
+    let combined = animate::composite(position_fn, plasma);
 
     animate::Sequence::new(&full_text)
         .effect(TimeRange::new(0.0, total), fps as u64, combined)
