@@ -63,7 +63,7 @@ async fn main() {
         0.0, seed,
     );
     let plasma_license = animate::plasma_seeded_effect(
-        chromakopia::gradient(&["#00ccff", "#4466ff", "#aa44ff"]),
+        chromakopia::gradient(&["#000000", "#00ccff", "#4466ff", "#aa44ff", "#000000"]),
         banner_lines as f64 + 1.0, seed,
     );
     let split = banner_lines + 1; // +1 for blank line
