@@ -511,32 +511,6 @@ impl Sequence {
         self
     }
 
-    /// PETSCII-style character cycling with rainbow colors.
-    ///
-    /// Pattern options: `"blocks"`, `"circles"`, `"dots"`, `"diamonds"`,
-    /// or a custom string of characters to cycle through.
-    pub fn petscii(mut self, pattern: &str, duration: Duration) -> Self {
-        let pattern = pattern.to_string();
-        self.push_effect(
-            Box::new(move |text, frame| effects::petscii(text, frame, &pattern, None)),
-            duration,
-            15,
-        );
-        self
-    }
-
-    /// PETSCII-style character cycling with a custom gradient.
-    pub fn petscii_with(mut self, pattern: &str, grad: Gradient, duration: Duration) -> Self {
-        let pattern = pattern.to_string();
-        let gradient = grad.clone();
-        self.push_effect(
-            Box::new(move |text, frame| effects::petscii(text, frame, &pattern, Some(&gradient))),
-            duration,
-            15,
-        );
-        self
-    }
-
     /// Demoscene plasma effect with rainbow colors.
     pub fn plasma(mut self, duration: Duration) -> Self {
         self.push_effect(
@@ -1137,18 +1111,6 @@ pub fn plasma_gradient_effect(grad: Gradient) -> impl Fn(&str, usize) -> String 
 /// Create a bounce slide-in effect closure for use with [`Sequence::effect`].
 ///
 /// `total_frames` controls how long the slide-in takes; after that the text holds.
-/// Create a PETSCII character cycling effect closure for use with [`Sequence::effect`].
-pub fn petscii_effect(pattern: &str) -> impl Fn(&str, usize) -> String + Send + 'static {
-    let pattern = pattern.to_string();
-    move |text, frame| effects::petscii(text, frame, &pattern, None)
-}
-
-/// Create a PETSCII character cycling effect closure with a gradient for use with [`Sequence::effect`].
-pub fn petscii_gradient_effect(pattern: &str, grad: Gradient) -> impl Fn(&str, usize) -> String + Send + 'static {
-    let pattern = pattern.to_string();
-    move |text, frame| effects::petscii(text, frame, &pattern, Some(&grad))
-}
-
 pub fn scroll_effect(total_frames: usize) -> impl Fn(&str, usize) -> String + Send + 'static {
     move |text, frame| effects::scroll(text, frame, total_frames)
 }
@@ -1207,18 +1169,6 @@ pub fn plasma(text: &str, speed: f64) -> Animation {
 pub fn plasma_with(grad: Gradient, text: &str, speed: f64) -> Animation {
     let palette = grad.palette(256);
     spawn_animation(text, move |text, frame| effects::plasma(text, frame, Some(&palette)), 30, speed)
-}
-
-/// Start a PETSCII character cycling animation with rainbow colors.
-pub fn petscii(pattern: &str, text: &str, speed: f64) -> Animation {
-    let pattern = pattern.to_string();
-    spawn_animation(text, move |text, frame| effects::petscii(text, frame, &pattern, None), 15, speed)
-}
-
-/// Start a PETSCII character cycling animation with a custom gradient.
-pub fn petscii_with(pattern: &str, grad: Gradient, text: &str, speed: f64) -> Animation {
-    let pattern = pattern.to_string();
-    spawn_animation(text, move |text, frame| effects::petscii(text, frame, &pattern, Some(&grad)), 15, speed)
 }
 
 /// Start a slide-in animation with bounce easing and rainbow colors.
