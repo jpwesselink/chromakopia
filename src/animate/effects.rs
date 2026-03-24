@@ -471,15 +471,11 @@ impl Effect for Scroll {
             };
             let eased = self.easing.apply(t);
 
-            // Horizontal offset
+            // Horizontal offset — always use terminal width so text travels full screen
             let h_offset = match self.direction {
                 ScrollDirection::Left | ScrollDirection::Right => {
                     let sign = if matches!(self.direction, ScrollDirection::Left) { 1.0 } else { -1.0 };
-                    if eased <= 1.0 {
-                        (sign * (1.0 - eased) * max_width as f64).round() as i32
-                    } else {
-                        (sign * (1.0 - eased) * term_width as f64).round() as i32
-                    }
+                    (sign * (1.0 - eased) * term_width as f64).round() as i32
                 }
                 _ => 0,
             };
