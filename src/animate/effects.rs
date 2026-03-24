@@ -366,10 +366,14 @@ fn scroll_inner(
 
     let palette = gradient.map(|g| g.palette(max_width.max(2)));
 
+    // Use terminal width for horizontal travel so elastic/bounce overshoot
+    // looks consistent regardless of text length
+    let term_width = crate::terminal::terminal_width();
+
     // Horizontal offset (for Left/Right)
     let h_offset = match direction {
-        ScrollDirection::Left => ((1.0 - eased) * max_width as f64).round() as i32,
-        ScrollDirection::Right => -((1.0 - eased) * max_width as f64).round() as i32,
+        ScrollDirection::Left => ((1.0 - eased) * term_width as f64).round() as i32,
+        ScrollDirection::Right => -((1.0 - eased) * term_width as f64).round() as i32,
         _ => 0,
     };
 
