@@ -350,6 +350,22 @@ fn scroll_inner(
     gradient: Option<&Gradient>,
     easing: crate::animate::Easing,
 ) -> String {
+    scroll_staggered(text, frame, total_frames, direction, gradient, easing, 0)
+}
+
+/// Core scroll renderer with per-line stagger.
+///
+/// `line_delay` is the number of frames between each line's start.
+/// 0 means all lines animate together.
+pub(crate) fn scroll_staggered(
+    text: &str,
+    frame: usize,
+    total_frames: usize,
+    direction: ScrollDirection,
+    gradient: Option<&Gradient>,
+    easing: crate::animate::Easing,
+    line_delay: usize,
+) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let line_count = lines.len();
     let max_width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
@@ -357,45 +373,9 @@ fn scroll_inner(
         return text.to_string();
     }
 
-    let t = if total_frames == 0 {
-        1.0
-    } else {
-        (frame as f64 / total_frames as f64).min(1.0)
-    };
-    let eased = easing.apply(t);
-
     let term_width = crate::terminal::terminal_width();
     let render_width = term_width.max(max_width);
     let palette = gradient.map(|g| g.palette(render_width.max(2)));
-
-    // Start just off-screen (text width), but overshoot relative to terminal width.
-    // eased goes 0→1 (with elastic/bounce possibly overshooting past 1.0).
-    // At eased=0: offset = max_width (fully hidden)
-    // At eased=1: offset = 0 (in place)
-    // At eased>1: offset goes negative by (eased-1)*term_width (overshoot)
-    let h_offset = match direction {
-        ScrollDirection::Left | ScrollDirection::Right => {
-            let sign = if matches!(direction, ScrollDirection::Left) { 1.0 } else { -1.0 };
-            if eased <= 1.0 {
-                (sign * (1.0 - eased) * max_width as f64).round() as i32
-            } else {
-                (sign * (1.0 - eased) * term_width as f64).round() as i32
-            }
-        }
-        _ => 0,
-    };
-
-    let v_offset = match direction {
-        ScrollDirection::Top | ScrollDirection::Bottom => {
-            let sign = if matches!(direction, ScrollDirection::Top) { 1.0 } else { -1.0 };
-            if eased <= 1.0 {
-                (sign * (1.0 - eased) * line_count as f64).round() as i32
-            } else {
-                (sign * (1.0 - eased) * line_count as f64).round() as i32
-            }
-        }
-        _ => 0,
-    };
 
     // Pad all lines to max_width
     let padded_lines: Vec<Vec<char>> = lines
@@ -412,6 +392,42 @@ fn scroll_inner(
 
     (0..line_count)
         .map(|y| {
+            // Each line starts `line_delay * y` frames later
+            let line_frame = frame.saturating_sub(y * line_delay);
+            let t = if total_frames == 0 {
+                1.0
+            } else if line_frame == 0 && frame < y * line_delay {
+                // Line hasn't started yet
+                0.0
+            } else {
+                (line_frame as f64 / total_frames as f64).min(1.0)
+            };
+            let eased = easing.apply(t);
+
+            let h_offset = match direction {
+                ScrollDirection::Left | ScrollDirection::Right => {
+                    let sign = if matches!(direction, ScrollDirection::Left) { 1.0 } else { -1.0 };
+                    if eased <= 1.0 {
+                        (sign * (1.0 - eased) * max_width as f64).round() as i32
+                    } else {
+                        (sign * (1.0 - eased) * term_width as f64).round() as i32
+                    }
+                }
+                _ => 0,
+            };
+
+            let v_offset = match direction {
+                ScrollDirection::Top | ScrollDirection::Bottom => {
+                    let sign = if matches!(direction, ScrollDirection::Top) { 1.0 } else { -1.0 };
+                    if eased <= 1.0 {
+                        (sign * (1.0 - eased) * line_count as f64).round() as i32
+                    } else {
+                        (sign * (1.0 - eased) * line_count as f64).round() as i32
+                    }
+                }
+                _ => 0,
+            };
+
             let src_y = y as i32 + v_offset;
             let line_visible = src_y >= 0 && (src_y as usize) < line_count;
 

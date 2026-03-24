@@ -1126,6 +1126,20 @@ pub fn scroll_eased_gradient_effect(direction: effects::ScrollDirection, easing:
     move |text, frame| effects::scroll_eased_with(text, frame, total_frames, direction, easing, &grad)
 }
 
+/// Create a staggered slide-in effect closure.
+///
+/// Each line starts `line_delay` frames after the previous one,
+/// creating a cascading entrance effect.
+pub fn scroll_staggered_effect(
+    direction: effects::ScrollDirection,
+    easing: Easing,
+    grad: Gradient,
+    total_frames: usize,
+    line_delay: usize,
+) -> impl Fn(&str, usize) -> String + Send + 'static {
+    move |text, frame| effects::scroll_staggered(text, frame, total_frames, direction, Some(&grad), easing, line_delay)
+}
+
 // ── Standalone animations ──
 
 /// Start a rainbow animation. Speed is a multiplier (1.0 = default).
