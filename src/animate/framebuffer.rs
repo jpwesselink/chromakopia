@@ -325,7 +325,7 @@ pub async fn run_effect(
     // For now, get cursor position via ANSI DSR or fall back to row 1.
     let start_row = get_cursor_row().unwrap_or(1);
 
-    let fps = 25u64;
+    let fps = 100u64;
     let frame_duration = Duration::from_millis(1000 / fps);
 
     // Animation task
