@@ -1,5 +1,5 @@
 use chromakopia::{animate, presets};
-use std::time::Duration;
+use chromakopia::animate::TimeRange;
 
 const BANNER: &str = r#"
    ________  ______  ____  __  ______    __ ______  ____  _______
@@ -14,25 +14,34 @@ const TAGLINE: &str =
 
 #[tokio::main]
 async fn main() {
-    // Banner slides in first
     let banner = BANNER.trim_matches('\n');
-    let anim = animate::scroll_with(
-        presets::storm(),
-        banner,
-        Duration::from_secs(2),
-        1.0,
-    );
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    anim.stop();
+    let banner_lines = banner.lines().count();
+    // Combine banner + blank line + tagline as one text block
+    let full_text = format!("{}\n\n{}", banner, TAGLINE);
 
-    // Then tagline slides in below
-    eprintln!();
-    let anim = animate::scroll_with(
-        presets::mist(),
-        TAGLINE,
-        Duration::from_millis(1500),
-        1.0,
-    );
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    anim.stop();
+    let banner_scroll = animate::scroll_gradient_effect(presets::storm(), 60); // 2s at 30fps
+    let tagline_scroll = animate::scroll_gradient_effect(presets::mist(), 45); // 1.5s at 30fps
+
+    let composite = move |text: &str, frame: usize| -> String {
+        let lines: Vec<&str> = text.split('\n').collect();
+        let banner_text = lines[..banner_lines].join("\n");
+        let tagline_text = lines[banner_lines + 1..].join("\n");
+
+        let banner_out = banner_scroll(&banner_text, frame);
+
+        // Tagline starts 30 frames (1s) after the banner
+        let tagline_delay = 30;
+        let tagline_out = if frame >= tagline_delay {
+            tagline_scroll(&tagline_text, frame - tagline_delay)
+        } else {
+            " ".repeat(tagline_text.len())
+        };
+
+        format!("{}\n\n{}", banner_out, tagline_out)
+    };
+
+    animate::Sequence::new(&full_text)
+        .effect(TimeRange::new(0.0, 6.0), 30, composite)
+        .run(1.0)
+        .await;
 }
