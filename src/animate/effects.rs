@@ -338,7 +338,7 @@ fn scroll_inner(text: &str, frame: usize, total_frames: usize, gradient: Option<
     } else {
         (frame as f64 / total_frames as f64).min(1.0)
     };
-    let eased = bounce_out(t);
+    let eased = crate::animate::Easing::BounceOut.apply(t);
 
     // offset = how many chars the text is still shifted off-screen to the left
     // Starts at max_width (fully hidden), ends at 0 (fully visible).
@@ -382,21 +382,6 @@ fn scroll_inner(text: &str, frame: usize, total_frames: usize, gradient: Option<
         .join("\n")
 }
 
-/// Bounce-out easing: overshoots then settles.
-fn bounce_out(t: f64) -> f64 {
-    if t < 1.0 / 2.75 {
-        7.5625 * t * t
-    } else if t < 2.0 / 2.75 {
-        let t = t - 1.5 / 2.75;
-        7.5625 * t * t + 0.75
-    } else if t < 2.5 / 2.75 {
-        let t = t - 2.25 / 2.75;
-        7.5625 * t * t + 0.9375
-    } else {
-        let t = t - 2.625 / 2.75;
-        7.5625 * t * t + 0.984375
-    }
-}
 
 #[cfg(test)]
 mod tests {
