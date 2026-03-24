@@ -41,7 +41,7 @@ async fn main() {
             animate::scroll_staggered_effect(
                 ScrollDirection::Left,
                 Easing::Elastic(0.4),
-                chromakopia::gradient(&["#cccccc", "#cccccc"]),
+                chromakopia::gradient(&["#ffffff", "#ffffff"]),
                 frames_per_line,
                 stagger,
             ),
