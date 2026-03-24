@@ -29,13 +29,13 @@ async fn main() {
 
     let fps = 30;
     let line1_scroll = animate::scroll_eased_gradient_effect(
-        ScrollDirection::Left, Easing::ElasticOut, presets::mist(), fps * 2,
+        ScrollDirection::Left, Easing::Elastic(0.4), presets::mist(), fps * 2,
     );
     let banner_scroll = animate::scroll_eased_gradient_effect(
-        ScrollDirection::Right, Easing::ElasticOut, presets::storm(), fps * 2,
+        ScrollDirection::Right, Easing::Elastic(0.4), presets::storm(), fps * 2,
     );
     let line3_scroll = animate::scroll_eased_gradient_effect(
-        ScrollDirection::Left, Easing::ElasticOut, presets::mist(), fps * 2,
+        ScrollDirection::Left, Easing::Elastic(0.4), presets::mist(), fps * 2,
     );
 
     let composite = move |text: &str, frame: usize| -> String {

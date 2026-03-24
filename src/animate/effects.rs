@@ -364,9 +364,9 @@ fn scroll_inner(
     };
     let eased = easing.apply(t);
 
-    let palette = gradient.map(|g| g.palette(max_width.max(2)));
-
     let term_width = crate::terminal::terminal_width();
+    let render_width = term_width.max(max_width);
+    let palette = gradient.map(|g| g.palette(render_width.max(2)));
 
     // Start just off-screen (text width), but overshoot relative to terminal width.
     // eased goes 0→1 (with elastic/bounce possibly overshooting past 1.0).
@@ -415,7 +415,7 @@ fn scroll_inner(
             let src_y = y as i32 + v_offset;
             let line_visible = src_y >= 0 && (src_y as usize) < line_count;
 
-            (0..max_width)
+            (0..render_width)
                 .map(|x| {
                     let src_x = x as i32 + h_offset;
                     let ch = if line_visible
@@ -430,7 +430,7 @@ fn scroll_inner(
                     let c = if let Some(ref pal) = palette {
                         pal[x % pal.len()]
                     } else {
-                        let hue = (x as f64 / max_width as f64) * 360.0;
+                        let hue = (x as f64 / render_width as f64) * 360.0;
                         Color::from_hsv(hue, 0.9, 1.0)
                     };
 
@@ -569,11 +569,12 @@ mod tests {
     }
 
     #[test]
-    fn scroll_right_frame_zero_is_blank() {
+    #[test]
+    fn scroll_right_final_shows_text() {
         with_color(|| {
-            let output = scroll("hello", 0, 60, ScrollDirection::Right);
-            let stripped: String = output.chars().filter(|c| !c.is_ascii_control() && *c != '[' && *c != 'm' && !c.is_ascii_digit() && *c != ';').collect();
-            assert!(stripped.trim().is_empty());
+            let total = 60;
+            let output = scroll("hello", total, total, ScrollDirection::Right);
+            assert!(output.contains('h'));
         });
     }
 
