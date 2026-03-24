@@ -10,9 +10,11 @@
 
 mod effects;
 mod easing;
+pub mod framebuffer;
 
 pub use easing::Easing;
 pub use effects::ScrollDirection;
+pub use framebuffer::{Cell, Effect, FrameBuffer, LegacyEffect, run_effect};
 
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
