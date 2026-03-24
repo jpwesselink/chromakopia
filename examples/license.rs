@@ -45,10 +45,10 @@ async fn main() {
     let scroll_secs = ((total_lines - 1) * stagger + frames_per_line) as f64 / fps as f64;
     let total = scroll_secs + 10.0;
 
-    // Banner slides from right, license from left
-    let banner_scroll = animate::scroll_staggered_effect(
-        ScrollDirection::Top, Easing::Elastic(0.25), presets::storm(),
-        frames_per_line, stagger,
+    // Banner slides in as one block from the left
+    let banner_scroll = animate::scroll_eased_gradient_effect(
+        ScrollDirection::Left, Easing::Elastic(0.25), presets::storm(),
+        frames_per_line,
     );
     let license_scroll = animate::scroll_staggered_effect(
         ScrollDirection::Left, Easing::Elastic(0.25), presets::storm(),
