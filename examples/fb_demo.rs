@@ -57,10 +57,10 @@ async fn main() {
     let fade_out_start = (total_secs - 2) * fps;
 
     Scene::new()
-        // Credit — fades in over rainbow, fades out to fg at the end
+        // Credit — fades in over plasma, fades out to fg at the end
         .line(Line::full(credit, Chain::new()
-            .then(fade_out_start, Fade::in_from(Rainbow::new(credit), bg, Easing::EaseOut, fps))
-            .then(fps * 2, Fade::out_to(Rainbow::new(credit), fg, Easing::EaseInOut, fps * 2))
+            .then(fade_out_start, Fade::in_from(Plasma::new(credit, fire.clone(), 42.0), bg, Easing::EaseOut, fps))
+            .then(fps * 2, Fade::out_to(Plasma::new(credit, fire.clone(), 42.0), fg, Easing::EaseInOut, fps * 2))
             .then(fps * 100, Glow::new(credit, fg_pal.clone()))
         ))
         .line(Line::blank())
