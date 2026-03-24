@@ -97,6 +97,21 @@ pub fn storm() -> Gradient {
     ])
 }
 
+/// "My God, it's full of stars" — deep space with electric streaks.
+///
+/// Black void → deep blue → electric blue → white hot → violet → black.
+pub fn starfield() -> Gradient {
+    g(&[
+        (0x00, 0x00, 0x00), // void
+        (0x00, 0x00, 0x44), // deep space blue
+        (0x00, 0x66, 0xff), // electric blue
+        (0xff, 0xff, 0xff), // white hot star
+        (0x00, 0x66, 0xff), // electric blue
+        (0x88, 0x00, 0xcc), // violet streak
+        (0x00, 0x00, 0x00), // void
+    ])
+}
+
 /// Bright amber to warm gold — airport departure board.
 pub fn flughafen() -> Gradient {
     g(&[(0xff, 0xcc, 0x00), (0xff, 0xa5, 0x00), (0x99, 0x7a, 0x00)])
