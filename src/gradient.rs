@@ -106,8 +106,8 @@ impl Gradient {
 
             // Find which segment this t falls in
             let mut seg = 0;
-            for j in 0..positions.len() - 1 {
-                if t >= positions[j] {
+            for (j, &pos) in positions[..positions.len() - 1].iter().enumerate() {
+                if t >= pos {
                     seg = j;
                 }
             }

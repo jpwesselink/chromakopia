@@ -8,9 +8,10 @@
 /// assert!(Easing::EaseIn.apply(t) < 0.5);  // slow start
 /// assert!(Easing::EaseOut.apply(t) > 0.5);  // slow end
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum Easing {
     /// No easing — constant speed.
+    #[default]
     Linear,
     /// Cubic ease-in — slow start, fast end.
     EaseIn,
@@ -20,12 +21,6 @@ pub enum Easing {
     EaseInOut,
     /// CSS-style cubic bezier with control points (x1, y1, x2, y2).
     CubicBezier(f64, f64, f64, f64),
-}
-
-impl Default for Easing {
-    fn default() -> Self {
-        Easing::Linear
-    }
 }
 
 impl Easing {
