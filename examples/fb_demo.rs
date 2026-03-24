@@ -39,7 +39,7 @@ async fn main() {
     let fg = chromakopia::fg_color();
     let bg_hex = bg.to_string();
     let storm = presets::storm().palette(256);
-    let fire = chromakopia::gradient(&[&bg_hex, "#1a1a2e", "#4a0000", "#8b0000", "#c0c0c0", "#4a0000", "#1a1a2e", &bg_hex]).palette(256);
+    let fire = chromakopia::gradient(&["#ffffff", "#000000", "#ffffff", "#000000", "#ffffff", "#000000", "#ffffff"]).palette(256);
     let fps = 30;
     let total = fps * 15;
 
