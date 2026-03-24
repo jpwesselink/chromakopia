@@ -1,5 +1,5 @@
 use chromakopia::animate;
-use chromakopia::animate::{Easing, ScrollDirection, TimeRange};
+use chromakopia::animate::{Easing, FadeKind, FadeTarget, ScrollDirection, TimeRange};
 
 const LICENSE: &str = "\
 MIT License
@@ -45,6 +45,11 @@ async fn main() {
                 frames_per_line,
                 stagger,
             ),
+        )
+        .fade(
+            TimeRange::new(total_secs - 0.5, total_secs),
+            FadeKind::FadeTo(FadeTarget::Foreground),
+            Easing::Linear,
         )
         .run(1.0)
         .await;
