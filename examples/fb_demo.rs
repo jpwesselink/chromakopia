@@ -1,5 +1,5 @@
 use chromakopia::animate::*;
-use chromakopia::{presets, Color};
+use chromakopia::{center, presets, Color};
 use std::time::Duration;
 
 const BANNER: &str = r#"   ________  ______  ____  __  ______    __ ______  ____  _______
@@ -8,46 +8,55 @@ const BANNER: &str = r#"   ________  ______  ____  __  ______    __ ______  ____
 / /___/ __  / _, _/ /_/ / /  / / ___ |/ /| / /_/ / ____// // ___ |
 \____/_/ /_/_/ |_|\____/_/  /_/_/  |_/_/ |_\____/_/   /___/_/  |_|"#;
 
+const CREDIT: &str = "(c) 2026 JP Wesselink";
+const FOOTER: &str = "github.com/jpwesselink/chromakopia  —  MIT License";
+
 #[tokio::main]
 async fn main() {
-    let gray = Color::new(100, 100, 100);
     let bg = chromakopia::bg_color();
     let storm = presets::storm().palette(256);
     let mist = presets::mist().palette(256);
     let fps = 60;
 
-    Scene::new()
-        // Credit — fades in over rainbow
-        .line(Line::new()
-            .text("(c) 2026 ", gray)
-            .animated("JP Wesselink",
-                Fade::in_from(Rainbow::new("JP Wesselink"), bg, Easing::EaseOut, fps)
-            )
-        )
-        .line(Line::blank())
-        // Banner — scrolls in, then crossfades into plasma
-        .text_block(BANNER, |l| {
-            Line::full(l, Chain::new()
-                .then(fps * 2, Fade::in_from(
-                    Scroll::new(l, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.3), fps * 2, 1),
-                    bg, Easing::EaseOut, fps,
-                ))
-                .then(fps * 100, Plasma::new(l, storm.clone(), 42.0))
-            )
-        })
-        .line(Line::blank())
-        // Footer — fades in over a glow
-        .line(Line::full(
-            "github.com/jpwesselink/chromakopia  —  MIT License",
-            Chain::new()
-                .then(fps * 2, Fade::in_from(
-                    Glow::new("github.com/jpwesselink/chromakopia  —  MIT License", mist.clone()),
-                    bg, Easing::EaseOut, fps * 2,
-                ))
-                .then(fps * 100, Glow::new(
-                    "github.com/jpwesselink/chromakopia  —  MIT License", mist.clone(),
-                ))
+    // Center everything as a block
+    let full = format!("{}\n\n{}\n\n{}", CREDIT, BANNER, FOOTER);
+    let centered = center(&full);
+    let lines: Vec<&str> = centered.lines().collect();
+
+    // Lines layout: 0=credit, 1=blank, 2-6=banner, 7=blank, 8=footer
+    let credit = lines[0];
+    let banner_lines = &lines[2..7];
+    let footer = lines[8];
+
+    let mut scene = Scene::new();
+
+    // Credit — fades in over rainbow
+    scene = scene.line(Line::full(credit,
+        Fade::in_from(Rainbow::new(credit), bg, Easing::EaseOut, fps)
+    ));
+    scene = scene.line(Line::blank());
+
+    // Banner — elastic scroll in, then plasma
+    for l in banner_lines {
+        scene = scene.line(Line::full(l, Chain::new()
+            .then(fps * 2, Fade::in_from(
+                Scroll::new(l, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.3), fps * 2, 1),
+                bg, Easing::EaseOut, fps,
+            ))
+            .then(fps * 100, Plasma::new(l, storm.clone(), 42.0))
+        ));
+    }
+
+    scene = scene.line(Line::blank());
+
+    // Footer — fades in over a glow
+    scene = scene.line(Line::full(footer, Chain::new()
+        .then(fps * 2, Fade::in_from(
+            Glow::new(footer, mist.clone()),
+            bg, Easing::EaseOut, fps * 2,
         ))
-        .run(Duration::from_secs(15))
-        .await;
+        .then(fps * 100, Glow::new(footer, mist.clone()))
+    ));
+
+    scene.run(Duration::from_secs(15)).await;
 }
