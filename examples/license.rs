@@ -59,7 +59,7 @@ async fn main() {
     let seed: f64 = rand::random::<f64>() * 1000.0;
     let bg = chromakopia::bg_color().to_string();
     let plasma_banner = animate::plasma_seeded_effect(
-        chromakopia::gradient(&[&bg, "#ff0000", "#ffff00", "#ff0000", &bg]),
+        presets::starfield(),
         0.0, seed,
     );
     let plasma_license = animate::plasma_seeded_effect(
