@@ -39,26 +39,19 @@ async fn main() {
     let fg = chromakopia::fg_color();
     let bg_hex = bg.to_string();
     let storm = presets::storm().palette(256);
-    let fire = chromakopia::gradient(&[&bg_hex, "#ff71ce", "#01cdfe", "#05ffa1", "#b967ff", "#fffb96", "#ff71ce", &bg_hex]).palette(256);
+    let fire = chromakopia::gradient(&[&bg_hex, "#ff2975", "#f222ff", "#8c1eff", "#00d9ff", "#ff2975", &bg_hex]).palette(256);
     let fps = 30;
     let total = fps * 15;
 
-    let full = pad(&format!("{}\n\n{}\n\n{}", CREDIT, BANNER, LICENSE));
+    let full = pad(&format!("{}\n\n{}", BANNER, LICENSE));
     let lines: Vec<&str> = full.lines().collect();
 
     let banner_height = BANNER.lines().count();
-    let credit = lines[0];
-    let banner_text: String = lines[2..2 + banner_height].join("\n");
-    let license_start = 2 + banner_height + 1;
+    let banner_text: String = lines[..banner_height].join("\n");
+    let license_start = banner_height + 1;
     let license_text: String = lines[license_start..].join("\n");
 
     Scene::new()
-        // Credit — plasma with fade envelope
-        .line(Line::full(credit, FadeEnvelope::new(
-            Plasma::new(credit, fire.clone(), 42.0),
-            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
-        )))
-        .line(Line::blank())
         // Banner — scroll + plasma composite with fade envelope
         .block(&banner_text, FadeEnvelope::new(
             Composite::new(
