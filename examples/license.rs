@@ -59,7 +59,7 @@ async fn main() {
     // Random seed — different pattern each run, but both sections share it
     let seed: f64 = rand::random::<f64>() * 1000.0;
     let plasma_banner = animate::plasma_seeded_effect(
-        chromakopia::gradient(&["#ff0000", "#ffff00", "#ff0000", "#ffaa00"]),
+        chromakopia::gradient(&["#000000", "#ff0000", "#ffff00", "#ff0000", "#000000"]),
         0.0, seed,
     );
     let plasma_license = animate::plasma_seeded_effect(
