@@ -312,6 +312,64 @@ pub fn plasma(text: &str, frame: usize, palette: Option<&[Color]>) -> String {
         .join("\n")
 }
 
+/// PETSCII-style character cycling animation.
+///
+/// Each non-space character is replaced by a symbol from a cycling sequence,
+/// offset by its `(x, y)` position so the whole screen appears to animate
+/// like a C64 demo. A gradient is applied on top.
+///
+/// `pattern` selects the character set:
+/// - `"blocks"` — `░▒▓█▓▒░` density wave
+/// - `"circles"` — `·∘○◎●◎○∘` growing circles
+/// - `"dots"` — braille rotating dot
+/// - `"diamonds"` — `◇◆◈◆◇` diamond pulse
+/// - any other string is used as the cycle characters directly
+pub fn petscii(text: &str, frame: usize, pattern: &str, gradient: Option<&Gradient>) -> String {
+    let cycle: Vec<char> = match pattern {
+        "blocks" => "░▒▓█▓▒░".chars().collect(),
+        "circles" => "·∘○◎●◎○∘".chars().collect(),
+        "dots" => "⠁⠂⠄⡀⢀⠠⠐⠈".chars().collect(),
+        "diamonds" => "◇◆◈◆◇".chars().collect(),
+        custom => custom.chars().collect(),
+    };
+    let cycle_len = cycle.len().max(1);
+
+    let lines: Vec<&str> = text.split('\n').collect();
+    let max_width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1).max(1);
+    let palette = gradient.map(|g| g.palette(max_width.max(2)));
+
+    lines
+        .iter()
+        .enumerate()
+        .map(|(y, line)| {
+            line.chars()
+                .enumerate()
+                .map(|(x, ch)| {
+                    let out_ch = if ch.is_whitespace() {
+                        ch
+                    } else {
+                        // Phase offset by position creates the kaleidoscope
+                        let phase = (frame + x * 3 + y * 7) % cycle_len;
+                        cycle[phase]
+                    };
+
+                    let c = if let Some(ref pal) = palette {
+                        let color_phase = (x + y + frame) % pal.len();
+                        pal[color_phase]
+                    } else {
+                        let hue = ((x + y) as f64 / (max_width + lines.len()) as f64 * 360.0
+                            + frame as f64 * 8.0) % 360.0;
+                        Color::from_hsv(hue, 0.9, 1.0)
+                    };
+
+                    out_ch.to_string().truecolor(c.r, c.g, c.b).to_string()
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Slide-in from the left with bounce easing.
 ///
 /// Text starts off-screen and slides into its final position with a
@@ -523,6 +581,41 @@ mod tests {
         with_color(|| {
             let output = scroll("ab\ncdef", 30, 60);
             assert_eq!(output.split('\n').count(), 2);
+        });
+    }
+
+    #[test]
+    fn petscii_preserves_line_count() {
+        with_color(|| {
+            let output = petscii("abc\ndef", 0, "blocks", None);
+            assert_eq!(output.split('\n').count(), 2);
+        });
+    }
+
+    #[test]
+    fn petscii_spaces_stay_spaces() {
+        with_color(|| {
+            let output = petscii("a b", 0, "blocks", None);
+            // The space in the middle should remain a space (not replaced by a block char)
+            assert!(output.contains(' '));
+        });
+    }
+
+    #[test]
+    fn petscii_different_frames_differ() {
+        with_color(|| {
+            let a = petscii("hello", 0, "blocks", None);
+            let b = petscii("hello", 3, "blocks", None);
+            assert_ne!(a, b);
+        });
+    }
+
+    #[test]
+    fn petscii_custom_pattern() {
+        with_color(|| {
+            let output = petscii("x", 0, "AB", None);
+            // Should contain either A or B, not x
+            assert!(output.contains('A') || output.contains('B'));
         });
     }
 }
