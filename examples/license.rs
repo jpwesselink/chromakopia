@@ -56,8 +56,8 @@ async fn main() {
     );
 
     // Two different plasmas: storm for banner, mist for license
-    // Same seed so both sections share one plasma field, different palettes
-    let seed = 42.0;
+    // Random seed — different pattern each run, but both sections share it
+    let seed: f64 = rand::random::<f64>() * 1000.0;
     let plasma_banner = animate::plasma_seeded_effect(
         chromakopia::gradient(&["#ff0000", "#ff4500", "#ffa500", "#ffd700", "#ffff00"]),
         0.0, seed,
