@@ -239,6 +239,18 @@ fn parse_hex_component(s: &str) -> Option<u8> {
     })
 }
 
+/// Guess fg/bg colors from the `TERM_PROGRAM` environment variable.
+///
+/// Only returns `Some` for terminals with a strong default theme.
+/// Returns `None` for terminals that commonly vary (iTerm2, VS Code, etc.).
+fn term_program_colors(term_program: &str) -> Option<(Color, Color)> {
+    match term_program {
+        // Apple Terminal defaults to white background
+        "Apple_Terminal" => Some((Color::new(0, 0, 0), Color::new(255, 255, 255))),
+        _ => None,
+    }
+}
+
 /// Detect system theme and return conservative fg/bg color pair.
 ///
 /// On macOS, queries `defaults read -globalDomain AppleInterfaceStyle`.
@@ -296,6 +308,11 @@ pub fn bg_color() -> Color {
         if let Some((_, bg)) = parse_colorfgbg() {
             return bg;
         }
+        if let Ok(tp) = std::env::var("TERM_PROGRAM") {
+            if let Some((_, bg)) = term_program_colors(&tp) {
+                return bg;
+            }
+        }
         system_theme_colors().1
     })
 }
@@ -311,6 +328,11 @@ pub fn fg_color() -> Color {
         }
         if let Some((fg, _)) = parse_colorfgbg() {
             return fg;
+        }
+        if let Ok(tp) = std::env::var("TERM_PROGRAM") {
+            if let Some((fg, _)) = term_program_colors(&tp) {
+                return fg;
+            }
         }
         system_theme_colors().0
     })
@@ -450,6 +472,13 @@ mod tests {
         let bg_luma = bg.luma();
         assert!((fg_luma - bg_luma).abs() > 0.3,
             "fg luma ({fg_luma}) and bg luma ({bg_luma}) should differ significantly");
+    }
+
+    #[test]
+    fn term_program_heuristics() {
+        assert_eq!(term_program_colors("Apple_Terminal"), Some((Color::new(0, 0, 0), Color::new(255, 255, 255))));
+        assert_eq!(term_program_colors("iTerm.app"), None);
+        assert_eq!(term_program_colors("unknown_terminal"), None);
     }
 
     #[test]
