@@ -384,74 +384,6 @@ impl Effect for Flap {
     }
 }
 
-// ── Sparkle ──
-
-/// Stars radiate outward from a central vanishing point.
-pub struct Sparkle {
-    chars: Vec<Vec<char>>,
-    palette: Vec<Color>,
-}
-
-impl Sparkle {
-    pub fn new(text: &str, palette: Vec<Color>) -> Self {
-        Self {
-            chars: text_to_lines(text),
-            palette,
-        }
-    }
-}
-
-impl Effect for Sparkle {
-    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        let cx = buf.width as f64 / 2.0;
-        let cy = buf.height as f64 / 2.0;
-        let max_dist = (cx * cx + (cy * 2.5) * (cy * 2.5)).sqrt();
-        let t = frame as f64;
-        let pal = &self.palette;
-
-        for (y, line) in self.chars.iter().enumerate() {
-            for (x, &ch) in line.iter().enumerate() {
-                if x >= buf.width || y >= buf.height { continue; }
-                if ch.is_whitespace() {
-                    buf.set(x, y, Cell::space());
-                    continue;
-                }
-
-                let dx = x as f64 - cx;
-                let dy = (y as f64 - cy) * 2.5;
-                let dist = (dx * dx + dy * dy).sqrt() / max_dist;
-
-                let phase = ((x * 3571 + y * 2719) % 997) as f64;
-                let speed = 0.2 + dist * 0.8;
-                let cycle = ((t * speed * 0.15 + phase) % 40.0) / 40.0;
-                let pulse = (cycle * std::f64::consts::TAU).sin() * 0.5 + 0.5;
-                let brightness = dist * (0.3 + 0.7 * pulse);
-
-                let color = if pal.is_empty() {
-                    Color::new(
-                        (200.0 * brightness + 55.0 * dist) as u8,
-                        (220.0 * brightness + 35.0 * dist) as u8,
-                        (255.0 * brightness) as u8,
-                    )
-                } else {
-                    let color_t = (dist + cycle * 0.3).rem_euclid(1.0);
-                    let fi = color_t * (pal.len() - 1) as f64;
-                    let lo = (fi.floor() as usize).min(pal.len() - 1);
-                    let hi = (lo + 1).min(pal.len() - 1);
-                    let frac = fi - lo as f64;
-                    let base = Color::lerp_rgb(pal[lo], pal[hi], frac);
-                    Color::new(
-                        (base.r as f64 * brightness) as u8,
-                        (base.g as f64 * brightness) as u8,
-                        (base.b as f64 * brightness) as u8,
-                    )
-                };
-
-                buf.set(x, y, Cell::new(ch, color));
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -553,15 +485,4 @@ mod tests {
         assert_eq!(buf.get(0, 0).color, s);
     }
 
-    #[test]
-    fn sparkle_center_dimmer() {
-        let pal = vec![Color::new(255, 255, 255)];
-        let effect = Sparkle::new("xxxxxxxxxx", pal);
-        let mut buf = make_buf("xxxxxxxxxx");
-        effect.render(&mut buf, 0);
-        let center = buf.get(5, 0).color;
-        let edge = buf.get(0, 0).color;
-        // Edge should be brighter than center
-        assert!(edge.r >= center.r);
-    }
 }
