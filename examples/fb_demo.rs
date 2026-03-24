@@ -78,18 +78,17 @@ async fn main() {
 
         for _ in &alinea_lines {
             let l = centered_lines[current_line];
-            // Each line: delayed scroll + fade in, then static
-            scene = scene.line(Line::full(l, Chain::new()
-                .then(delay_frames, Fade::in_from(
-                    // Hold invisible during delay
-                    Rainbow::new(l), bg, Easing::Linear, delay_frames.max(1),
-                ))
-                .then(fps * 2, Fade::in_from(
-                    Scroll::new(l, mist.clone(), direction, Easing::Elastic(0.25), fps * 2, 0),
-                    bg, Easing::EaseOut, fps,
-                ))
-                .then(fps * 100, Glow::new(l, mist.clone()))
-            ));
+            // Scroll starts at delay_frames. Before that: invisible (blank).
+            // After scroll settles: glow.
+            scene = scene.line(Line::full(l, DelayedStart::new(
+                delay_frames,
+                Chain::new()
+                    .then(fps * 2, Fade::in_from(
+                        Scroll::new(l, mist.clone(), direction, Easing::Elastic(0.25), fps * 2, 0),
+                        bg, Easing::EaseOut, fps,
+                    ))
+                    .then(fps * 100, Glow::new(l, mist.clone()))
+            )));
             current_line += 1;
         }
 

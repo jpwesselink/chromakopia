@@ -619,6 +619,42 @@ impl Effect for Chain {
     }
 }
 
+// ── DelayedStart ──
+
+/// Shows nothing for `delay` frames, then runs the inner effect.
+///
+/// During the delay, all cells are cleared to spaces. Once the delay
+/// is over, the inner effect renders normally with frame counting
+/// starting from 0.
+pub struct DelayedStart {
+    delay: usize,
+    inner: Box<dyn Effect>,
+}
+
+impl DelayedStart {
+    pub fn new(delay: usize, inner: impl Effect) -> Self {
+        Self {
+            delay,
+            inner: Box::new(inner),
+        }
+    }
+}
+
+impl Effect for DelayedStart {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        if frame < self.delay {
+            // Clear our region to spaces
+            for y in 0..buf.height {
+                for x in 0..buf.width {
+                    buf.set(x, y, Cell::space());
+                }
+            }
+        } else {
+            self.inner.render(buf, frame - self.delay);
+        }
+    }
+}
+
 // ── Composite ──
 
 /// Combine two effects: one controls character positions, the other controls colors.
