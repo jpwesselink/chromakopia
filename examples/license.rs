@@ -30,7 +30,7 @@ async fn main() {
     let line_count = full_text.lines().count();
 
     let fps = 30;
-    let frames_per_line = 60;
+    let frames_per_line = 90;
     let stagger = 1;
     // Total time = (last line start + animation duration) / fps
     let total_secs = ((line_count - 1) * stagger + frames_per_line) as f64 / fps as f64;
@@ -40,7 +40,7 @@ async fn main() {
             TimeRange::new(0.0, total_secs), fps as u64,
             animate::scroll_staggered_effect(
                 ScrollDirection::Left,
-                Easing::Elastic(0.4),
+                Easing::Elastic(0.2),
                 chromakopia::gradient(&["#ffffff", "#ffffff"]),
                 frames_per_line,
                 stagger,
