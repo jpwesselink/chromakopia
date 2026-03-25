@@ -93,9 +93,13 @@ async fn main() {
         // License top — plasma with fire palette
         .block(&license_top_text, FadeEnvelope::new(
             Scroll::new(&license_top_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2)
-                .with_color(Plasma::new(&license_top_text, fire.clone(), 42.0)
-                    .with_y_offset(top_y)
-                    .with_scene_size(total_scene_w, total_scene_h)),
+                .with_color(Blend::new(
+                    Plasma::new(&license_top_text, fire.clone(), 42.0)
+                        .with_y_offset(top_y)
+                        .with_scene_size(total_scene_w, total_scene_h),
+                    Radar::new(&license_top_text),
+                    BlendMode::Screen,
+                )),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .line(Line::blank())
