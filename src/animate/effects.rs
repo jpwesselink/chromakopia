@@ -674,6 +674,126 @@ impl Effect for Chain {
     }
 }
 
+// ── Spread ──
+
+/// Lines start stacked at one position and spread out to their final rows.
+///
+/// At frame 0, all lines are at `origin_row`. Over `total_frames`, each line
+/// moves to its natural y position. Creates a "fan out" or "unfold" effect.
+pub struct Spread {
+    chars: Vec<Vec<char>>,
+    palette: Vec<Color>,
+    origin: SpreadOrigin,
+    easing: super::easing::Easing,
+    total_frames: usize,
+    color_source: Option<Box<dyn Effect>>,
+}
+
+/// Where lines start before spreading.
+#[derive(Debug, Clone, Copy)]
+pub enum SpreadOrigin {
+    /// All lines start at the top (row 0).
+    Top,
+    /// All lines start at the bottom (last row).
+    Bottom,
+    /// All lines start at the center row.
+    Center,
+}
+
+impl Spread {
+    pub fn new(
+        text: &str,
+        palette: Vec<Color>,
+        origin: SpreadOrigin,
+        easing: super::easing::Easing,
+        total_frames: usize,
+    ) -> Self {
+        Self {
+            chars: text_to_lines(text),
+            palette,
+            origin,
+            easing,
+            total_frames,
+            color_source: None,
+        }
+    }
+
+    pub fn with_color(mut self, effect: impl Effect) -> Self {
+        self.color_source = Some(Box::new(effect));
+        self
+    }
+}
+
+impl Effect for Spread {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        let line_count = self.chars.len();
+        if line_count == 0 { return; }
+
+        let t = if self.total_frames == 0 {
+            1.0
+        } else {
+            (frame as f64 / self.total_frames as f64).min(1.0)
+        };
+        let eased = self.easing.apply(t);
+
+        let pal = &self.palette;
+
+        // Pre-color at rest positions if color source exists
+        let source_colors = self.color_source.as_ref().map(|cs| {
+            let mut color_buf = FrameBuffer::new(buf.width, buf.height);
+            for (y, line) in self.chars.iter().enumerate() {
+                for (x, &ch) in line.iter().enumerate() {
+                    if x < color_buf.width && y < color_buf.height {
+                        color_buf.set(x, y, Cell::new(ch, Color::new(204, 204, 204)));
+                    }
+                }
+            }
+            cs.render(&mut color_buf, frame);
+            color_buf
+        });
+
+        // Clear buf first — lines will be drawn at computed positions
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                buf.set(x, y, Cell::space());
+            }
+        }
+
+        let origin_y = match self.origin {
+            SpreadOrigin::Top => 0.0,
+            SpreadOrigin::Bottom => (line_count - 1) as f64,
+            SpreadOrigin::Center => (line_count - 1) as f64 / 2.0,
+        };
+
+        // Draw each line at its interpolated y position
+        for (line_idx, line) in self.chars.iter().enumerate() {
+            let final_y = line_idx as f64;
+            let current_y = origin_y + (final_y - origin_y) * eased;
+            let row = current_y.round() as usize;
+            if row >= buf.height { continue; }
+
+            for (x, &ch) in line.iter().enumerate() {
+                if x >= buf.width { continue; }
+
+                let color = if let Some(ref cb) = source_colors {
+                    if line_idx < cb.height && x < cb.width {
+                        cb.get(x, line_idx).color
+                    } else {
+                        Color::new(204, 204, 204)
+                    }
+                } else if !pal.is_empty() {
+                    pal[x % pal.len()]
+                } else {
+                    let hue = (x as f64 / buf.width.max(1) as f64) * 360.0;
+                    Color::from_hsv(hue, 0.9, 1.0)
+                };
+
+                buf.set(x, row, Cell::new(ch, color));
+            }
+        }
+    }
+}
+
 // ── FadeEnvelope ──
 
 /// Fade in, hold, fade out — one smooth opacity envelope over an inner effect.

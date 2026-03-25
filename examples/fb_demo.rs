@@ -77,9 +77,9 @@ async fn main() {
     let total_scene_w = lines.iter().map(|l| l.len()).max().unwrap_or(80) as f64;
 
     Scene::new()
-        // Banner — scroll + blended plasma/rainbow
+        // Banner — drops from top, lines overlay then spread out
         .block(&banner_text, FadeEnvelope::new(
-            Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 0)
+            Spread::new(&banner_text, storm.clone(), SpreadOrigin::Top, Easing::Elastic(0.15), fps * 3)
                 .with_color(Blend::new(
                     Plasma::new(&banner_text, storm.clone(), 42.0)
                         .with_y_offset(banner_y)
