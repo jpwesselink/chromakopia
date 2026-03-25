@@ -794,6 +794,106 @@ impl Effect for Spread {
     }
 }
 
+// ── DYCP ──
+
+/// Different Y Character Position — each character bounces on its own sine wave.
+///
+/// Classic demoscene effect: text ripples vertically like a wave.
+/// `amplitude` controls how many rows characters travel (e.g. 3.0 = ±3 rows).
+/// `frequency` controls how tight the wave is (higher = more ripples across the width).
+/// `speed` controls how fast the wave moves.
+pub struct Dycp {
+    chars: Vec<Vec<char>>,
+    palette: Vec<Color>,
+    amplitude: f64,
+    frequency: f64,
+    speed: f64,
+    color_source: Option<Box<dyn Effect>>,
+}
+
+impl Dycp {
+    pub fn new(text: &str, palette: Vec<Color>, amplitude: f64, frequency: f64, speed: f64) -> Self {
+        Self {
+            chars: text_to_lines(text),
+            palette,
+            amplitude,
+            frequency,
+            speed,
+            color_source: None,
+        }
+    }
+
+    pub fn with_color(mut self, effect: impl Effect) -> Self {
+        self.color_source = Some(Box::new(effect));
+        self
+    }
+}
+
+impl Effect for Dycp {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        let line_count = self.chars.len();
+        if line_count == 0 { return; }
+        let pal = &self.palette;
+        let t = frame as f64 * self.speed;
+
+        // Pre-color at rest positions
+        let source_colors = self.color_source.as_ref().map(|cs| {
+            let mut color_buf = FrameBuffer::new(buf.width, buf.height);
+            for (y, line) in self.chars.iter().enumerate() {
+                for (x, &ch) in line.iter().enumerate() {
+                    if x < color_buf.width && y < color_buf.height {
+                        color_buf.set(x, y, Cell::new(ch, Color::new(204, 204, 204)));
+                    }
+                }
+            }
+            cs.render(&mut color_buf, frame);
+            color_buf
+        });
+
+        // Clear buffer
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                buf.set(x, y, Cell::space());
+            }
+        }
+
+        // Center of the buffer vertically
+        let center_y = buf.height as f64 / 2.0;
+
+        for (line_idx, line) in self.chars.iter().enumerate() {
+            let base_y = line_idx as f64;
+
+            for (x, &ch) in line.iter().enumerate() {
+                if x >= buf.width { continue; }
+                if ch.is_whitespace() { continue; }
+
+                // Each char gets its own sine offset
+                let wave = (x as f64 * self.frequency + t + line_idx as f64 * 1.7).sin();
+                let y_offset = wave * self.amplitude;
+                let final_y = (base_y + y_offset + center_y - line_count as f64 / 2.0).round() as i32;
+
+                if final_y < 0 || final_y as usize >= buf.height { continue; }
+                let fy = final_y as usize;
+
+                let color = if let Some(ref cb) = source_colors {
+                    if line_idx < cb.height && x < cb.width {
+                        cb.get(x, line_idx).color
+                    } else {
+                        Color::new(204, 204, 204)
+                    }
+                } else if !pal.is_empty() {
+                    pal[x % pal.len()]
+                } else {
+                    let hue = (x as f64 / buf.width.max(1) as f64 * 360.0 + t * 10.0) % 360.0;
+                    Color::from_hsv(hue, 1.0, 1.0)
+                };
+
+                buf.set(x, fy, Cell::new(ch, color));
+            }
+        }
+    }
+}
+
 // ── FadeEnvelope ──
 
 /// Fade in, hold, fade out — one smooth opacity envelope over an inner effect.
