@@ -263,18 +263,27 @@ impl Effect for Glitch {
 /// Spotlight sweep (angular).
 pub struct Radar {
     chars: Vec<Vec<char>>,
+    reverse: bool,
 }
 
 impl Radar {
     pub fn new(text: &str) -> Self {
-        Self { chars: text_to_lines(text) }
+        Self { chars: text_to_lines(text), reverse: false }
+    }
+
+    pub fn reversed(text: &str) -> Self {
+        Self { chars: text_to_lines(text), reverse: true }
     }
 }
 
 impl Effect for Radar {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
         let max_w = self.chars.iter().map(|l| l.len()).max().unwrap_or(1).max(1);
-        let sweep = (frame as f64 * 0.02) % 1.0;
+        let sweep = if self.reverse {
+            1.0 - (frame as f64 * 0.02) % 1.0
+        } else {
+            (frame as f64 * 0.02) % 1.0
+        };
 
         for (y, line) in self.chars.iter().enumerate() {
             for (x, &ch) in line.iter().enumerate() {

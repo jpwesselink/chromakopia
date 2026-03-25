@@ -106,9 +106,13 @@ async fn main() {
         // "The above copyright notice..." — shifted palette
         .block(&license_mid_text, FadeEnvelope::new(
             Scroll::new(&license_mid_text, fire_shifted.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2)
-                .with_color(Plasma::new(&license_mid_text, fire_shifted.clone(), 42.0)
-                    .with_y_offset(mid_y)
-                    .with_scene_size(total_scene_w, total_scene_h)),
+                .with_color(Blend::new(
+                    Plasma::new(&license_mid_text, fire_shifted.clone(), 42.0)
+                        .with_y_offset(mid_y)
+                        .with_scene_size(total_scene_w, total_scene_h),
+                    Radar::reversed(&license_mid_text),
+                    BlendMode::Screen,
+                )),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .line(Line::blank())
