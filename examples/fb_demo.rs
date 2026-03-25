@@ -60,9 +60,9 @@ async fn main() {
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .line(Line::blank())
-        // License — one block, spread from top, fire palette, no plasma
+        // License — DYCP wave with radar colors
         .block(&license_text, FadeEnvelope::new(
-            Spread::new(&license_text, fire.clone(), SpreadOrigin::Top, Easing::Elastic(0.25), fps * 3)
+            Dycp::new(&license_text, fire.clone(), 1.5, 0.1, 0.06)
                 .with_color(Radar::new(&license_text)),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
