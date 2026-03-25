@@ -46,7 +46,9 @@ async fn main() {
     let banner_height = BANNER.lines().count();
     let banner_text: String = lines[..banner_height].join("\n");
     let license_start = banner_height + 1;
-    let license_text: String = lines[license_start..].join("\n");
+    let mit_line = lines[license_start];
+    let rest_start = license_start + 1;
+    let license_rest: String = lines[rest_start..].join("\n");
 
     Scene::new()
         // Banner — spread from top with plasma + rainbow
@@ -60,10 +62,15 @@ async fn main() {
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .line(Line::blank())
-        // License — DYCP wave with radar colors
-        .block(&license_text, FadeEnvelope::new(
-            Dycp::new(&license_text, fire.clone(), 1.5, 0.1, 0.06)
-                .with_color(Radar::new(&license_text)),
+        // "MIT License" — DYCP wave with radar
+        .line(Line::full(mit_line, FadeEnvelope::new(
+            Dycp::new(mit_line, fire.clone(), 1.5, 0.15, 0.08)
+                .with_color(Radar::new(mit_line)),
+            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
+        )))
+        // Rest of license — spread from top
+        .block(&license_rest, FadeEnvelope::new(
+            Spread::new(&license_rest, fire.clone(), SpreadOrigin::Top, Easing::Elastic(0.25), fps * 3),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .run(Duration::from_secs(15))
