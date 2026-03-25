@@ -90,9 +90,9 @@ async fn main() {
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .line(Line::blank())
-        // License top — plasma with fire palette
+        // License top — spread from top
         .block(&license_top_text, FadeEnvelope::new(
-            Scroll::new(&license_top_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2)
+            Spread::new(&license_top_text, fire.clone(), SpreadOrigin::Top, Easing::Elastic(0.25), fps * 3)
                 .with_color(Blend::new(
                     Plasma::new(&license_top_text, fire.clone(), 42.0)
                         .with_y_offset(top_y)
@@ -103,9 +103,9 @@ async fn main() {
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .line(Line::blank())
-        // "The above copyright notice..." — shifted palette
+        // "The above copyright notice..." — spread from top
         .block(&license_mid_text, FadeEnvelope::new(
-            Scroll::new(&license_mid_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2)
+            Spread::new(&license_mid_text, fire.clone(), SpreadOrigin::Top, Easing::Elastic(0.25), fps * 3)
                 .with_color(Blend::new(
                     Plasma::new(&license_mid_text, fire.clone(), 42.0)
                         .with_y_offset(mid_y)
@@ -116,9 +116,9 @@ async fn main() {
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .line(Line::blank())
-        // Last alinea — blended plasma + radar Screen
+        // Last alinea — spread from top
         .block(&license_tail_text, FadeEnvelope::new(
-            Scroll::new(&license_tail_text, fire.clone(), ScrollDirection::Right, Easing::Elastic(0.25), fps * 2, 2)
+            Spread::new(&license_tail_text, fire.clone(), SpreadOrigin::Top, Easing::Elastic(0.25), fps * 3)
                 .with_color(Blend::new(
                     Plasma::new(&license_tail_text, fire.clone(), 42.0)
                         .with_y_offset(tail_y)
