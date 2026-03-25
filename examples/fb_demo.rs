@@ -41,16 +41,25 @@ async fn main() {
     let fps = 30;
     let total = fps * 15;
 
-    let full = pad(&format!("{}\n\n{}", BANNER, LICENSE));
+    // Split license: everything except last alinea, and the last alinea
+    let alineas: Vec<&str> = LICENSE.split("\n\n").collect();
+    let license_head = alineas[..alineas.len() - 1].join("\n\n");
+    let license_tail = alineas[alineas.len() - 1];
+
+    let full = pad(&format!("{}\n\n{}\n\n{}", BANNER, license_head, license_tail));
     let lines: Vec<&str> = full.lines().collect();
 
     let banner_height = BANNER.lines().count();
     let banner_text: String = lines[..banner_height].join("\n");
-    let license_start = banner_height + 1;
-    let license_text: String = lines[license_start..].join("\n");
+
+    let head_start = banner_height + 1;
+    let tail_height = license_tail.lines().count();
+    let head_end = lines.len() - tail_height;
+    let license_head_text: String = lines[head_start..head_end - 1].join("\n");
+    let license_tail_text: String = lines[head_end..].join("\n");
 
     Scene::new()
-        // Banner — scroll + plasma composite with fade envelope
+        // Banner — scroll + blended plasma/rainbow
         .block(&banner_text, FadeEnvelope::new(
             Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 0)
                 .with_color(Blend::new(
@@ -61,10 +70,21 @@ async fn main() {
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .line(Line::blank())
-        // License — scroll with plasma colors that travel with the text
-        .block(&license_text, FadeEnvelope::new(
-            Scroll::new(&license_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2)
-                .with_color(Plasma::new(&license_text, fire.clone(), 42.0)),
+        // License head — plasma
+        .block(&license_head_text, FadeEnvelope::new(
+            Scroll::new(&license_head_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2)
+                .with_color(Plasma::new(&license_head_text, fire.clone(), 42.0)),
+            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
+        ))
+        .line(Line::blank())
+        // Last alinea — blended plasma + glow, overlay mode
+        .block(&license_tail_text, FadeEnvelope::new(
+            Scroll::new(&license_tail_text, fire.clone(), ScrollDirection::Right, Easing::Elastic(0.25), fps * 2, 2)
+                .with_color(Blend::new(
+                    Plasma::new(&license_tail_text, fire.clone(), 42.0),
+                    Glow::new(&license_tail_text, storm.clone()),
+                    BlendMode::Overlay,
+                )),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .run(Duration::from_secs(15))
