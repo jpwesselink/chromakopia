@@ -54,19 +54,15 @@ async fn main() {
     Scene::new()
         // Banner — scroll + plasma composite with fade envelope
         .block(&banner_text, FadeEnvelope::new(
-            Composite::new(
-                Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 0),
-                Plasma::new(&banner_text, storm.clone(), 42.0),
-            ),
+            Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 0)
+                .with_color(Plasma::new(&banner_text, storm.clone(), 42.0)),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .line(Line::blank())
-        // License — scroll + plasma composite with fade envelope
+        // License — scroll with plasma colors that travel with the text
         .block(&license_text, FadeEnvelope::new(
-            Composite::new(
-                Scroll::new(&license_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2),
-                Plasma::new(&license_text, fire.clone(), 42.0),
-            ),
+            Scroll::new(&license_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2)
+                .with_color(Plasma::new(&license_text, fire.clone(), 42.0)),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .run(Duration::from_secs(15))

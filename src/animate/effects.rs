@@ -426,6 +426,9 @@ pub struct Scroll {
     easing: super::easing::Easing,
     total_frames: usize,
     line_delay: usize,
+    /// Optional color source — colors the text at rest positions,
+    /// then Scroll moves the colored cells. Colors travel with the text.
+    color_source: Option<Box<dyn Effect>>,
 }
 
 impl Scroll {
@@ -444,7 +447,15 @@ impl Scroll {
             easing,
             total_frames,
             line_delay,
+            color_source: None,
         }
+    }
+
+    /// Attach a color effect that paints the text at rest positions.
+    /// The colored cells then move with the scroll — colors stick to chars.
+    pub fn with_color(mut self, effect: impl Effect) -> Self {
+        self.color_source = Some(Box::new(effect));
+        self
     }
 }
 
@@ -457,10 +468,25 @@ impl Effect for Scroll {
         let term_width = crate::terminal::terminal_width();
         let pal = &self.palette;
 
-        for (y, line) in self.chars.iter().enumerate() {
+        // If we have a color source, render it at the text's REST positions first.
+        // This gives us a pre-colored buffer where colors are anchored to text positions.
+        let source_colors = self.color_source.as_ref().map(|cs| {
+            let mut color_buf = FrameBuffer::new(buf.width, buf.height);
+            // Write chars at their final (rest) positions
+            for (y, line) in self.chars.iter().enumerate() {
+                for (x, &ch) in line.iter().enumerate() {
+                    if x < color_buf.width && y < color_buf.height {
+                        color_buf.set(x, y, Cell::new(ch, Color::new(204, 204, 204)));
+                    }
+                }
+            }
+            cs.render(&mut color_buf, frame);
+            color_buf
+        });
+
+        for (y, _line) in self.chars.iter().enumerate() {
             if y >= buf.height { break; }
 
-            // Per-line stagger
             let line_frame = frame.saturating_sub(y * self.line_delay);
             let t = if self.total_frames == 0 {
                 1.0
@@ -471,7 +497,6 @@ impl Effect for Scroll {
             };
             let eased = self.easing.apply(t);
 
-            // Horizontal offset — always use terminal width so text travels full screen
             let h_offset = match self.direction {
                 ScrollDirection::Left | ScrollDirection::Right => {
                     let sign = if matches!(self.direction, ScrollDirection::Left) { 1.0 } else { -1.0 };
@@ -480,7 +505,6 @@ impl Effect for Scroll {
                 _ => 0,
             };
 
-            // Vertical offset
             let v_offset = match self.direction {
                 ScrollDirection::Top | ScrollDirection::Bottom => {
                     let sign = if matches!(self.direction, ScrollDirection::Top) { 1.0 } else { -1.0 };
@@ -493,11 +517,12 @@ impl Effect for Scroll {
 
             for x in 0..buf.width {
                 let src_x = x as i32 + h_offset;
-                let ch = if src_y >= 0
+                let in_bounds = src_y >= 0
                     && (src_y as usize) < line_count
                     && src_x >= 0
-                    && (src_x as usize) < max_width
-                {
+                    && (src_x as usize) < max_width;
+
+                let ch = if in_bounds {
                     let src_line = &self.chars[src_y as usize];
                     src_line.get(src_x as usize).copied().unwrap_or(' ')
                 } else {
@@ -506,9 +531,15 @@ impl Effect for Scroll {
 
                 let color = if ch.is_whitespace() {
                     Color::new(0, 0, 0)
+                } else if let Some(ref cb) = source_colors {
+                    // Color from the source buffer at the TEXT position (src_x, src_y)
+                    if in_bounds {
+                        cb.get(src_x as usize, src_y as usize).color
+                    } else {
+                        Color::new(204, 204, 204)
+                    }
                 } else if !pal.is_empty() {
-                    let idx = x % pal.len();
-                    pal[idx]
+                    pal[x % pal.len()]
                 } else {
                     let hue = (x as f64 / buf.width.max(1) as f64) * 360.0;
                     Color::from_hsv(hue, 0.9, 1.0)
