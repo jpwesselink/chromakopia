@@ -49,9 +49,9 @@ async fn main() {
     let license_text: String = lines[license_start..].join("\n");
 
     Scene::new()
-        // Banner — DYCP wave with plasma + rainbow colors
+        // Banner — spread from top with plasma + rainbow
         .block(&banner_text, FadeEnvelope::new(
-            Dycp::new(&banner_text, storm.clone(), 2.0, 0.15, 0.08)
+            Spread::new(&banner_text, storm.clone(), SpreadOrigin::Top, Easing::Elastic(0.15), fps * 3)
                 .with_color(Blend::new(
                     Plasma::new(&banner_text, storm.clone(), 42.0),
                     Rainbow::new(&banner_text),
