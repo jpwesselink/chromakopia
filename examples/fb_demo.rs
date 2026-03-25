@@ -62,7 +62,8 @@ async fn main() {
         .line(Line::blank())
         // License — one block, spread from top, fire palette, no plasma
         .block(&license_text, FadeEnvelope::new(
-            Spread::new(&license_text, fire.clone(), SpreadOrigin::Top, Easing::Elastic(0.25), fps * 3),
+            Spread::new(&license_text, fire.clone(), SpreadOrigin::Top, Easing::Elastic(0.25), fps * 3)
+                .with_color(Radar::new(&license_text)),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .run(Duration::from_secs(15))
