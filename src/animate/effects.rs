@@ -762,18 +762,23 @@ impl Composite {
 
 impl Effect for Composite {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        // Position effect sets chars
+        // Position effect places chars at their current (scrolled) positions
         self.position.render(buf, frame);
 
-        // Color effect renders into a scratch buffer
+        // Color effect renders into a scratch buffer at the same positions
         let mut color_buf = FrameBuffer::new(buf.width, buf.height);
-        self.color.render(&mut color_buf, frame);
-
-        // Apply colors from color_buf to non-space cells in buf
+        // Copy chars so the color effect sees text at current positions
         for y in 0..buf.height {
             for x in 0..buf.width {
-                let cell = buf.get(x, y);
-                if !cell.ch.is_whitespace() {
+                color_buf.set(x, y, buf.get(x, y));
+            }
+        }
+        self.color.render(&mut color_buf, frame);
+
+        // Apply colors from the color effect to visible chars
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                if !buf.get(x, y).ch.is_whitespace() {
                     buf.set_color(x, y, color_buf.get(x, y).color);
                 }
             }
