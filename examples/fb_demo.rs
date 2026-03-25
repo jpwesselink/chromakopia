@@ -64,8 +64,7 @@ async fn main() {
         .line(Line::blank())
         // "MIT License" — DYCP wave with radar
         .line(Line::full(mit_line, FadeEnvelope::new(
-            Dycp::new(mit_line, fire.clone(), 1.5, 0.15, 0.08)
-                .with_color(Radar::new(mit_line)),
+            Dycp::new(mit_line, fire.clone(), 1.5, 0.15, 0.08),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         )))
         // Rest of license — spread from top
