@@ -35,97 +35,34 @@ SOFTWARE.";
 async fn main() {
     let bg = chromakopia::bg_color();
     let fg = chromakopia::fg_color();
-    let bg_hex = bg.to_string();
     let storm = presets::storm().palette(256);
-    let fire = chromakopia::gradient(&["#ffffff", &bg_hex, "#ff69b4", "#00cccc", "#fffacd", "#8b4513", &bg_hex, "#ffffff"]).palette(256);
-    let fire_shifted = chromakopia::gradient(&["#fffacd", "#8b4513", &bg_hex, "#ffffff", &bg_hex, "#ff69b4", "#00cccc", "#fffacd"]).palette(256);
+    let fire = chromakopia::gradient(&["#ffffff", &bg.to_string(), "#ff69b4", "#00cccc", "#fffacd", "#8b4513", &bg.to_string(), "#ffffff"]).palette(256);
     let fps = 30;
     let total = fps * 15;
 
-    // Split license into three parts:
-    // - top: MIT License, Copyright, Permission...conditions
-    // - mid: "The above copyright notice..." paragraph
-    // - tail: "THE SOFTWARE IS PROVIDED..." paragraph
-    let alineas: Vec<&str> = LICENSE.split("\n\n").collect();
-    let license_top = alineas[..alineas.len() - 2].join("\n\n");
-    let license_mid = alineas[alineas.len() - 2];
-    let license_tail = alineas[alineas.len() - 1];
-
-    let full = pad(&format!("{}\n\n{}\n\n{}\n\n{}", BANNER, license_top, license_mid, license_tail));
+    let full = pad(&format!("{}\n\n{}", BANNER, LICENSE));
     let lines: Vec<&str> = full.lines().collect();
 
     let banner_height = BANNER.lines().count();
-    let top_height = license_top.lines().count();
-    let mid_height = license_mid.lines().count();
-    let tail_height = license_tail.lines().count();
-
     let banner_text: String = lines[..banner_height].join("\n");
-    let top_start = banner_height + 1;
-    let license_top_text: String = lines[top_start..top_start + top_height].join("\n");
-    let mid_start = top_start + top_height + 1;
-    let license_mid_text: String = lines[mid_start..mid_start + mid_height].join("\n");
-    let tail_start = mid_start + mid_height + 1;
-    let license_tail_text: String = lines[tail_start..tail_start + tail_height].join("\n");
-
-    // Y offsets for continuous plasma field
-    let banner_y: f64 = 0.0;
-    let top_y: f64 = (banner_height + 1) as f64;
-    let mid_y: f64 = (banner_height + 1 + top_height + 1) as f64;
-    let tail_y: f64 = (banner_height + 1 + top_height + 1 + mid_height + 1) as f64;
-
-    let total_scene_h = lines.len() as f64;
-    let total_scene_w = lines.iter().map(|l| l.len()).max().unwrap_or(80) as f64;
+    let license_start = banner_height + 1;
+    let license_text: String = lines[license_start..].join("\n");
 
     Scene::new()
-        // Banner — drops from top, lines overlay then spread out
+        // Banner — spread from top with plasma + rainbow
         .block(&banner_text, FadeEnvelope::new(
             Spread::new(&banner_text, storm.clone(), SpreadOrigin::Top, Easing::Elastic(0.15), fps * 3)
                 .with_color(Blend::new(
-                    Plasma::new(&banner_text, storm.clone(), 42.0)
-                        .with_y_offset(banner_y)
-                        .with_scene_size(total_scene_w, total_scene_h),
+                    Plasma::new(&banner_text, storm.clone(), 42.0),
                     Rainbow::new(&banner_text),
                     BlendMode::Screen,
                 )),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .line(Line::blank())
-        // License top — spread from top
-        .block(&license_top_text, FadeEnvelope::new(
-            Spread::new(&license_top_text, fire.clone(), SpreadOrigin::Top, Easing::Elastic(0.25), fps * 3)
-                .with_color(Blend::new(
-                    Plasma::new(&license_top_text, fire.clone(), 42.0)
-                        .with_y_offset(top_y)
-                        .with_scene_size(total_scene_w, total_scene_h),
-                    Radar::new(&license_top_text),
-                    BlendMode::Screen,
-                )),
-            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
-        ))
-        .line(Line::blank())
-        // "The above copyright notice..." — spread from top
-        .block(&license_mid_text, FadeEnvelope::new(
-            Spread::new(&license_mid_text, fire.clone(), SpreadOrigin::Top, Easing::Elastic(0.25), fps * 3)
-                .with_color(Blend::new(
-                    Plasma::new(&license_mid_text, fire.clone(), 42.0)
-                        .with_y_offset(mid_y)
-                        .with_scene_size(total_scene_w, total_scene_h),
-                    Radar::reversed(&license_mid_text),
-                    BlendMode::Screen,
-                )),
-            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
-        ))
-        .line(Line::blank())
-        // Last alinea — spread from top
-        .block(&license_tail_text, FadeEnvelope::new(
-            Spread::new(&license_tail_text, fire.clone(), SpreadOrigin::Top, Easing::Elastic(0.25), fps * 3)
-                .with_color(Blend::new(
-                    Plasma::new(&license_tail_text, fire.clone(), 42.0)
-                        .with_y_offset(tail_y)
-                        .with_scene_size(total_scene_w, total_scene_h),
-                    Radar::new(&license_tail_text),
-                    BlendMode::Screen,
-                )),
+        // License — one block, spread from top, fire palette, no plasma
+        .block(&license_text, FadeEnvelope::new(
+            Spread::new(&license_text, fire.clone(), SpreadOrigin::Top, Easing::Elastic(0.25), fps * 3),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .run(Duration::from_secs(15))
