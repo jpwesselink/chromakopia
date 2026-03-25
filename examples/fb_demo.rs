@@ -38,6 +38,7 @@ async fn main() {
     let bg_hex = bg.to_string();
     let storm = presets::storm().palette(256);
     let fire = chromakopia::gradient(&["#ffffff", &bg_hex, "#ff69b4", "#00cccc", "#fffacd", "#8b4513", &bg_hex, "#ffffff"]).palette(256);
+    let fire_shifted = chromakopia::gradient(&["#fffacd", "#8b4513", &bg_hex, "#ffffff", &bg_hex, "#ff69b4", "#00cccc", "#fffacd"]).palette(256);
     let fps = 30;
     let total = fps * 15;
 
@@ -83,8 +84,8 @@ async fn main() {
         .line(Line::blank())
         // License head — plasma
         .block(&license_head_text, FadeEnvelope::new(
-            Scroll::new(&license_head_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2)
-                .with_color(Plasma::new(&license_head_text, fire.clone(), 42.0)
+            Scroll::new(&license_head_text, fire_shifted.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2)
+                .with_color(Plasma::new(&license_head_text, fire_shifted.clone(), 42.0)
                     .with_y_offset(head_y)
                     .with_scene_size(total_scene_w, total_scene_h)),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
