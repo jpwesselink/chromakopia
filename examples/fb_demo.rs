@@ -42,28 +42,36 @@ async fn main() {
     let fps = 30;
     let total = fps * 15;
 
-    // Split license: everything except last alinea, and the last alinea
+    // Split license into three parts:
+    // - top: MIT License, Copyright, Permission...conditions
+    // - mid: "The above copyright notice..." paragraph
+    // - tail: "THE SOFTWARE IS PROVIDED..." paragraph
     let alineas: Vec<&str> = LICENSE.split("\n\n").collect();
-    let license_head = alineas[..alineas.len() - 1].join("\n\n");
+    let license_top = alineas[..alineas.len() - 2].join("\n\n");
+    let license_mid = alineas[alineas.len() - 2];
     let license_tail = alineas[alineas.len() - 1];
 
-    let full = pad(&format!("{}\n\n{}\n\n{}", BANNER, license_head, license_tail));
+    let full = pad(&format!("{}\n\n{}\n\n{}\n\n{}", BANNER, license_top, license_mid, license_tail));
     let lines: Vec<&str> = full.lines().collect();
 
     let banner_height = BANNER.lines().count();
-    let banner_text: String = lines[..banner_height].join("\n");
-
-    let head_start = banner_height + 1;
+    let top_height = license_top.lines().count();
+    let mid_height = license_mid.lines().count();
     let tail_height = license_tail.lines().count();
-    let head_end = lines.len() - tail_height;
-    let license_head_text: String = lines[head_start..head_end - 1].join("\n");
-    let license_tail_text: String = lines[head_end..].join("\n");
+
+    let banner_text: String = lines[..banner_height].join("\n");
+    let top_start = banner_height + 1;
+    let license_top_text: String = lines[top_start..top_start + top_height].join("\n");
+    let mid_start = top_start + top_height + 1;
+    let license_mid_text: String = lines[mid_start..mid_start + mid_height].join("\n");
+    let tail_start = mid_start + mid_height + 1;
+    let license_tail_text: String = lines[tail_start..tail_start + tail_height].join("\n");
 
     // Y offsets for continuous plasma field
-    let license_head_height = license_head_text.lines().count();
     let banner_y: f64 = 0.0;
-    let head_y: f64 = (banner_height + 1) as f64;
-    let tail_y: f64 = (banner_height + 1 + license_head_height + 1) as f64;
+    let top_y: f64 = (banner_height + 1) as f64;
+    let mid_y: f64 = (banner_height + 1 + top_height + 1) as f64;
+    let tail_y: f64 = (banner_height + 1 + top_height + 1 + mid_height + 1) as f64;
 
     let total_scene_h = lines.len() as f64;
     let total_scene_w = lines.iter().map(|l| l.len()).max().unwrap_or(80) as f64;
@@ -82,16 +90,25 @@ async fn main() {
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .line(Line::blank())
-        // License head — plasma
-        .block(&license_head_text, FadeEnvelope::new(
-            Scroll::new(&license_head_text, fire_shifted.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2)
-                .with_color(Plasma::new(&license_head_text, fire_shifted.clone(), 42.0)
-                    .with_y_offset(head_y)
+        // License top — plasma with fire palette
+        .block(&license_top_text, FadeEnvelope::new(
+            Scroll::new(&license_top_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2)
+                .with_color(Plasma::new(&license_top_text, fire.clone(), 42.0)
+                    .with_y_offset(top_y)
                     .with_scene_size(total_scene_w, total_scene_h)),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .line(Line::blank())
-        // Last alinea — blended plasma + glow, overlay mode
+        // "The above copyright notice..." — shifted palette
+        .block(&license_mid_text, FadeEnvelope::new(
+            Scroll::new(&license_mid_text, fire_shifted.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2)
+                .with_color(Plasma::new(&license_mid_text, fire_shifted.clone(), 42.0)
+                    .with_y_offset(mid_y)
+                    .with_scene_size(total_scene_w, total_scene_h)),
+            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
+        ))
+        .line(Line::blank())
+        // Last alinea — blended plasma + radar Screen
         .block(&license_tail_text, FadeEnvelope::new(
             Scroll::new(&license_tail_text, fire.clone(), ScrollDirection::Right, Easing::Elastic(0.25), fps * 2, 2)
                 .with_color(Blend::new(
