@@ -29,5 +29,9 @@ name = "plasma"
 path = "examples/plasma.rs"
 
 [[example]]
+name = "license"
+path = "examples/license.rs"
+
+[[example]]
 name = "fb_demo"
 path = "examples/fb_demo.rs"
