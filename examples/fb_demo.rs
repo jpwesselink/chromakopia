@@ -58,12 +58,23 @@ async fn main() {
     let license_head_text: String = lines[head_start..head_end - 1].join("\n");
     let license_tail_text: String = lines[head_end..].join("\n");
 
+    // Y offsets for continuous plasma field
+    let license_head_height = license_head_text.lines().count();
+    let banner_y: f64 = 0.0;
+    let head_y: f64 = (banner_height + 1) as f64;
+    let tail_y: f64 = (banner_height + 1 + license_head_height + 1) as f64;
+
+    let total_scene_h = lines.len() as f64;
+    let total_scene_w = lines.iter().map(|l| l.len()).max().unwrap_or(80) as f64;
+
     Scene::new()
         // Banner — scroll + blended plasma/rainbow
         .block(&banner_text, FadeEnvelope::new(
             Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 0)
                 .with_color(Blend::new(
-                    Plasma::new(&banner_text, storm.clone(), 42.0),
+                    Plasma::new(&banner_text, storm.clone(), 42.0)
+                        .with_y_offset(banner_y)
+                        .with_scene_size(total_scene_w, total_scene_h),
                     Rainbow::new(&banner_text),
                     BlendMode::Screen,
                 )),
@@ -73,7 +84,9 @@ async fn main() {
         // License head — plasma
         .block(&license_head_text, FadeEnvelope::new(
             Scroll::new(&license_head_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2)
-                .with_color(Plasma::new(&license_head_text, fire.clone(), 42.0)),
+                .with_color(Plasma::new(&license_head_text, fire.clone(), 42.0)
+                    .with_y_offset(head_y)
+                    .with_scene_size(total_scene_w, total_scene_h)),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .line(Line::blank())
@@ -81,7 +94,9 @@ async fn main() {
         .block(&license_tail_text, FadeEnvelope::new(
             Scroll::new(&license_tail_text, fire.clone(), ScrollDirection::Right, Easing::Elastic(0.25), fps * 2, 2)
                 .with_color(Blend::new(
-                    Plasma::new(&license_tail_text, fire.clone(), 42.0),
+                    Plasma::new(&license_tail_text, fire.clone(), 42.0)
+                        .with_y_offset(tail_y)
+                        .with_scene_size(total_scene_w, total_scene_h),
                     Glow::new(&license_tail_text, storm.clone()),
                     BlendMode::Overlay,
                 )),
