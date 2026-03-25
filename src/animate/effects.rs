@@ -770,6 +770,100 @@ impl Effect for DelayedStart {
     }
 }
 
+// ── Blend ──
+
+/// How two color layers are combined.
+#[derive(Debug, Clone, Copy)]
+pub enum BlendMode {
+    /// B replaces A.
+    Normal,
+    /// A * B / 255 — darker, moody.
+    Multiply,
+    /// 255 - (255-A)(255-B)/255 — lighter, glowy.
+    Screen,
+    /// Multiply if dark, Screen if light — contrast boost.
+    Overlay,
+    /// min(A + B, 255) — blown out, neon.
+    Add,
+    /// (A + B) / 2 — soft mix.
+    Average,
+}
+
+impl BlendMode {
+    fn apply(self, a: u8, b: u8) -> u8 {
+        match self {
+            BlendMode::Normal => b,
+            BlendMode::Multiply => ((a as u16 * b as u16) / 255) as u8,
+            BlendMode::Screen => 255 - (((255 - a as u16) * (255 - b as u16)) / 255) as u8,
+            BlendMode::Overlay => {
+                if a < 128 {
+                    ((2 * a as u16 * b as u16) / 255) as u8
+                } else {
+                    255 - ((2 * (255 - a as u16) * (255 - b as u16)) / 255) as u8
+                }
+            }
+            BlendMode::Add => (a as u16 + b as u16).min(255) as u8,
+            BlendMode::Average => ((a as u16 + b as u16) / 2) as u8,
+        }
+    }
+
+    fn blend(self, a: Color, b: Color) -> Color {
+        Color::new(
+            self.apply(a.r, b.r),
+            self.apply(a.g, b.g),
+            self.apply(a.b, b.b),
+        )
+    }
+}
+
+/// Blend two color effects together.
+///
+/// Both effects render into separate buffers, then their colors are
+/// combined per-cell using the blend mode.
+pub struct Blend {
+    a: Box<dyn Effect>,
+    b: Box<dyn Effect>,
+    mode: BlendMode,
+}
+
+impl Blend {
+    pub fn new(a: impl Effect, b: impl Effect, mode: BlendMode) -> Self {
+        Self {
+            a: Box::new(a),
+            b: Box::new(b),
+            mode,
+        }
+    }
+}
+
+impl Effect for Blend {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        // Render A into buf
+        self.a.render(buf, frame);
+
+        // Render B into a scratch buffer
+        let mut buf_b = FrameBuffer::new(buf.width, buf.height);
+        // Copy chars so B sees the same text layout
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                buf_b.set(x, y, buf.get(x, y));
+            }
+        }
+        self.b.render(&mut buf_b, frame);
+
+        // Blend colors per cell
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                let cell = buf.get(x, y);
+                if cell.ch.is_whitespace() { continue; }
+                let color_a = cell.color;
+                let color_b = buf_b.get(x, y).color;
+                buf.set_color(x, y, self.mode.blend(color_a, color_b));
+            }
+        }
+    }
+}
+
 // ── Composite ──
 
 /// Combine two effects: one controls character positions, the other controls colors.

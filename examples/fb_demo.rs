@@ -31,8 +31,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.";
 
-const CREDIT: &str = "(c) 2026 JP Wesselink";
-
 #[tokio::main]
 async fn main() {
     let bg = chromakopia::bg_color();
@@ -55,7 +53,11 @@ async fn main() {
         // Banner — scroll + plasma composite with fade envelope
         .block(&banner_text, FadeEnvelope::new(
             Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 0)
-                .with_color(Plasma::new(&banner_text, storm.clone(), 42.0)),
+                .with_color(Blend::new(
+                    Plasma::new(&banner_text, storm.clone(), 42.0),
+                    Rainbow::new(&banner_text),
+                    BlendMode::Screen,
+                )),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
         .line(Line::blank())
