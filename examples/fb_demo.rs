@@ -98,7 +98,7 @@ async fn main() {
                         .with_y_offset(tail_y)
                         .with_scene_size(total_scene_w, total_scene_h),
                     Radar::new(&license_tail_text),
-                    BlendMode::Overlay,
+                    BlendMode::Screen,
                 )),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
         ))
