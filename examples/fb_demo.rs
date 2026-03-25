@@ -97,7 +97,7 @@ async fn main() {
                     Plasma::new(&license_tail_text, fire.clone(), 42.0)
                         .with_y_offset(tail_y)
                         .with_scene_size(total_scene_w, total_scene_h),
-                    Glow::new(&license_tail_text, storm.clone()),
+                    Pulse::new(&license_tail_text),
                     BlendMode::Overlay,
                 )),
             fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
