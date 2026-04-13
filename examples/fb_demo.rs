@@ -1,12 +1,18 @@
 use chromakopia::animate::*;
-use chromakopia::{pad, presets};
-use std::time::Duration;
+use chromakopia::{pad, center, presets};
 
-const BANNER: &str = r#"   ________  ______  ____  __  ______    __ ______  ____  _______
-  / ____/ / / / __ \/ __ \/  |/  /   |  / //_/ __ \/ __ \/  _/   |
- / /   / /_/ / /_/ / / / / /|_/ / /| | / ,< / / / / /_/ // // /| |
-/ /___/ __  / _, _/ /_/ / /  / / ___ |/ /| / /_/ / ____// // ___ |
-\____/_/ /_/_/ |_|\____/_/  /_/_/  |_/_/ |_\____/_/   /___/_/  |_|"#;
+
+const BANNER: &str = "\
+          oooo                                                       oooo                              o8o
+          `888                                                       `888                              `\"'
+ .ooooo.   888 .oo.   oooo d8b  .ooooo.  ooo. .oo.  .oo.    .oooo.    888  oooo   .ooooo.  oo.ooooo.  oooo   .oooo.
+d88' `\"Y8  888P\"Y88b  `888\"\"8P d88' `88b `888P\"Y88bP\"Y88b  `P  )88b   888 .8P'   d88' `88b  888' `88b `888  `P  )88b
+888        888   888   888     888   888  888   888   888   .oP\"888   888888.    888   888  888   888  888   .oP\"888
+888   .o8  888   888   888     888   888  888   888   888  d8(  888   888 `88b.  888   888  888   888  888  d8(  888
+`Y8bod8P' o888o o888o d888b    `Y8bod8P' o888o o888o o888o `Y888\"\"8o o888o o888o `Y8bod8P'  888bod8P' o888o `Y888\"\"8o
+                                                                                            888
+                                                                                           o888o";
+
 
 const LICENSE: &str = "\
 MIT License
@@ -35,43 +41,87 @@ SOFTWARE.";
 async fn main() {
     let bg = chromakopia::bg_color();
     let fg = chromakopia::fg_color();
-    let storm = presets::storm().palette(256);
     let fire = chromakopia::gradient(&["#ffffff", &bg.to_string(), "#ff69b4", "#00cccc", "#fffacd", "#8b4513", &bg.to_string(), "#ffffff"]).palette(256);
-    let fps = 30;
-    let total = fps * 15;
 
-    let full = pad(&format!("{}\n\n{}", BANNER, LICENSE));
-    let lines: Vec<&str> = full.lines().collect();
+    let license_text = pad(&center(LICENSE));
+    let banner_text = BANNER.lines()
+        .map(|l| format!("    {}    ", l))
+        .collect::<Vec<_>>()
+        .join("\n");
 
-    let banner_height = BANNER.lines().count();
-    let banner_text: String = lines[..banner_height].join("\n");
-    let license_start = banner_height + 1;
-    let mit_line = lines[license_start];
-    let rest_start = license_start + 1;
-    let license_rest: String = lines[rest_start..].join("\n");
+    let term_width = chromakopia::terminal_width();
+    let dycp_amp = 8.0;
+    let banner_height = BANNER.lines().count() + 2;
+    let license_height = license_text.lines().count();
+    let banner_y_offset = ((license_height as i32 - banner_height as i32) / 2).max(0);
+    let dycp_height = banner_height + dycp_amp as usize;
 
-    Scene::new()
-        // Banner — spread from top with plasma + rainbow
-        .block(&banner_text, FadeEnvelope::new(
-            Spread::new(&banner_text, storm.clone(), SpreadOrigin::Top, Easing::Elastic(0.15), fps * 3)
-                .with_color(Blend::new(
-                    Plasma::new(&banner_text, storm.clone(), 42.0),
-                    Rainbow::new(&banner_text),
-                    BlendMode::Screen,
-                )),
-            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
-        ))
-        .line(Line::blank())
-        // "MIT License" — DYCP wave with radar
-        .line(Line::full(mit_line, FadeEnvelope::new(
-            Dycp::new(mit_line, fire.clone(), 1.5, 0.15, 0.08),
-            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
-        )))
-        // Rest of license — spread from top
-        .block(&license_rest, FadeEnvelope::new(
-            Spread::new(&license_rest, fire.clone(), SpreadOrigin::Top, Easing::Elastic(0.25), fps * 3),
-            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
-        ))
-        .run(Duration::from_secs(15))
-        .await;
+    let padded_banner = format!("\n{}\n", banner_text);
+    let banner_width = padded_banner.lines().map(|l| l.len()).max().unwrap_or(0);
+    let scroll_distance = term_width + banner_width;
+    let scroll_secs = 13.0; // finish ~2s before 15s end
+    let scroll_speed = scroll_distance as f64 / (scroll_secs * 30.0);
+
+    let scene = Scene::new()
+        // CHROMAKOPIA banner — DYCP, gold, scrolls in from right
+        .overlay(FadeEnvelope::new(
+            Dycp::new(&padded_banner)
+                .amplitude(dycp_amp)
+                .frequency(0.08)
+                .speed(0.07)
+                .palette(presets::mist().palette(256))
+                .scroll(scroll_speed)
+                .scroll_in(-(term_width as i64))
+                .wave_delay((scroll_secs * 30.0 * 0.2) as usize)
+                .shadow(1, 1, chromakopia::Color::new(40, 40, 40))
+                .color(Chain::new()
+                    .then(3.0, Transition::new(
+                        Rainbow::new(),
+                        Radar::new(),
+                        3.0, Easing::EaseInOut,
+                    ))
+                    .then(3.0, Transition::new(
+                        Radar::new(),
+                        Plasma::new().palette(fire.clone()).seed(42.0),
+                        3.0, Easing::EaseInOut,
+                    ))
+                    .then(3.0, Transition::new(
+                        Plasma::new().palette(fire.clone()).seed(42.0),
+                        Glow::new().palette(presets::mist().palette(256)),
+                        3.0, Easing::EaseInOut,
+                    ))
+                    .then(3.0, Transition::new(
+                        Glow::new().palette(presets::mist().palette(256)),
+                        Neon::new(),
+                        3.0, Easing::EaseInOut,
+                    ))
+                    .then(3.0, Neon::new())
+                ),
+        )
+            .total(15.0)
+            .fade_in(1.0, Easing::EaseOut)
+            .fade_out(2.0, Easing::EaseInOut)
+            .from_color(fg),
+        dycp_height, banner_y_offset)
+        // License text — delayed spread from top with plasma, starts as bg color
+        .add({
+            let wave_delay = (scroll_secs * 30.0 * 0.2) as usize;
+            let spread_delay = wave_delay * 2;
+            FadeEnvelope::new(
+                DelayedStart::new(spread_delay,
+                    Spread::new(&license_text)
+                        .origin(SpreadOrigin::Top)
+                        .easing(Easing::Elastic(0.25))
+                        .duration(5.0)
+                        .color(Plasma::new().palette(fire.clone()).seed(42.0).palette_ease(8.0)),
+                ),
+            )
+                .total(15.0)
+                .fade_in(1.0, Easing::EaseOut)
+                .fade_out(2.0, Easing::EaseInOut)
+                .from_color(bg)
+                .fade_out_color(chromakopia::Color::new(255, 255, 255))
+        })
+    ;
+    scene.run(15.0).await;
 }

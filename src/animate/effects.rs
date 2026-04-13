@@ -4,36 +4,92 @@
 //! number, writes `(char, Color)` cells directly. No ANSI strings, no parsing.
 
 use crate::color::Color;
-use super::framebuffer::{Cell, Effect, FrameBuffer};
+use super::framebuffer::{Cell, Effect, EffectExt, On, FrameBuffer, AnimationHandle};
+
+/// Adds `.spawn()`, `.run()`, `.frame()` to effects that carry their own text.
+macro_rules! impl_text_effect_convenience {
+    ($ty:ty) => {
+        impl $ty {
+            /// Spawn in a terminal area. Runs until `.stop()` or `.fade_out()`.
+            pub fn spawn(self) -> AnimationHandle {
+                let (w, h) = <Self as Effect>::size(&self);
+                super::framebuffer::spawn_effect(self, w.max(1), h.max(1), 1.0)
+            }
+
+            /// Run in a terminal area for `seconds`, then stop.
+            pub async fn run(self, seconds: f64) {
+                let (w, h) = <Self as Effect>::size(&self);
+                super::framebuffer::run_effect(
+                    self, w.max(1), h.max(1),
+                    std::time::Duration::from_secs_f64(seconds), 1.0,
+                ).await;
+            }
+
+            /// Render a single frame to an ANSI string.
+            pub fn frame(&self, frame: usize) -> String {
+                let (w, h) = <Self as Effect>::size(self);
+                let mut buf = FrameBuffer::new(w.max(1), h.max(1));
+                <Self as Effect>::render(self, &mut buf, frame);
+                buf.to_ansi_string()
+            }
+        }
+    };
+}
 
 /// Helper: parse text into a Vec of char-lines.
 fn text_to_lines(text: &str) -> Vec<Vec<char>> {
     text.split('\n').map(|l| l.chars().collect()).collect()
 }
 
-// ── Rainbow ──
-
-/// Rainbow HSV hue rotation across text.
-pub struct Rainbow {
-    chars: Vec<Vec<char>>,
+/// Helper: compute (width, height) from char-lines.
+fn chars_size(chars: &[Vec<char>]) -> (usize, usize) {
+    let h = chars.len();
+    let w = chars.iter().map(|l| l.len()).max().unwrap_or(0);
+    (w, h)
 }
 
-impl Rainbow {
-    pub fn new(text: &str) -> Self {
-        Self { chars: text_to_lines(text) }
+// ── Static text ──
+
+/// Static color — sets all non-space cells to one color. No animation.
+pub struct Solid(pub Color);
+
+impl Effect for Solid {
+    fn render(&self, buf: &mut FrameBuffer, _frame: usize) {
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                if buf.get(x, y).ch != ' ' {
+                    buf.set_color(x, y, self.0);
+                }
+            }
+        }
     }
+}
+
+/// Static colored text for use in scenes.
+pub fn text(s: &str, color: Color) -> On<Solid> {
+    EffectExt::on(Solid(color), s)
+}
+
+// ── Rainbow ──
+
+/// Rainbow HSV hue rotation. Colors whatever text is in the buffer.
+pub struct Rainbow;
+
+impl Rainbow {
+    pub fn new() -> Self { Self }
+    pub fn on(text: &str) -> On<Self> { EffectExt::on(Self, text) }
 }
 
 impl Effect for Rainbow {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
         let hue_offset = (frame * 5 % 360) as f64;
-        let max_w = self.chars.iter().map(|l| l.len()).max().unwrap_or(1).max(1);
+        let w = buf.content_width();
 
-        for (y, line) in self.chars.iter().enumerate() {
-            for (x, &ch) in line.iter().enumerate() {
-                if x >= buf.width || y >= buf.height { continue; }
-                let hue = (hue_offset + (x as f64 / max_w as f64) * 360.0) % 360.0;
-                buf.set(x, y, Cell::new(ch, Color::from_hsv(hue, 1.0, 1.0)));
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                if buf.get(x, y).ch == ' ' { continue; }
+                let hue = (hue_offset + (x as f64 / w as f64) * 360.0) % 360.0;
+                buf.set_color(x, y, Color::from_hsv(hue, 1.0, 1.0));
             }
         }
     }
@@ -43,31 +99,34 @@ impl Effect for Rainbow {
 
 /// Sweeping spotlight that travels through a gradient palette.
 pub struct Glow {
-    chars: Vec<Vec<char>>,
     palette: Vec<Color>,
 }
 
 impl Glow {
-    pub fn new(text: &str, palette: Vec<Color>) -> Self {
-        Self {
-            chars: text_to_lines(text),
-            palette,
-        }
+    pub fn new() -> Self {
+        Self { palette: crate::presets::rainbow().palette(256) }
+    }
+
+    pub fn on(text: &str) -> On<Self> { EffectExt::on(Self::new(), text) }
+
+    pub fn palette(mut self, palette: Vec<Color>) -> Self {
+        self.palette = palette;
+        self
     }
 }
 
 impl Effect for Glow {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        let max_w = self.chars.iter().map(|l| l.len()).max().unwrap_or(1).max(1);
+        let w = buf.content_width();
         let pal = &self.palette;
         if pal.is_empty() { return; }
 
         let spotlight = (frame as f64 * 0.02).sin() * 0.5 + 0.5;
 
-        for (y, line) in self.chars.iter().enumerate() {
-            for (x, &ch) in line.iter().enumerate() {
-                if x >= buf.width || y >= buf.height { continue; }
-                let pos = x as f64 / max_w as f64;
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                if buf.get(x, y).ch == ' ' { continue; }
+                let pos = x as f64 / w as f64;
                 let dist = (pos - spotlight).abs();
                 let brightness = (1.0 - dist * 3.0).max(0.15);
 
@@ -81,9 +140,17 @@ impl Effect for Glow {
                     (base.g as f64 * brightness) as u8,
                     (base.b as f64 * brightness) as u8,
                 );
-                buf.set(x, y, Cell::new(ch, color));
+                buf.set_color(x, y, color);
             }
         }
+    }
+}
+
+/// Builder forwarding — so `Glow::on("text").palette(p)` works.
+impl On<Glow> {
+    pub fn palette(mut self, palette: Vec<Color>) -> Self {
+        self.effect = self.effect.palette(palette);
+        self
     }
 }
 
@@ -91,38 +158,54 @@ impl Effect for Glow {
 
 /// Demoscene plasma: overlapping sine waves create a flowing 2D color field.
 pub struct Plasma {
-    chars: Vec<Vec<char>>,
     palette: Vec<Color>,
     seed: f64,
     y_offset: f64,
-    /// Total scene height — used for radial ripple center.
-    /// If 0, uses buf.height.
     total_height: f64,
-    /// Total scene width — used for radial ripple center.
-    /// If 0, uses buf.width.
     total_width: f64,
+    palette_ease_frames: usize,
 }
 
 impl Plasma {
-    pub fn new(text: &str, palette: Vec<Color>, seed: f64) -> Self {
+    pub fn new() -> Self {
+        use rand::Rng;
         Self {
-            chars: text_to_lines(text),
-            palette,
-            seed,
+            palette: crate::presets::storm().palette(256),
+            seed: rand::rng().random::<f64>() * 1000.0,
             y_offset: 0.0,
             total_height: 0.0,
             total_width: 0.0,
+            palette_ease_frames: 0,
         }
     }
 
-    pub fn with_y_offset(mut self, y_offset: f64) -> Self {
+    pub fn on(text: &str) -> On<Self> { EffectExt::on(Self::new(), text) }
+
+    pub fn palette(mut self, palette: Vec<Color>) -> Self {
+        self.palette = palette;
+        self
+    }
+
+    pub fn seed(mut self, seed: f64) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    /// Gradually reveal palette colors over N frames.
+    /// Starts with only the first color, ends with the full palette.
+    pub fn palette_ease(mut self, seconds: f64) -> Self {
+        self.palette_ease_frames = super::framebuffer::secs_to_frames(seconds);
+        self
+    }
+
+    pub fn y_offset(mut self, y_offset: f64) -> Self {
         self.y_offset = y_offset;
         self
     }
 
     /// Set the total scene dimensions for radial ripple centering.
     /// Without this, each sub-buffer computes its own center.
-    pub fn with_scene_size(mut self, width: f64, height: f64) -> Self {
+    pub fn scene_size(mut self, width: f64, height: f64) -> Self {
         self.total_width = width;
         self.total_height = height;
         self
@@ -138,12 +221,11 @@ impl Effect for Plasma {
         let scene_w = if self.total_width > 0.0 { self.total_width } else { buf.width as f64 };
         let scene_h = if self.total_height > 0.0 { self.total_height } else { buf.height as f64 };
 
-        for (y, line) in self.chars.iter().enumerate() {
-            if y >= buf.height { break; }
+        for y in 0..buf.height {
             let yf = y as f64 + self.y_offset;
 
-            for (x, &ch) in line.iter().enumerate() {
-                if x >= buf.width { break; }
+            for x in 0..buf.width {
+                if buf.get(x, y).ch == ' ' { continue; }
 
                 let xf = x as f64;
                 let v1 = (xf * 0.08 + t + self.seed).sin();
@@ -157,34 +239,62 @@ impl Effect for Plasma {
 
                 let v = (v1 + v2 + v3 + v4) * 0.25;
                 let idx = ((v + 1.0) * 0.5 + t * 0.05).rem_euclid(1.0);
-                let fi = idx * (pal.len() - 1) as f64;
+                let max_pal = if self.palette_ease_frames > 0 && frame < self.palette_ease_frames {
+                    let progress = frame as f64 / self.palette_ease_frames as f64;
+                    let eased = progress * progress;
+                    (eased * (pal.len() - 1) as f64).max(0.0)
+                } else {
+                    (pal.len() - 1) as f64
+                };
+                let fi = idx * max_pal;
                 let lo = (fi.floor() as usize).min(pal.len() - 1);
                 let hi = (lo + 1).min(pal.len() - 1);
                 let frac = fi - lo as f64;
                 let color = Color::lerp_rgb(pal[lo], pal[hi], frac);
 
-                buf.set(x, y, Cell::new(ch, color));
+                buf.set_color(x, y, color);
             }
         }
+    }
+}
+
+/// Builder forwarding — so `Plasma::on("text").palette(p).seed(s)` works.
+impl On<Plasma> {
+    pub fn palette(mut self, palette: Vec<Color>) -> Self {
+        self.effect = self.effect.palette(palette);
+        self
+    }
+    pub fn seed(mut self, seed: f64) -> Self {
+        self.effect = self.effect.seed(seed);
+        self
+    }
+    pub fn palette_ease(mut self, seconds: f64) -> Self {
+        self.effect = self.effect.palette_ease(seconds);
+        self
+    }
+    pub fn y_offset(mut self, y_offset: f64) -> Self {
+        self.effect = self.effect.y_offset(y_offset);
+        self
+    }
+    pub fn scene_size(mut self, width: f64, height: f64) -> Self {
+        self.effect = self.effect.scene_size(width, height);
+        self
     }
 }
 
 // ── Pulse ──
 
 /// Red highlight expanding from center then contracting.
-pub struct Pulse {
-    chars: Vec<Vec<char>>,
-}
+pub struct Pulse;
 
 impl Pulse {
-    pub fn new(text: &str) -> Self {
-        Self { chars: text_to_lines(text) }
-    }
+    pub fn new() -> Self { Self }
+    pub fn on(text: &str) -> On<Self> { EffectExt::on(Self, text) }
 }
 
 impl Effect for Pulse {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        let max_w = self.chars.iter().map(|l| l.len()).max().unwrap_or(1).max(1);
+        let w = buf.content_width();
         let cycle = (frame % 120) + 1;
         let transition = 6;
 
@@ -201,10 +311,10 @@ impl Effect for Pulse {
         };
         let half = progress / 2.0;
 
-        for (y, line) in self.chars.iter().enumerate() {
-            for (x, &ch) in line.iter().enumerate() {
-                if x >= buf.width || y >= buf.height { continue; }
-                let pos = x as f64 / max_w as f64;
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                if buf.get(x, y).ch == ' ' { continue; }
+                let pos = x as f64 / w as f64;
                 let dist = (pos - 0.5).abs();
                 let color = if dist < half {
                     on
@@ -212,7 +322,7 @@ impl Effect for Pulse {
                     let t = ((dist - half) / 0.1).min(1.0);
                     Color::lerp_rgb(on, off, t)
                 };
-                buf.set(x, y, Cell::new(ch, color));
+                buf.set_color(x, y, color);
             }
         }
     }
@@ -232,7 +342,7 @@ impl Glitch {
 }
 
 impl Effect for Glitch {
-    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+    fn render(&self, buf: &mut FrameBuffer, _frame: usize) {
         use rand::Rng;
         let mut rng = rand::rng();
         let glitch_chars = "!@#$%^&*<>[]{}|/\\~`";
@@ -249,46 +359,42 @@ impl Effect for Glitch {
                         rng.random_range(0..=100),
                     ))
                 } else {
-                    (ch, Color::new(0xcc, 0xcc, 0xcc))
+                    (ch, super::framebuffer::DEFAULT_TEXT_COLOR)
                 };
                 buf.set(x, y, Cell::new(out_ch, color));
             }
         }
-        let _ = frame; // glitch is random per frame, frame unused
     }
+
+    fn size(&self) -> (usize, usize) { chars_size(&self.chars) }
 }
 
 // ── Radar ──
 
 /// Spotlight sweep (angular).
 pub struct Radar {
-    chars: Vec<Vec<char>>,
     reverse: bool,
 }
 
 impl Radar {
-    pub fn new(text: &str) -> Self {
-        Self { chars: text_to_lines(text), reverse: false }
-    }
-
-    pub fn reversed(text: &str) -> Self {
-        Self { chars: text_to_lines(text), reverse: true }
-    }
+    pub fn new() -> Self { Self { reverse: false } }
+    pub fn reversed() -> Self { Self { reverse: true } }
+    pub fn on(text: &str) -> On<Self> { EffectExt::on(Self::new(), text) }
 }
 
 impl Effect for Radar {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        let max_w = self.chars.iter().map(|l| l.len()).max().unwrap_or(1).max(1);
+        let w = buf.content_width();
         let sweep = if self.reverse {
             1.0 - (frame as f64 * 0.02) % 1.0
         } else {
             (frame as f64 * 0.02) % 1.0
         };
 
-        for (y, line) in self.chars.iter().enumerate() {
-            for (x, &ch) in line.iter().enumerate() {
-                if x >= buf.width || y >= buf.height { continue; }
-                let pos = x as f64 / max_w as f64;
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                if buf.get(x, y).ch == ' ' { continue; }
+                let pos = x as f64 / w as f64;
                 let dist = (pos - sweep).abs().min((pos - sweep + 1.0).abs()).min((pos - sweep - 1.0).abs());
                 let brightness = (1.0 - dist * 5.0).max(0.1);
                 let color = Color::new(
@@ -296,7 +402,7 @@ impl Effect for Radar {
                     (0xff as f64 * brightness) as u8,
                     (0x00 as f64 + 0x66 as f64 * brightness) as u8,
                 );
-                buf.set(x, y, Cell::new(ch, color));
+                buf.set_color(x, y, color);
             }
         }
     }
@@ -305,28 +411,25 @@ impl Effect for Radar {
 // ── Neon ──
 
 /// Flickering between dim and bright.
-pub struct Neon {
-    chars: Vec<Vec<char>>,
-}
+pub struct Neon;
 
 impl Neon {
-    pub fn new(text: &str) -> Self {
-        Self { chars: text_to_lines(text) }
-    }
+    pub fn new() -> Self { Self }
+    pub fn on(text: &str) -> On<Self> { EffectExt::on(Self, text) }
 }
 
 impl Effect for Neon {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
         let color = if frame.is_multiple_of(2) {
-            Color::new(88, 80, 85) // dim
+            Color::new(88, 80, 85)
         } else {
-            Color::new(0xff, 0x44, 0xcc) // bright neon pink
+            Color::new(0xff, 0x44, 0xcc)
         };
 
-        for (y, line) in self.chars.iter().enumerate() {
-            for (x, &ch) in line.iter().enumerate() {
-                if x >= buf.width || y >= buf.height { continue; }
-                buf.set(x, y, Cell::new(ch, color));
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                if buf.get(x, y).ch == ' ' { continue; }
+                buf.set_color(x, y, color);
             }
         }
     }
@@ -335,31 +438,30 @@ impl Effect for Neon {
 // ── Karaoke ──
 
 /// Progressive character reveal.
-pub struct Karaoke {
-    chars: Vec<Vec<char>>,
-    total_chars: usize,
-}
+pub struct Karaoke;
 
 impl Karaoke {
-    pub fn new(text: &str) -> Self {
-        let chars = text_to_lines(text);
-        let total_chars = chars.iter().map(|l| l.len()).sum();
-        Self { chars, total_chars }
-    }
+    pub fn new() -> Self { Self }
+    pub fn on(text: &str) -> On<Self> { EffectExt::on(Self, text) }
 }
 
 impl Effect for Karaoke {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
         let highlight = Color::new(0xff, 0xff, 0x00);
         let dim = Color::new(0x66, 0x66, 0x66);
-        let revealed = frame % (self.total_chars + 20); // cycle with pause
+
+        // Count non-space chars for cycle length
+        let total: usize = (0..buf.height)
+            .map(|y| (0..buf.width).filter(|&x| buf.get(x, y).ch != ' ').count())
+            .sum();
+        let revealed = frame % (total + 20);
 
         let mut count = 0;
-        for (y, line) in self.chars.iter().enumerate() {
-            for (x, &ch) in line.iter().enumerate() {
-                if x >= buf.width || y >= buf.height { continue; }
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                if buf.get(x, y).ch == ' ' { continue; }
                 let color = if count < revealed { highlight } else { dim };
-                buf.set(x, y, Cell::new(ch, color));
+                buf.set_color(x, y, color);
                 count += 1;
             }
         }
@@ -376,12 +478,23 @@ pub struct Flap {
 }
 
 impl Flap {
-    pub fn new(text: &str, settled: Color, flipping: Color) -> Self {
+    /// Create a split-flap effect. Default colors: gold settled, dark gold flipping.
+    pub fn new(text: &str) -> Self {
         Self {
             chars: text_to_lines(text),
-            settled,
-            flipping,
+            settled: Color::new(0xff, 0xcc, 0x00),
+            flipping: Color::new(0x99, 0x7a, 0x00),
         }
+    }
+
+    pub fn settled(mut self, color: Color) -> Self {
+        self.settled = color;
+        self
+    }
+
+    pub fn flipping(mut self, color: Color) -> Self {
+        self.flipping = color;
+        self
     }
 }
 
@@ -410,6 +523,8 @@ impl Effect for Flap {
             }
         }
     }
+
+    fn size(&self) -> (usize, usize) { chars_size(&self.chars) }
 }
 
 
@@ -425,9 +540,6 @@ pub enum ScrollDirection {
 }
 
 /// Slide-in with easing. Text enters from off-screen and settles into place.
-///
-/// `total_frames` controls how long the slide takes.
-/// `line_delay` staggers each line's start for a slant/cascade effect.
 pub struct Scroll {
     chars: Vec<Vec<char>>,
     palette: Vec<Color>,
@@ -435,34 +547,53 @@ pub struct Scroll {
     easing: super::easing::Easing,
     total_frames: usize,
     line_delay: usize,
-    /// Optional color source — colors the text at rest positions,
-    /// then Scroll moves the colored cells. Colors travel with the text.
     color_source: Option<Box<dyn Effect>>,
 }
 
 impl Scroll {
-    pub fn new(
-        text: &str,
-        palette: Vec<Color>,
-        direction: ScrollDirection,
-        easing: super::easing::Easing,
-        total_frames: usize,
-        line_delay: usize,
-    ) -> Self {
+    /// Create a scroll effect. Defaults: Left, EaseOut, 1 second, no stagger.
+    pub fn new(text: &str) -> Self {
         Self {
             chars: text_to_lines(text),
-            palette,
-            direction,
-            easing,
-            total_frames,
-            line_delay,
+            palette: Vec::new(),
+            direction: ScrollDirection::Left,
+            easing: super::easing::Easing::EaseOut,
+            total_frames: super::framebuffer::secs_to_frames(1.0),
+            line_delay: 0,
             color_source: None,
         }
     }
 
-    /// Attach a color effect that paints the text at rest positions.
-    /// The colored cells then move with the scroll — colors stick to chars.
-    pub fn with_color(mut self, effect: impl Effect) -> Self {
+    pub fn direction(mut self, direction: ScrollDirection) -> Self {
+        self.direction = direction;
+        self
+    }
+
+    pub fn easing(mut self, easing: super::easing::Easing) -> Self {
+        self.easing = easing;
+        self
+    }
+
+    /// Duration in seconds.
+    pub fn duration(mut self, seconds: f64) -> Self {
+        self.total_frames = super::framebuffer::secs_to_frames(seconds);
+        self
+    }
+
+    /// Per-line stagger in frames. Each successive line starts this many frames later.
+    pub fn stagger(mut self, frames: usize) -> Self {
+        self.line_delay = frames;
+        self
+    }
+
+    /// Fallback palette when no `.color()` source is set.
+    pub fn palette(mut self, palette: Vec<Color>) -> Self {
+        self.palette = palette;
+        self
+    }
+
+    /// Color effect applied at rest positions — colors travel with the text.
+    pub fn color(mut self, effect: impl Effect) -> Self {
         self.color_source = Some(Box::new(effect));
         self
     }
@@ -485,7 +616,7 @@ impl Effect for Scroll {
             for (y, line) in self.chars.iter().enumerate() {
                 for (x, &ch) in line.iter().enumerate() {
                     if x < color_buf.width && y < color_buf.height {
-                        color_buf.set(x, y, Cell::new(ch, Color::new(204, 204, 204)));
+                        color_buf.set(x, y, Cell::new(ch, super::framebuffer::DEFAULT_TEXT_COLOR));
                     }
                 }
             }
@@ -545,7 +676,7 @@ impl Effect for Scroll {
                     if in_bounds {
                         cb.get(src_x as usize, src_y as usize).color
                     } else {
-                        Color::new(204, 204, 204)
+                        super::framebuffer::DEFAULT_TEXT_COLOR
                     }
                 } else if !pal.is_empty() {
                     pal[x % pal.len()]
@@ -558,6 +689,8 @@ impl Effect for Scroll {
             }
         }
     }
+
+    fn size(&self) -> (usize, usize) { chars_size(&self.chars) }
 }
 
 // ── Fade ──
@@ -582,24 +715,24 @@ enum FadeDirection {
 }
 
 impl Fade {
-    /// Fade in: starts at `from_color`, reveals the inner effect over `total_frames`.
-    pub fn in_from(inner: impl Effect, from_color: Color, easing: super::easing::Easing, total_frames: usize) -> Self {
+    /// Fade in from `color` over `seconds`.
+    pub fn in_from(inner: impl Effect, color: Color, easing: super::easing::Easing, seconds: f64) -> Self {
         Self {
             inner: Box::new(inner),
-            target_color: from_color,
+            target_color: color,
             easing,
-            total_frames,
+            total_frames: super::framebuffer::secs_to_frames(seconds),
             direction: FadeDirection::In,
         }
     }
 
-    /// Fade out: starts showing the inner effect, fades to `to_color` over `total_frames`.
-    pub fn out_to(inner: impl Effect, to_color: Color, easing: super::easing::Easing, total_frames: usize) -> Self {
+    /// Fade out to `color` over `seconds`.
+    pub fn out_to(inner: impl Effect, color: Color, easing: super::easing::Easing, seconds: f64) -> Self {
         Self {
             inner: Box::new(inner),
-            target_color: to_color,
+            target_color: color,
             easing,
-            total_frames,
+            total_frames: super::framebuffer::secs_to_frames(seconds),
             direction: FadeDirection::Out,
         }
     }
@@ -632,15 +765,12 @@ impl Effect for Fade {
             }
         }
     }
+
+    fn size(&self) -> (usize, usize) { self.inner.size() }
 }
 
-// Keep the old names as convenience constructors
-pub type FadeIn = Fade;
-pub type FadeOut = Fade;
 
-/// Chained effect: runs effect A for N frames, then effect B.
-///
-/// Use this to chain fade-in → hold → fade-out, or any sequence.
+/// Chained effect: run A for N seconds, then B, etc.
 pub struct Chain {
     effects: Vec<(usize, Box<dyn Effect>)>, // (duration_frames, effect)
 }
@@ -650,9 +780,9 @@ impl Chain {
         Self { effects: Vec::new() }
     }
 
-    /// Add an effect that runs for `frames` frames, then the next one starts.
-    pub fn then(mut self, frames: usize, effect: impl Effect) -> Self {
-        self.effects.push((frames, Box::new(effect)));
+    /// Add an effect that runs for `seconds`, then the next one starts.
+    pub fn then(mut self, seconds: f64, effect: impl Effect) -> Self {
+        self.effects.push((super::framebuffer::secs_to_frames(seconds), Box::new(effect)));
         self
     }
 }
@@ -672,14 +802,15 @@ impl Effect for Chain {
             effect.render(buf, *duration);
         }
     }
+
+    fn size(&self) -> (usize, usize) {
+        self.effects.first().map(|(_, e)| e.size()).unwrap_or((0, 0))
+    }
 }
 
 // ── Spread ──
 
-/// Lines start stacked at one position and spread out to their final rows.
-///
-/// At frame 0, all lines are at `origin_row`. Over `total_frames`, each line
-/// moves to its natural y position. Creates a "fan out" or "unfold" effect.
+/// Lines fan out from a single position to their final rows.
 pub struct Spread {
     chars: Vec<Vec<char>>,
     palette: Vec<Color>,
@@ -692,33 +823,46 @@ pub struct Spread {
 /// Where lines start before spreading.
 #[derive(Debug, Clone, Copy)]
 pub enum SpreadOrigin {
-    /// All lines start at the top (row 0).
     Top,
-    /// All lines start at the bottom (last row).
     Bottom,
-    /// All lines start at the center row.
     Center,
 }
 
 impl Spread {
-    pub fn new(
-        text: &str,
-        palette: Vec<Color>,
-        origin: SpreadOrigin,
-        easing: super::easing::Easing,
-        total_frames: usize,
-    ) -> Self {
+    /// Create a spread effect. Defaults: Top origin, EaseOut, 1 second.
+    pub fn new(text: &str) -> Self {
         Self {
             chars: text_to_lines(text),
-            palette,
-            origin,
-            easing,
-            total_frames,
+            palette: Vec::new(),
+            origin: SpreadOrigin::Top,
+            easing: super::easing::Easing::EaseOut,
+            total_frames: super::framebuffer::secs_to_frames(1.0),
             color_source: None,
         }
     }
 
-    pub fn with_color(mut self, effect: impl Effect) -> Self {
+    pub fn origin(mut self, origin: SpreadOrigin) -> Self {
+        self.origin = origin;
+        self
+    }
+
+    pub fn easing(mut self, easing: super::easing::Easing) -> Self {
+        self.easing = easing;
+        self
+    }
+
+    /// Duration in seconds.
+    pub fn duration(mut self, seconds: f64) -> Self {
+        self.total_frames = super::framebuffer::secs_to_frames(seconds);
+        self
+    }
+
+    pub fn palette(mut self, palette: Vec<Color>) -> Self {
+        self.palette = palette;
+        self
+    }
+
+    pub fn color(mut self, effect: impl Effect) -> Self {
         self.color_source = Some(Box::new(effect));
         self
     }
@@ -744,7 +888,7 @@ impl Effect for Spread {
             for (y, line) in self.chars.iter().enumerate() {
                 for (x, &ch) in line.iter().enumerate() {
                     if x < color_buf.width && y < color_buf.height {
-                        color_buf.set(x, y, Cell::new(ch, Color::new(204, 204, 204)));
+                        color_buf.set(x, y, Cell::new(ch, super::framebuffer::DEFAULT_TEXT_COLOR));
                     }
                 }
             }
@@ -779,7 +923,7 @@ impl Effect for Spread {
                     if line_idx < cb.height && x < cb.width {
                         cb.get(x, line_idx).color
                     } else {
-                        Color::new(204, 204, 204)
+                        super::framebuffer::DEFAULT_TEXT_COLOR
                     }
                 } else if !pal.is_empty() {
                     pal[x % pal.len()]
@@ -792,6 +936,8 @@ impl Effect for Spread {
             }
         }
     }
+
+    fn size(&self) -> (usize, usize) { chars_size(&self.chars) }
 }
 
 // ── DYCP ──
@@ -808,22 +954,82 @@ pub struct Dycp {
     amplitude: f64,
     frequency: f64,
     speed: f64,
+    scroll_speed: f64,
+    scroll_offset: i64,
+    wave_delay: usize,
+    phase_offset: f64,
+    shadow: Option<(i32, i32, Color)>,
     color_source: Option<Box<dyn Effect>>,
 }
 
 impl Dycp {
-    pub fn new(text: &str, palette: Vec<Color>, amplitude: f64, frequency: f64, speed: f64) -> Self {
+    /// Create a DYCP effect. Defaults: amplitude 3.0, frequency 0.15, speed 0.08.
+    pub fn new(text: &str) -> Self {
         Self {
             chars: text_to_lines(text),
-            palette,
-            amplitude,
-            frequency,
-            speed,
+            palette: Vec::new(),
+            amplitude: 3.0,
+            frequency: 0.15,
+            speed: 0.08,
+            scroll_speed: 0.0,
+            scroll_offset: 0,
+            wave_delay: 0,
+            phase_offset: 0.0,
+            shadow: None,
             color_source: None,
         }
     }
 
-    pub fn with_color(mut self, effect: impl Effect) -> Self {
+    pub fn amplitude(mut self, amplitude: f64) -> Self {
+        self.amplitude = amplitude;
+        self
+    }
+
+    pub fn frequency(mut self, frequency: f64) -> Self {
+        self.frequency = frequency;
+        self
+    }
+
+    pub fn speed(mut self, speed: f64) -> Self {
+        self.speed = speed;
+        self
+    }
+
+    pub fn palette(mut self, palette: Vec<Color>) -> Self {
+        self.palette = palette;
+        self
+    }
+
+    pub fn scroll(mut self, scroll_speed: f64) -> Self {
+        self.scroll_speed = scroll_speed;
+        self
+    }
+
+    /// Start text off-screen and scroll it in. Negative = start right, positive = start left.
+    pub fn scroll_in(mut self, offset: i64) -> Self {
+        self.scroll_offset = offset;
+        self
+    }
+
+    /// Shift the wave phase (radians). Use to offset a shadow copy.
+    pub fn phase_offset(mut self, offset: f64) -> Self {
+        self.phase_offset = offset;
+        self
+    }
+
+    /// Delay the wave by N frames — text scrolls flat, then DYCP kicks in.
+    pub fn wave_delay(mut self, frames: usize) -> Self {
+        self.wave_delay = frames;
+        self
+    }
+
+    /// Add a drop shadow at (dx, dy) offset in the given color.
+    pub fn shadow(mut self, dx: i32, dy: i32, color: Color) -> Self {
+        self.shadow = Some((dx, dy, color));
+        self
+    }
+
+    pub fn color(mut self, effect: impl Effect) -> Self {
         self.color_source = Some(Box::new(effect));
         self
     }
@@ -842,7 +1048,7 @@ impl Effect for Dycp {
             for (y, line) in self.chars.iter().enumerate() {
                 for (x, &ch) in line.iter().enumerate() {
                     if x < color_buf.width && y < color_buf.height {
-                        color_buf.set(x, y, Cell::new(ch, Color::new(204, 204, 204)));
+                        color_buf.set(x, y, Cell::new(ch, super::framebuffer::DEFAULT_TEXT_COLOR));
                     }
                 }
             }
@@ -857,20 +1063,43 @@ impl Effect for Dycp {
             }
         }
 
-        // Center of the buffer vertically
-        let center_y = buf.height as f64 / 2.0;
+        let scroll_px = (frame as f64 * self.scroll_speed) as i64 + self.scroll_offset;
+        let w = buf.width as i64;
+        let wrapping = self.scroll_offset == 0;
 
         for (line_idx, line) in self.chars.iter().enumerate() {
             let base_y = line_idx as f64;
 
             for (x, &ch) in line.iter().enumerate() {
-                if x >= buf.width { continue; }
                 if ch.is_whitespace() { continue; }
 
-                // Each char gets its own sine offset
-                let wave = (x as f64 * self.frequency + t + line_idx as f64 * 1.7).sin();
-                let y_offset = wave * self.amplitude;
-                let final_y = (base_y + y_offset + center_y - line_count as f64 / 2.0).round() as i32;
+                // Horizontal scroll
+                let screen_x = if wrapping {
+                    ((x as i64 - scroll_px) % w + w) % w
+                } else {
+                    let sx = x as i64 - scroll_px;
+                    if sx < 0 || sx >= w { continue; }
+                    sx
+                };
+                let sx = screen_x as usize;
+
+                // Each char gets its own sine offset (0 to amplitude, downward only)
+                // Ease-in: linger at top (0), zip through bottom (amplitude)
+                // Ramp amplitude from 0 after wave_delay, over 30 frames
+                let amp = if self.wave_delay == 0 || frame >= self.wave_delay + 30 {
+                    self.amplitude
+                } else if frame < self.wave_delay {
+                    0.0
+                } else {
+                    let t_ramp = (frame - self.wave_delay) as f64 / 30.0;
+                    self.amplitude * t_ramp * t_ramp
+                };
+
+                let wave = (-(x as f64) * self.frequency + t).sin() * 0.6
+                    + (-(x as f64) * self.frequency * 2.3 + t * 1.7).sin() * 0.4;
+                let normalized = (wave + 1.0) / 2.0;
+                let y_offset = normalized * normalized * amp;
+                let final_y = (base_y + y_offset).round() as i32;
 
                 if final_y < 0 || final_y as usize >= buf.height { continue; }
                 let fy = final_y as usize;
@@ -879,30 +1108,41 @@ impl Effect for Dycp {
                     if line_idx < cb.height && x < cb.width {
                         cb.get(x, line_idx).color
                     } else {
-                        Color::new(204, 204, 204)
+                        super::framebuffer::DEFAULT_TEXT_COLOR
                     }
                 } else if !pal.is_empty() {
-                    pal[x % pal.len()]
+                    pal[(x + frame) % pal.len()]
                 } else {
                     let hue = (x as f64 / buf.width.max(1) as f64 * 360.0 + t * 10.0) % 360.0;
                     Color::from_hsv(hue, 1.0, 1.0)
                 };
 
-                buf.set(x, fy, Cell::new(ch, color));
+                // Shadow pass: draw offset copy in shadow color
+                if let Some((dx, dy, shadow_color)) = self.shadow {
+                    let shadow_x = sx as i32 + dx;
+                    let shadow_y = fy as i32 + dy;
+                    if shadow_x >= 0 && (shadow_x as usize) < buf.width
+                        && shadow_y >= 0 && (shadow_y as usize) < buf.height
+                    {
+                        buf.set(shadow_x as usize, shadow_y as usize, Cell::new(ch, shadow_color));
+                    }
+                }
+
+                buf.set(sx, fy, Cell::new(ch, color));
             }
         }
     }
+
+    fn size(&self) -> (usize, usize) { chars_size(&self.chars) }
 }
 
 // ── FadeEnvelope ──
 
-/// Fade in, hold, fade out — one smooth opacity envelope over an inner effect.
-///
-/// The inner effect runs continuously with a single frame counter (no restart).
-/// Opacity: 0→1 over `fade_in` frames, holds at 1, then 1→0 over `fade_out` frames.
+/// Fade in, hold, fade out — smooth opacity envelope over an inner effect.
 pub struct FadeEnvelope {
     inner: Box<dyn Effect>,
     target_color: Color,
+    fade_out_color: Option<Color>,
     fade_in_frames: usize,
     fade_out_frames: usize,
     total_frames: usize,
@@ -911,24 +1151,50 @@ pub struct FadeEnvelope {
 }
 
 impl FadeEnvelope {
-    pub fn new(
-        inner: impl Effect,
-        target_color: Color,
-        fade_in_frames: usize,
-        fade_out_frames: usize,
-        total_frames: usize,
-        ease_in: super::easing::Easing,
-        ease_out: super::easing::Easing,
-    ) -> Self {
+    /// Wrap an effect with a fade envelope. Defaults: 0.5s in, 1s out, EaseOut/EaseInOut, bg color.
+    pub fn new(inner: impl Effect) -> Self {
         Self {
             inner: Box::new(inner),
-            target_color,
-            fade_in_frames,
-            fade_out_frames,
-            total_frames,
-            ease_in,
-            ease_out,
+            target_color: crate::terminal::bg_color(),
+            fade_out_color: None,
+            fade_in_frames: super::framebuffer::secs_to_frames(0.5),
+            fade_out_frames: super::framebuffer::secs_to_frames(1.0),
+            total_frames: super::framebuffer::secs_to_frames(5.0),
+            ease_in: super::easing::Easing::EaseOut,
+            ease_out: super::easing::Easing::EaseInOut,
         }
+    }
+
+    /// Total duration in seconds.
+    pub fn total(mut self, seconds: f64) -> Self {
+        self.total_frames = super::framebuffer::secs_to_frames(seconds);
+        self
+    }
+
+    /// Fade-in duration in seconds.
+    pub fn fade_in(mut self, seconds: f64, easing: super::easing::Easing) -> Self {
+        self.fade_in_frames = super::framebuffer::secs_to_frames(seconds);
+        self.ease_in = easing;
+        self
+    }
+
+    /// Fade-out duration in seconds.
+    pub fn fade_out(mut self, seconds: f64, easing: super::easing::Easing) -> Self {
+        self.fade_out_frames = super::framebuffer::secs_to_frames(seconds);
+        self.ease_out = easing;
+        self
+    }
+
+    /// Color to fade from/to (default: terminal background).
+    pub fn from_color(mut self, color: Color) -> Self {
+        self.target_color = color;
+        self
+    }
+
+    /// Different color to fade out to (default: same as from_color).
+    pub fn fade_out_color(mut self, color: Color) -> Self {
+        self.fade_out_color = Some(color);
+        self
     }
 }
 
@@ -951,16 +1217,23 @@ impl Effect for FadeEnvelope {
         };
 
         if opacity < 1.0 {
+            let fade_color = if frame >= fade_out_start && self.fade_out_frames > 0 {
+                self.fade_out_color.unwrap_or(self.target_color)
+            } else {
+                self.target_color
+            };
             for y in 0..buf.height {
                 for x in 0..buf.width {
                     let cell = buf.get(x, y);
                     if cell.ch.is_whitespace() { continue; }
-                    let color = Color::lerp_rgb(self.target_color, cell.color, opacity);
+                    let color = Color::lerp_rgb(fade_color, cell.color, opacity);
                     buf.set_color(x, y, color);
                 }
             }
         }
     }
+
+    fn size(&self) -> (usize, usize) { self.inner.size() }
 }
 
 // ── DelayedStart ──
@@ -997,6 +1270,8 @@ impl Effect for DelayedStart {
             self.inner.render(buf, frame - self.delay);
         }
     }
+
+    fn size(&self) -> (usize, usize) { self.inner.size() }
 }
 
 // ── Blend ──
@@ -1091,6 +1366,78 @@ impl Effect for Blend {
             }
         }
     }
+
+    fn size(&self) -> (usize, usize) {
+        let (aw, ah) = self.a.size();
+        let (bw, bh) = self.b.size();
+        (aw.max(bw), ah.max(bh))
+    }
+}
+
+// ── Transition ──
+
+/// Crossfade between two effects over a duration.
+///
+/// Frame 0: 100% effect A. Frame `duration`: 100% effect B.
+/// In between: per-cell color lerp with easing.
+pub struct Transition {
+    a: Box<dyn Effect>,
+    b: Box<dyn Effect>,
+    duration: usize,
+    easing: super::easing::Easing,
+}
+
+impl Transition {
+    /// Crossfade from `a` to `b` over `seconds`.
+    pub fn new(a: impl Effect, b: impl Effect, seconds: f64, easing: super::easing::Easing) -> Self {
+        Self {
+            a: Box::new(a),
+            b: Box::new(b),
+            duration: super::framebuffer::secs_to_frames(seconds),
+            easing,
+        }
+    }
+}
+
+impl Effect for Transition {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        // Render A into buf
+        self.a.render(buf, frame);
+
+        if frame >= self.duration {
+            // Fully transitioned — just render B
+            self.b.render(buf, frame);
+            return;
+        }
+
+        // Render B into scratch buffer
+        let mut buf_b = FrameBuffer::new(buf.width, buf.height);
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                buf_b.set(x, y, buf.get(x, y));
+            }
+        }
+        self.b.render(&mut buf_b, frame);
+
+        // Lerp colors: t=0 → A, t=1 → B
+        let t = self.easing.apply((frame as f64 / self.duration.max(1) as f64).min(1.0));
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                let cell = buf.get(x, y);
+                if cell.ch.is_whitespace() { continue; }
+                let color_a = cell.color;
+                let color_b = buf_b.get(x, y).color;
+                let color = Color::lerp_rgb(color_a, color_b, t);
+                buf.set_color(x, y, color);
+            }
+        }
+    }
+
+    fn size(&self) -> (usize, usize) {
+        let (aw, ah) = self.a.size();
+        let (bw, bh) = self.b.size();
+        (aw.max(bw), ah.max(bh))
+    }
 }
 
 // ── Composite ──
@@ -1138,7 +1485,20 @@ impl Effect for Composite {
             }
         }
     }
+
+    fn size(&self) -> (usize, usize) {
+        let (aw, ah) = self.position.size();
+        let (bw, bh) = self.color.size();
+        (aw.max(bw), ah.max(bh))
+    }
 }
+
+// Layout effects carry text — give them the same convenience as On<E>.
+impl_text_effect_convenience!(Glitch);
+impl_text_effect_convenience!(Flap);
+impl_text_effect_convenience!(Scroll);
+impl_text_effect_convenience!(Spread);
+impl_text_effect_convenience!(Dycp);
 
 #[cfg(test)]
 mod tests {
@@ -1150,10 +1510,11 @@ mod tests {
 
     #[test]
     fn rainbow_changes_colors() {
-        let effect = Rainbow::new("hello");
+        let effect = Rainbow::new();
         let mut buf = make_buf("hello");
         effect.render(&mut buf, 0);
         let c0 = buf.get(0, 0).color;
+        buf = make_buf("hello");
         effect.render(&mut buf, 10);
         let c1 = buf.get(0, 0).color;
         assert_ne!(c0, c1);
@@ -1161,7 +1522,7 @@ mod tests {
 
     #[test]
     fn rainbow_preserves_chars() {
-        let effect = Rainbow::new("hello");
+        let effect = Rainbow::new();
         let mut buf = make_buf("hello");
         effect.render(&mut buf, 0);
         assert_eq!(buf.get(0, 0).ch, 'h');
@@ -1171,10 +1532,11 @@ mod tests {
     #[test]
     fn glow_changes_over_time() {
         let pal = vec![Color::new(255, 0, 0), Color::new(0, 0, 255)];
-        let effect = Glow::new("hello", pal);
+        let effect = Glow::new().palette(pal);
         let mut buf = make_buf("hello");
         effect.render(&mut buf, 0);
         let c0 = buf.get(2, 0).color;
+        buf = make_buf("hello");
         effect.render(&mut buf, 30);
         let c1 = buf.get(2, 0).color;
         assert_ne!(c0, c1);
@@ -1182,7 +1544,8 @@ mod tests {
 
     #[test]
     fn plasma_multiline() {
-        let effect = Plasma::new("ab\ncd", vec![Color::new(255, 0, 0), Color::new(0, 0, 255)], 0.0);
+        let pal = vec![Color::new(255, 0, 0), Color::new(0, 0, 255)];
+        let effect = Plasma::new().palette(pal);
         let mut buf = make_buf("ab\ncd");
         effect.render(&mut buf, 0);
         assert_eq!(buf.get(0, 0).ch, 'a');
@@ -1191,7 +1554,7 @@ mod tests {
 
     #[test]
     fn pulse_preserves_chars() {
-        let effect = Pulse::new("test");
+        let effect = Pulse::new();
         let mut buf = make_buf("test");
         effect.render(&mut buf, 0);
         assert_eq!(buf.get(0, 0).ch, 't');
@@ -1208,10 +1571,11 @@ mod tests {
 
     #[test]
     fn neon_alternates() {
-        let effect = Neon::new("hi");
+        let effect = Neon::new();
         let mut buf = make_buf("hi");
         effect.render(&mut buf, 0);
         let c0 = buf.get(0, 0).color;
+        buf = make_buf("hi");
         effect.render(&mut buf, 1);
         let c1 = buf.get(0, 0).color;
         assert_ne!(c0, c1);
@@ -1219,34 +1583,33 @@ mod tests {
 
     #[test]
     fn karaoke_progressive() {
-        let effect = Karaoke::new("hello");
+        let effect = Karaoke::new();
         let mut buf = make_buf("hello");
         effect.render(&mut buf, 0);
         let dim = buf.get(4, 0).color;
+        buf = make_buf("hello");
         effect.render(&mut buf, 10);
         let bright = buf.get(4, 0).color;
-        // After 10 frames all 5 chars should be revealed
         assert_ne!(dim, bright);
     }
 
     #[test]
     fn flap_settles() {
-        let s = Color::new(255, 204, 0);
-        let f = Color::new(153, 122, 0);
-        let effect = Flap::new("AB", s, f);
+        let effect = Flap::new("AB");
         let mut buf = make_buf("AB");
         effect.render(&mut buf, 100);
         assert_eq!(buf.get(0, 0).ch, 'A');
-        assert_eq!(buf.get(0, 0).color, s);
+        assert_eq!(buf.get(0, 0).color, Color::new(0xff, 0xcc, 0x00)); // default settled
     }
 
     #[test]
     fn scroll_left_frame_zero_is_blank() {
-        let pal = vec![Color::new(255, 255, 255)];
-        let effect = Scroll::new("hello", pal, ScrollDirection::Left, super::super::Easing::BounceOut, 60, 0);
+        let effect = Scroll::new("hello")
+            .direction(ScrollDirection::Left)
+            .easing(super::super::Easing::BounceOut)
+            .duration(2.0);
         let mut buf = FrameBuffer::new(5, 1);
         effect.render(&mut buf, 0);
-        // All spaces at frame 0 — text is off-screen
         for x in 0..5 {
             assert_eq!(buf.get(x, 0).ch, ' ');
         }
@@ -1254,68 +1617,63 @@ mod tests {
 
     #[test]
     fn scroll_left_final_shows_text() {
-        let pal = vec![Color::new(255, 255, 255)];
-        let effect = Scroll::new("hello", pal, ScrollDirection::Left, super::super::Easing::BounceOut, 60, 0);
+        let effect = Scroll::new("hello")
+            .direction(ScrollDirection::Left)
+            .easing(super::super::Easing::BounceOut)
+            .duration(2.0);
         let mut buf = FrameBuffer::new(5, 1);
-        effect.render(&mut buf, 60);
+        effect.render(&mut buf, 60); // 2 seconds * 30fps = 60 frames
         assert_eq!(buf.get(0, 0).ch, 'h');
         assert_eq!(buf.get(4, 0).ch, 'o');
     }
 
     #[test]
     fn scroll_stagger() {
-        let pal = vec![Color::new(255, 255, 255)];
-        let effect = Scroll::new("ab\ncd", pal, ScrollDirection::Left, super::super::Easing::Linear, 10, 5);
+        let effect = Scroll::new("ab\ncd")
+            .direction(ScrollDirection::Left)
+            .easing(super::super::Easing::Linear)
+            .duration(10.0 / 30.0) // 10 frames
+            .stagger(5);
         let mut buf = FrameBuffer::new(2, 2);
-        // At frame 5, first line should be halfway, second line hasn't started
         effect.render(&mut buf, 5);
-        // Second line should still be blank (delay=5, so it starts at frame 5)
-        // At exactly frame 5 for line 1: t=0.5, offset ~1 char
-        // Line 1 has started, line 2 just starting (t=0.0)
     }
 
     #[test]
     fn fade_in_starts_from_color() {
         let bg = Color::new(0, 0, 0);
-        let inner = Rainbow::new("hi");
-        let effect = Fade::in_from(inner, bg, super::super::Easing::Linear, 60);
+        let effect = Fade::in_from(Rainbow::new(), bg, super::super::Easing::Linear, 2.0);
         let mut buf = make_buf("hi");
         effect.render(&mut buf, 0);
-        // At frame 0, opacity=0, so fully bg color
         assert_eq!(buf.get(0, 0).color, bg);
     }
 
     #[test]
     fn fade_in_ends_at_effect_color() {
         let bg = Color::new(0, 0, 0);
-        // Use a simple effect that sets a known color
-        let inner = Neon::new("hi"); // frame 1 = bright pink
-        let effect = Fade::in_from(inner, bg, super::super::Easing::Linear, 60);
+        let effect = Fade::in_from(Neon::new(), bg, super::super::Easing::Linear, 2.0);
         let mut buf = make_buf("hi");
-        // At frame 60, opacity=1, so fully the inner effect's color
-        effect.render(&mut buf, 60);
+        effect.render(&mut buf, 60); // 2 seconds * 30fps
         assert_ne!(buf.get(0, 0).color, bg);
     }
 
     #[test]
     fn fade_out_ends_at_color() {
         let to = Color::new(0, 0, 0);
-        let inner = Rainbow::new("hi");
-        let effect = Fade::out_to(inner, to, super::super::Easing::Linear, 60);
+        let effect = Fade::out_to(Rainbow::new(), to, super::super::Easing::Linear, 2.0);
         let mut buf = make_buf("hi");
         effect.render(&mut buf, 60);
-        // At frame 60, opacity=0, so fully target color
         assert_eq!(buf.get(0, 0).color, to);
     }
 
     #[test]
     fn chain_switches_effects() {
         let effect = Chain::new()
-            .then(10, Rainbow::new("hi"))
-            .then(10, Neon::new("hi"));
+            .then(10.0 / 30.0, Rainbow::new())
+            .then(10.0 / 30.0, Neon::new());
         let mut buf = make_buf("hi");
         effect.render(&mut buf, 0);
         let c_rainbow = buf.get(0, 0).color;
+        buf = make_buf("hi");
         effect.render(&mut buf, 15);
         let c_neon = buf.get(0, 0).color;
         assert_ne!(c_rainbow, c_neon);
@@ -1324,10 +1682,9 @@ mod tests {
     #[test]
     fn chain_holds_last_effect() {
         let effect = Chain::new()
-            .then(10, Fade::in_from(Rainbow::new("hi"), Color::new(0, 0, 0), super::super::Easing::Linear, 10));
+            .then(10.0 / 30.0, Fade::in_from(Rainbow::new(), Color::new(0, 0, 0), super::super::Easing::Linear, 10.0 / 30.0));
         let mut buf = make_buf("hi");
-        // Past the end — should hold final frame (fully revealed rainbow)
         effect.render(&mut buf, 100);
-        assert_ne!(buf.get(0, 0).color, Color::new(0, 0, 0)); // not black = faded in
+        assert_ne!(buf.get(0, 0).color, Color::new(0, 0, 0));
     }
 }

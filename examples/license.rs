@@ -1,6 +1,6 @@
 use chromakopia::animate::*;
 use chromakopia::{pad, presets};
-use std::time::Duration;
+
 
 const BANNER: &str = r#"   ________  ______  ____  __  ______    __ ______  ____  _______
   / ____/ / / / __ \/ __ \/  |/  /   |  / //_/ __ \/ __ \/  _/   |
@@ -37,11 +37,10 @@ async fn main() {
     let fg = chromakopia::fg_color();
     let bg_hex = bg.to_string();
     let storm = presets::storm().palette(256);
-    let fire = chromakopia::gradient(&["#ffffff", &bg_hex, "#ff69b4", "#00cccc", "#fffacd", "#8b4513", &bg_hex, "#ffffff"]).palette(256);
-    let fire_shifted = chromakopia::gradient(&["#fffacd", "#8b4513", &bg_hex, "#ffffff", &bg_hex, "#ff69b4", "#00cccc", "#fffacd"]).palette(256);
-    let fps = 30;
-    let total = fps * 15;
-
+    let fire = chromakopia::gradient(&[
+        "#ffffff", &bg_hex, "#ff69b4", "#00cccc", "#fffacd", "#8b4513", &bg_hex, "#ffffff",
+    ])
+    .palette(256);
     // Split license into three parts:
     // - top: MIT License, Copyright, Permission...conditions
     // - mid: "The above copyright notice..." paragraph
@@ -51,7 +50,10 @@ async fn main() {
     let license_mid = alineas[alineas.len() - 2];
     let license_tail = alineas[alineas.len() - 1];
 
-    let full = pad(&format!("{}\n\n{}\n\n{}\n\n{}", BANNER, license_top, license_mid, license_tail));
+    let full = pad(&format!(
+        "{}\n\n{}\n\n{}\n\n{}",
+        BANNER, license_top, license_mid, license_tail
+    ));
     let lines: Vec<&str> = full.lines().collect();
 
     let banner_height = BANNER.lines().count();
@@ -76,58 +78,73 @@ async fn main() {
     let total_scene_h = lines.len() as f64;
     let total_scene_w = lines.iter().map(|l| l.len()).max().unwrap_or(80) as f64;
 
-    Scene::new()
+    let scene = Scene::new()
         // Banner — scroll + blended plasma/rainbow
-        .block(&banner_text, FadeEnvelope::new(
-            Scroll::new(&banner_text, storm.clone(), ScrollDirection::Left, Easing::Elastic(0.15), fps * 3, 0)
-                .with_color(Blend::new(
-                    Plasma::new(&banner_text, storm.clone(), 42.0)
-                        .with_y_offset(banner_y)
-                        .with_scene_size(total_scene_w, total_scene_h),
-                    Rainbow::new(&banner_text),
+        .add(FadeEnvelope::new(
+            Scroll::new(&banner_text)
+                .palette(storm.clone())
+                .direction(ScrollDirection::Left)
+                .easing(Easing::Elastic(0.15))
+                .duration(3.0)
+                .color(Blend::new(
+                    Plasma::new().palette(storm.clone()).seed(42.0)
+                        .y_offset(banner_y)
+                        .scene_size(total_scene_w, total_scene_h),
+                    Rainbow::new(),
                     BlendMode::Screen,
                 )),
-            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
-        ))
-        .line(Line::blank())
+        ).total(15.0).fade_in(1.0, Easing::EaseOut).fade_out(2.0, Easing::EaseInOut).from_color(fg))
+        .blank()
         // License top — plasma with fire palette
-        .block(&license_top_text, FadeEnvelope::new(
-            Scroll::new(&license_top_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2)
-                .with_color(Blend::new(
-                    Plasma::new(&license_top_text, fire.clone(), 42.0)
-                        .with_y_offset(top_y)
-                        .with_scene_size(total_scene_w, total_scene_h),
-                    Radar::new(&license_top_text),
+        .add(FadeEnvelope::new(
+            Scroll::new(&license_top_text)
+                .palette(fire.clone())
+                .direction(ScrollDirection::Left)
+                .easing(Easing::Elastic(0.25))
+                .duration(2.0)
+                .stagger(2)
+                .color(Blend::new(
+                    Plasma::new().palette(fire.clone()).seed(42.0)
+                        .y_offset(top_y)
+                        .scene_size(total_scene_w, total_scene_h),
+                    Radar::new(),
                     BlendMode::Screen,
                 )),
-            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
-        ))
-        .line(Line::blank())
+        ).total(15.0).fade_in(1.0, Easing::EaseOut).fade_out(2.0, Easing::EaseInOut).from_color(fg))
+        .blank()
         // "The above copyright notice..." — shifted palette
-        .block(&license_mid_text, FadeEnvelope::new(
-            Scroll::new(&license_mid_text, fire.clone(), ScrollDirection::Left, Easing::Elastic(0.25), fps * 2, 2)
-                .with_color(Blend::new(
-                    Plasma::new(&license_mid_text, fire.clone(), 42.0)
-                        .with_y_offset(mid_y)
-                        .with_scene_size(total_scene_w, total_scene_h),
-                    Radar::reversed(&license_mid_text),
+        .add(FadeEnvelope::new(
+            Scroll::new(&license_mid_text)
+                .palette(fire.clone())
+                .direction(ScrollDirection::Left)
+                .easing(Easing::Elastic(0.25))
+                .duration(2.0)
+                .stagger(2)
+                .color(Blend::new(
+                    Plasma::new().palette(fire.clone()).seed(42.0)
+                        .y_offset(mid_y)
+                        .scene_size(total_scene_w, total_scene_h),
+                    Radar::reversed(),
                     BlendMode::Screen,
                 )),
-            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
-        ))
-        .line(Line::blank())
+        ).total(15.0).fade_in(1.0, Easing::EaseOut).fade_out(2.0, Easing::EaseInOut).from_color(fg))
+        .blank()
         // Last alinea — blended plasma + radar Screen
-        .block(&license_tail_text, FadeEnvelope::new(
-            Scroll::new(&license_tail_text, fire.clone(), ScrollDirection::Right, Easing::Elastic(0.25), fps * 2, 2)
-                .with_color(Blend::new(
-                    Plasma::new(&license_tail_text, fire.clone(), 42.0)
-                        .with_y_offset(tail_y)
-                        .with_scene_size(total_scene_w, total_scene_h),
-                    Radar::new(&license_tail_text),
+        .add(FadeEnvelope::new(
+            Scroll::new(&license_tail_text)
+                .palette(fire.clone())
+                .direction(ScrollDirection::Right)
+                .easing(Easing::Elastic(0.25))
+                .duration(2.0)
+                .stagger(2)
+                .color(Blend::new(
+                    Plasma::new().palette(fire.clone()).seed(42.0)
+                        .y_offset(tail_y)
+                        .scene_size(total_scene_w, total_scene_h),
+                    Radar::new(),
                     BlendMode::Screen,
                 )),
-            fg, fps, fps * 2, total, Easing::EaseOut, Easing::EaseInOut,
-        ))
-        .run(Duration::from_secs(15))
-        .await;
+        ).total(15.0).fade_in(1.0, Easing::EaseOut).fade_out(2.0, Easing::EaseInOut).from_color(fg))
+    ;
+    scene.run(15.0).await;
 }

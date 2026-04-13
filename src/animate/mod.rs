@@ -1,14 +1,85 @@
-//! Animated terminal effects — framebuffer-based renderer.
+//! Terminal animation engine.
 //!
-//! Effects write `(char, Color)` to a grid. A fixed-rate renderer diffs
-//! the grid and flushes only changed cells to stderr.
+//! Build animations from **effects** and **scenes**. Effects color text.
+//! Scenes stack effects vertically. Three ways to render:
+//!
+//! - **`.spawn()`** — runs in the background, returns a handle
+//! - **`.run(seconds)`** — runs for a fixed duration
+//! - **`.frame(n)`** — renders one frame to an ANSI string
+//!
+//! # Quick start
 //!
 //! ```no_run
 //! # async fn example() {
-//! let anim = chromakopia::animate::rainbow("Loading...", 1.0);
-//! // ... do async work ...
-//! anim.stop();
+//! use chromakopia::prelude::*;
+//!
+//! // One-liner: animate text, fade out after 3 seconds
+//! let anim = Rainbow::on("Hello, world!").spawn();
+//! tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+//! anim.fade_out(1.0);
+//! anim.wait().await;
 //! # }
+//! ```
+//!
+//! # Effects
+//!
+//! Color effects are zero-config. Use `.on("text")` to give them text:
+//!
+//! ```no_run
+//! # use chromakopia::prelude::*;
+//! // Simple
+//! Rainbow::on("hello");
+//! Neon::on("blink");
+//! Plasma::on("fire").palette(presets::storm().palette(256));
+//!
+//! // Without text — pure color transform for composition
+//! Blend::new(Plasma::new(), Radar::new(), BlendMode::Screen);
+//! ```
+//!
+//! # Scenes
+//!
+//! Stack multiple effects with [`Scene`]:
+//!
+//! ```no_run
+//! # async fn example() {
+//! # use chromakopia::prelude::*;
+//! # let white = Color::new(255, 255, 255);
+//! Scene::new()
+//!     .add(text("MIT License", white))
+//!     .blank()
+//!     .add(Rainbow::on("colored text"))
+//!     .add(Plasma::on("more text").palette(presets::storm().palette(256)))
+//!     .run(5.0)
+//!     .await;
+//! # }
+//! ```
+//!
+//! # Handle
+//!
+//! Control a running animation:
+//!
+//! ```no_run
+//! # async fn example() {
+//! # use chromakopia::prelude::*;
+//! let anim = Plasma::on("loading...").spawn();
+//! // ...later
+//! anim.fade_out(1.0);              // 1 second fade to background
+//! anim.fade_out_to(Color::new(0,0,0), 0.5);  // fade to black
+//! anim.transition_to(Neon::on("done!"), 1.0); // crossfade
+//! anim.wait().await;               // wait for completion
+//! # }
+//! ```
+//!
+//! # Inline
+//!
+//! Render frames yourself for progress bars, spinners, etc:
+//!
+//! ```no_run
+//! # use chromakopia::prelude::*;
+//! let effect = Rainbow::on("loading...");
+//! for frame in 0..100 {
+//!     print!("\r{}", effect.frame(frame));
+//! }
 //! ```
 
 pub mod effects;
@@ -17,81 +88,6 @@ pub mod framebuffer;
 mod scene;
 
 pub use easing::Easing;
-pub use effects::{Rainbow, Glow, Plasma, Pulse, Glitch, Radar, Neon, Karaoke, Flap, Scroll, ScrollDirection, Spread, SpreadOrigin, Dycp, Fade, FadeEnvelope, Chain, Composite, DelayedStart, Blend, BlendMode};
-pub use framebuffer::{Cell, Effect, FrameBuffer, AnimationHandle, run_effect, spawn_effect};
+pub use effects::{Rainbow, Glow, Plasma, Pulse, Glitch, Radar, Neon, Karaoke, Flap, Scroll, ScrollDirection, Spread, SpreadOrigin, Dycp, Fade, FadeEnvelope, Chain, Composite, DelayedStart, Blend, BlendMode, Transition, Solid, text};
+pub use framebuffer::{Cell, Effect, EffectExt, On, FrameBuffer, AnimationHandle, run_effect, spawn_effect};
 pub use scene::{Scene, Line};
-
-use crate::color::Color;
-use crate::gradient::Gradient;
-
-/// Compute text dimensions (width, height) from a multiline string.
-fn text_dims(text: &str) -> (usize, usize) {
-    let lines: Vec<&str> = text.split('\n').collect();
-    let height = lines.len();
-    let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-    (width, height)
-}
-
-// ── Standalone animations ──
-
-/// Start a rainbow animation. Speed is a multiplier (1.0 = default).
-pub fn rainbow(text: &str, speed: f64) -> AnimationHandle {
-    let (w, h) = text_dims(text);
-    spawn_effect(Rainbow::new(text), w, h, speed)
-}
-
-/// Start a pulse animation (red highlight expanding from center).
-pub fn pulse(text: &str, speed: f64) -> AnimationHandle {
-    let (w, h) = text_dims(text);
-    spawn_effect(Pulse::new(text), w, h, speed)
-}
-
-/// Start a glitch animation (random character corruption).
-pub fn glitch(text: &str, speed: f64) -> AnimationHandle {
-    let (w, h) = text_dims(text);
-    spawn_effect(Glitch::new(text), w, h, speed)
-}
-
-/// Start a radar animation (spotlight sweep).
-pub fn radar(text: &str, speed: f64) -> AnimationHandle {
-    let (w, h) = text_dims(text);
-    spawn_effect(Radar::new(text), w, h, speed)
-}
-
-/// Start a neon animation (flickering bright/dim).
-pub fn neon(text: &str, speed: f64) -> AnimationHandle {
-    let (w, h) = text_dims(text);
-    spawn_effect(Neon::new(text), w, h, speed)
-}
-
-/// Start a karaoke animation (progressive highlight).
-pub fn karaoke(text: &str, speed: f64) -> AnimationHandle {
-    let (w, h) = text_dims(text);
-    spawn_effect(Karaoke::new(text), w, h, speed)
-}
-
-/// Start a flap animation (split-flap departure board).
-pub fn flap(text: &str, speed: f64) -> AnimationHandle {
-    let (w, h) = text_dims(text);
-    let settled = Color::new(0xff, 0xcc, 0x00);
-    let flipping = Color::new(0x99, 0x7a, 0x00);
-    spawn_effect(Flap::new(text, settled, flipping), w, h, speed)
-}
-
-/// Start a glow animation (sweeping gradient spotlight).
-pub fn glow(grad: Gradient, text: &str, speed: f64) -> AnimationHandle {
-    let (w, h) = text_dims(text);
-    spawn_effect(Glow::new(text, grad.palette(256)), w, h, speed)
-}
-
-/// Start a plasma animation (demoscene-style flowing color field).
-pub fn plasma(text: &str, speed: f64) -> AnimationHandle {
-    let (w, h) = text_dims(text);
-    spawn_effect(Plasma::new(text, crate::presets::storm().palette(256), 0.0), w, h, speed)
-}
-
-/// Start a plasma animation with a custom gradient.
-pub fn plasma_with(grad: Gradient, text: &str, speed: f64) -> AnimationHandle {
-    let (w, h) = text_dims(text);
-    spawn_effect(Plasma::new(text, grad.palette(256), 0.0), w, h, speed)
-}

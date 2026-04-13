@@ -8,6 +8,24 @@ pub use color::Color;
 pub use gradient::{Gradient, HsvSpin, Interpolation};
 pub use terminal::{bg_color, fg_color, is_dark_theme, is_light_theme, probe_colors, set_bg_color, set_fg_color, terminal_width};
 
+/// Curated imports for animation work.
+///
+/// ```
+/// use chromakopia::prelude::*;
+/// ```
+pub mod prelude {
+    pub use crate::Color;
+    pub use crate::animate::{
+        Scene, Line, FrameBuffer, AnimationHandle, Effect, EffectExt, On,
+        Rainbow, Plasma, Glow, Pulse, Radar, Neon, Karaoke, Glitch, Flap,
+        Scroll, ScrollDirection, Spread, SpreadOrigin, Dycp,
+        Fade, FadeEnvelope, Chain, Blend, BlendMode, Transition, Composite, DelayedStart,
+        Solid, text, Easing,
+    };
+    pub use crate::presets;
+    pub use crate::{gradient, bg_color, fg_color, terminal_width};
+}
+
 /// Create a gradient from a slice of colors.
 ///
 /// Colors can be hex strings like `"#ff0000"`, CSS-style `"rgb(255,0,0)"`,

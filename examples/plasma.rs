@@ -1,4 +1,4 @@
-use chromakopia::{animate, presets};
+use chromakopia::animate::*;
 use std::time::Duration;
 
 const BANNER: &str = r#"
@@ -12,7 +12,8 @@ const BANNER: &str = r#"
 #[tokio::main]
 async fn main() {
     let text = BANNER.trim_matches('\n');
-    let anim = animate::plasma_with(presets::storm(), text, 1.0);
-    tokio::time::sleep(Duration::from_secs(10)).await;
-    anim.stop();
+    let anim = Plasma::on(text).spawn();
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    anim.fade_out(2.0);
+    anim.wait().await;
 }
