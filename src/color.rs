@@ -110,6 +110,18 @@ impl Color {
 
         Color::from_hsv(h, s, v)
     }
+
+    /// Perceived brightness (0.0 = black, 1.0 = white) using BT.709 coefficients.
+    ///
+    /// Useful for determining if a color is "light" or "dark":
+    /// - luma > 0.5 → light
+    /// - luma < 0.5 → dark
+    pub fn luma(self) -> f64 {
+        let r = self.r as f64 / 255.0;
+        let g = self.g as f64 / 255.0;
+        let b = self.b as f64 / 255.0;
+        0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
 }
 
 impl fmt::Display for Color {
@@ -227,5 +239,23 @@ mod tests {
         assert!((original.r as i16 - restored.r as i16).abs() <= 1);
         assert!((original.g as i16 - restored.g as i16).abs() <= 1);
         assert!((original.b as i16 - restored.b as i16).abs() <= 1);
+    }
+
+    #[test]
+    fn luma_black_is_zero() {
+        assert!((Color::new(0, 0, 0).luma()).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn luma_white_is_one() {
+        assert!((Color::new(255, 255, 255).luma() - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn luma_green_brighter_than_blue() {
+        // BT.709: green has much higher weight than blue
+        let green = Color::new(0, 255, 0).luma();
+        let blue = Color::new(0, 0, 255).luma();
+        assert!(green > blue * 5.0);
     }
 }

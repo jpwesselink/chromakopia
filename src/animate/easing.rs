@@ -8,9 +8,10 @@
 /// assert!(Easing::EaseIn.apply(t) < 0.5);  // slow start
 /// assert!(Easing::EaseOut.apply(t) > 0.5);  // slow end
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum Easing {
     /// No easing — constant speed.
+    #[default]
     Linear,
     /// Cubic ease-in — slow start, fast end.
     EaseIn,
@@ -20,12 +21,14 @@ pub enum Easing {
     EaseInOut,
     /// CSS-style cubic bezier with control points (x1, y1, x2, y2).
     CubicBezier(f64, f64, f64, f64),
-}
-
-impl Default for Easing {
-    fn default() -> Self {
-        Easing::Linear
-    }
+    /// Bounce-out — decelerates then bounces at the end like a ball dropping.
+    BounceOut,
+    /// Elastic-out — overshoots then oscillates like a spring settling.
+    /// Uses default period (0.3) and amplitude.
+    ElasticOut,
+    /// Elastic-out with custom period — lower values = tighter oscillation,
+    /// higher values = looser, lazier spring. Default is 0.3.
+    Elastic(f64),
 }
 
 impl Easing {
@@ -49,6 +52,9 @@ impl Easing {
             Easing::CubicBezier(x1, y1, x2, y2) => {
                 cubic_bezier_solve(t, x1, y1, x2, y2)
             }
+            Easing::BounceOut => bounce_out(t),
+            Easing::ElasticOut => elastic_out(t, 0.3),
+            Easing::Elastic(period) => elastic_out(t, period),
         }
     }
 }
@@ -79,6 +85,29 @@ fn bezier_deriv(t: f64, p1: f64, p2: f64) -> f64 {
     3.0 * inv * inv * p1 + 6.0 * inv * t * (p2 - p1) + 3.0 * t * t * (1.0 - p2)
 }
 
+fn bounce_out(t: f64) -> f64 {
+    if t < 1.0 / 2.75 {
+        7.5625 * t * t
+    } else if t < 2.0 / 2.75 {
+        let t = t - 1.5 / 2.75;
+        7.5625 * t * t + 0.75
+    } else if t < 2.5 / 2.75 {
+        let t = t - 2.25 / 2.75;
+        7.5625 * t * t + 0.9375
+    } else {
+        let t = t - 2.625 / 2.75;
+        7.5625 * t * t + 0.984375
+    }
+}
+
+fn elastic_out(t: f64, period: f64) -> f64 {
+    if t == 0.0 || t == 1.0 {
+        return t;
+    }
+    let p = period.max(0.01);
+    (2.0_f64.powf(-6.0 * t) * ((t - p / 4.0) * std::f64::consts::TAU / p).sin()) + 1.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,6 +128,10 @@ mod tests {
             Easing::EaseOut,
             Easing::EaseInOut,
             Easing::CubicBezier(0.25, 0.1, 0.25, 1.0),
+            Easing::BounceOut,
+            Easing::ElasticOut,
+            Easing::Elastic(0.15),
+            Easing::Elastic(0.5),
         ] {
             assert!((easing.apply(0.0)).abs() < 1e-6, "{:?} at 0", easing);
             assert!((easing.apply(1.0) - 1.0).abs() < 1e-6, "{:?} at 1", easing);
@@ -132,6 +165,42 @@ mod tests {
         let mid = ease.apply(0.5);
         // Should be above 0.5 (fast in the middle)
         assert!(mid > 0.5);
+    }
+
+    #[test]
+    fn bounce_out_endpoints() {
+        assert!((Easing::BounceOut.apply(0.0)).abs() < 1e-6);
+        assert!((Easing::BounceOut.apply(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bounce_out_overshoots_then_settles() {
+        // Should reach values close to 1.0 before t=1.0 (the bounces)
+        let late = Easing::BounceOut.apply(0.9);
+        assert!(late > 0.9);
+    }
+
+    #[test]
+    fn elastic_out_endpoints() {
+        assert!((Easing::ElasticOut.apply(0.0)).abs() < 1e-6);
+        assert!((Easing::ElasticOut.apply(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn elastic_custom_period() {
+        // Tight spring (low period) should overshoot more times
+        let tight: Vec<f64> = (0..100).map(|i| Easing::Elastic(0.15).apply(i as f64 / 100.0)).collect();
+        let loose: Vec<f64> = (0..100).map(|i| Easing::Elastic(0.5).apply(i as f64 / 100.0)).collect();
+        // Count zero-crossings around 1.0 — tight should have more
+        let crossings = |vals: &[f64]| vals.windows(2).filter(|w| (w[0] - 1.0).signum() != (w[1] - 1.0).signum()).count();
+        assert!(crossings(&tight) > crossings(&loose));
+    }
+
+    #[test]
+    fn elastic_out_overshoots() {
+        // Elastic should overshoot past 1.0 at some point
+        let values: Vec<f64> = (0..100).map(|i| Easing::ElasticOut.apply(i as f64 / 100.0)).collect();
+        assert!(values.iter().any(|&v| v > 1.0), "elastic should overshoot");
     }
 
     #[test]

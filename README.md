@@ -1,148 +1,148 @@
 # chromakopia
 
-Beautiful terminal string gradients and animations for Rust. A port of [gradient-string](https://github.com/bokub/gradient-string) and [chalk-animation](https://github.com/bokub/chalk-animation), built on `colored` + `tokio`.
+Terminal animation engine for Rust.
+
+```rust
+use chromakopia::prelude::*;
+
+#[tokio::main]
+async fn main() {
+    Rainbow::on("Hello, world!").run(3.0).await;
+}
+```
+
+## Install
+
+```toml
+[dependencies]
+chromakopia = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+```
+
+## Effects
+
+Built-in effects. `.on("text")` gives an effect its text:
+
+```rust
+Rainbow::on("text").spawn();       // HSV hue rotation
+Plasma::on("text").spawn();        // demoscene sine waves
+Neon::on("text").spawn();          // flickering bright/dim
+Pulse::on("text").spawn();         // expanding red highlight
+Radar::on("text").spawn();         // sweeping spotlight
+Glow::on("text").spawn();          // gradient spotlight
+Karaoke::on("text").spawn();       // progressive reveal
+```
+
+Customize with builders — `.on()` works anywhere in the chain:
+
+```rust
+Plasma::on("text").palette(presets::storm().palette(256)).seed(42.0);
+Plasma::new().palette(presets::storm().palette(256)).on("text");
+// both work
+```
+
+## Scenes
+
+Stack effects vertically with `Scene`:
+
+```rust
+let white = Color::new(255, 255, 255);
+
+Scene::new()
+    .add(text("MIT License", white))
+    .blank()
+    .add(Rainbow::on("colored heading"))
+    .add(Plasma::on("body text\nwith multiple lines"))
+    .run(5.0)
+    .await;
+```
+
+## Control
+
+`.spawn()` returns a handle you can command:
+
+```rust
+let anim = Plasma::on("loading...").spawn();
+
+// ...do work...
+
+anim.fade_out(1.0);                           // 1s ease to background
+anim.fade_out_to(Color::new(0, 0, 0), 0.5);  // 0.5s ease to black
+anim.transition_to(Neon::on("done!"), 1.0);   // 1s crossfade
+anim.stop();                                   // hard cut
+anim.wait().await;                             // wait for finish
+```
+
+## Inline
+
+Render frames yourself for progress bars, spinners, embedded use:
+
+```rust
+let effect = Rainbow::on("loading...");
+for frame in 0..100 {
+    print!("\r{}", effect.frame(frame));
+    std::thread::sleep(std::time::Duration::from_millis(33));
+}
+```
+
+## Composition
+
+Effects compose. Blend, transition, chain, fade — then `.on("text")`:
+
+```rust
+// Blend two effects
+Blend::new(Plasma::new(), Radar::new(), BlendMode::Screen)
+    .on("blended text")
+    .spawn();
+
+// Chain effects sequentially
+Chain::new()
+    .then(90, Rainbow::new())
+    .then(90, Neon::new())
+    .on("chained text")
+    .run(6.0).await;
+
+// Fade in from black
+Fade::in_from(Plasma::new(), Color::new(0, 0, 0), Easing::EaseOut, 30)
+    .on("fading in")
+    .run(3.0).await;
+```
 
 ## Gradients
 
-```rust
-use chromakopia::{gradient, presets};
+Static gradients for non-animated color:
 
-// Custom gradient
+```rust
+use chromakopia::gradient;
+
 println!("{}", gradient(&["#ff0000", "#00ff00", "#0000ff"]).apply("Hello!"));
-
-// HSV interpolation
 println!("{}", gradient(&["cyan", "pink"]).hsv().apply("Smooth"));
-
-// Presets
-println!("{}", presets::rainbow().apply("Rainbow text"));
-
-// Multiline (column-aligned, great for ASCII art)
-println!("{}", presets::atlas().multiline(ascii_art));
 ```
 
-17 presets: `atlas`, `cristal`, `teen`, `mind`, `morning`, `vice`, `passion`, `fruit`, `instagram`, `retro`, `summer`, `rainbow`, `pastel`, `dark_n_stormy`, `mist`, `relic`, `flughafen`
+18 presets: `rainbow`, `storm`, `passion`, `cristal`, `morning`, `vice`, `atlas`, `teen`, `mind`, `fruit`, `instagram`, `retro`, `summer`, `pastel`, `dark_n_stormy`, `mist`, `relic`, `flughafen`.
 
-## Animations
+## Terminal detection
 
-Standalone animations run on a background tokio task with start/stop control:
+Auto-detects background/foreground colors for theme-aware animations:
 
 ```rust
-use chromakopia::animate;
-
-let anim = animate::rainbow("Loading...", 1.0);
-// ... do async work ...
-anim.replace("Almost done...");
-anim.stop();
+if chromakopia::is_dark_theme() {
+    // light effects
+} else {
+    // dark effects
+}
 ```
-
-Effects: `rainbow`, `pulse`, `glitch`, `radar`, `neon`, `karaoke`
-
-Gradient-parameterized: `glow(gradient, ...)`, `cycle(gradient, ...)`
-
-Split-flap board: `flap(...)`, `flap_with(gradient, ...)`
-
-## Sequences
-
-Chain animations with fades and transitions:
-
-```rust
-use chromakopia::{animate, presets};
-use std::time::Duration;
-
-animate::Sequence::new("Hello, world!")
-    .glow(presets::mist(), Duration::from_secs(5))
-    .with_fade(Duration::from_secs(1), Duration::ZERO)
-    .fade_to_gradient(presets::dark_n_stormy(), Duration::from_secs(2))
-    .run(1.0)
-    .await;
-```
-
-### Sequence steps
-
-- `.glow(gradient, duration)` — sweeping glow
-- `.rainbow(duration)` — HSV hue shift
-- `.cycle(gradient, duration)` — scrolling gradient
-- `.flap(duration)` — split-flap departure board
-- `.flap_with(gradient, duration)` — split-flap with custom colors
-- `.hold(color, duration)` — static colored text
-- `.fade_in(duration)` / `.fade_out(duration)` — fade from/to black
-
-### Fade modifiers (applied to last step)
-
-- `.with_fade(fade_in, fade_out)` — fade to/from background (text disappears)
-- `.fade_to_foreground(duration)` — settle into terminal's text color
-- `.fade_to_color(color, duration)` — settle into a specific color
-- `.fade_to_gradient(gradient, duration)` — settle into a static gradient
-- `.eased(Easing)` — apply an easing curve to the last fade
-
-### Easing curves
-
-All fade transitions support easing via `.eased()`:
-
-```rust
-use chromakopia::animate::Easing;
-
-animate::Sequence::new("Hello!")
-    .glow(presets::mist(), Duration::from_secs(5))
-    .with_fade(Duration::from_secs(1), Duration::ZERO)
-    .eased(Easing::EaseOut)
-    .fade_to_gradient(presets::dark_n_stormy(), Duration::from_secs(2))
-    .eased(Easing::EaseInOut)
-    .run(1.0)
-    .await;
-```
-
-Built-in curves: `Linear`, `EaseIn`, `EaseOut`, `EaseInOut`, `CubicBezier(x1, y1, x2, y2)`
-
-### Layer API (power-user)
-
-Place effects and fades at explicit time ranges for full compositional control:
-
-```rust
-use chromakopia::animate::{Sequence, TimeRange, FadeKind, FadeTarget, Easing};
-
-Sequence::new("Hello!")
-    .effect(TimeRange::new(0.0, 5.0), 30, animate::glow_effect(presets::mist()))
-    .fade(
-        TimeRange::new(0.0, 1.0),
-        FadeKind::FadeFrom(FadeTarget::Background),
-        Easing::EaseOut,
-    )
-    .fade(
-        TimeRange::new(3.0, 5.0),
-        FadeKind::FadeTo(FadeTarget::Gradient(presets::dark_n_stormy())),
-        Easing::EaseInOut,
-    )
-    .run(1.0)
-    .await;
-```
-
-Effect factories: `rainbow_effect()`, `glow_effect(gradient)`, `cycle_effect(gradient)`, `flap_effect(settled, flipping)`
-
-### Terminal detection
-
-Auto-detects terminal background (OSC 11) and foreground (OSC 10) colors for seamless fades. Override with `set_bg_color()` / `set_fg_color()`.
 
 ## Examples
 
 ```sh
-cargo run --example demo          # static gradients and presets
-cargo run --example ascii_art     # animated ASCII art banners
-cargo run --example loading       # simulated CLI loading flow
-cargo run --example sequence      # chained glow + rainbow with fades
-cargo run --example settle        # glow settling into gradient with easing
-cargo run --example layers        # power-user layer API with explicit time ranges
-cargo run --example flap_fade     # split-flap with fade
-cargo run --example fade_in       # fade-in effect
-
-# Individual animations
-cargo run --example rainbow
-cargo run --example pulse
-cargo run --example glitch
-cargo run --example radar
-cargo run --example neon
-cargo run --example karaoke
-cargo run --example glow
-cargo run --example cycle
-cargo run --example flap
+cargo run --example rainbow    # animated rainbow text
+cargo run --example plasma     # demoscene plasma effect
+cargo run --example demo       # static gradient presets
+cargo run --example license    # composed multi-effect scene
+cargo run --example fb_demo    # DYCP banner + scrolling license
 ```
+
+## License
+
+MIT
