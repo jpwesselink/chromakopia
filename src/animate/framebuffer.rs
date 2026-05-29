@@ -5,11 +5,13 @@
 //! - Render task: diffs grid against previous frame, flushes changed cells
 
 use crate::color::Color;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 /// Default text color used when effects haven't colored a cell yet.
-pub const DEFAULT_TEXT_COLOR: Color = Color { r: 204, g: 204, b: 204 };
+pub const DEFAULT_TEXT_COLOR: Color = Color {
+    r: 204,
+    g: 204,
+    b: 204,
+};
 
 /// Animation framerate. All seconds→frames conversions use this.
 pub const FPS: f64 = 30.0;
@@ -30,15 +32,27 @@ pub struct Cell {
 
 impl Cell {
     pub fn new(ch: char, color: Color) -> Self {
-        Self { ch, color, bg: None }
+        Self {
+            ch,
+            color,
+            bg: None,
+        }
     }
 
     pub fn with_bg(ch: char, color: Color, bg: Color) -> Self {
-        Self { ch, color, bg: Some(bg) }
+        Self {
+            ch,
+            color,
+            bg: Some(bg),
+        }
     }
 
     pub fn space() -> Self {
-        Self { ch: ' ', color: Color::new(0, 0, 0), bg: None }
+        Self {
+            ch: ' ',
+            color: Color::new(0, 0, 0),
+            bg: None,
+        }
     }
 }
 
@@ -105,6 +119,79 @@ impl FrameBuffer {
         self.cells.fill(Cell::space());
     }
 
+    /// Grow the buffer by appending blank rows at the bottom.
+    pub fn grow(&mut self, rows: usize) {
+        self.cells
+            .extend(std::iter::repeat(Cell::space()).take(self.width * rows));
+        self.height += rows;
+    }
+
+    /// Scroll content up by `n` rows. Top rows are discarded, bottom fills with spaces.
+    pub fn scroll_up(&mut self, n: usize) {
+        let shift = n.min(self.height) * self.width;
+        self.cells.drain(..shift);
+        self.cells
+            .extend(std::iter::repeat(Cell::space()).take(shift));
+    }
+
+    /// Render to plain text — no ANSI codes. Just characters and newlines.
+    /// Use when `color_enabled()` is false (CI, piped output, NO_COLOR).
+    pub fn to_plain_string(&self) -> String {
+        let mut out = String::with_capacity(self.width * self.height + self.height);
+        for y in 0..self.height {
+            if y > 0 {
+                out.push('\n');
+            }
+            // Trim trailing spaces per row
+            let mut row_end = self.width;
+            while row_end > 0 && self.cells[y * self.width + row_end - 1].ch == ' ' {
+                row_end -= 1;
+            }
+            for x in 0..row_end {
+                out.push(self.cells[y * self.width + x].ch);
+            }
+        }
+        out
+    }
+
+    /// Auto-detect: returns ANSI string if colors enabled, plain text otherwise.
+    pub fn to_string_auto(&self) -> String {
+        if crate::color_enabled() {
+            self.to_ansi_string()
+        } else {
+            self.to_plain_string()
+        }
+    }
+
+    /// Render rows `start..start+count` to an ANSI string, then release:
+    /// returns the string and marks those rows as "done" (they won't be
+    /// diffed or rewritten by the renderer).
+    pub fn freeze_rows(&self, start: usize, count: usize) -> String {
+        let end = (start + count).min(self.height);
+        let mut out = String::new();
+        let mut last_fg: Option<Color> = None;
+        for y in start..end {
+            if y > start {
+                out.push('\n');
+            }
+            for x in 0..self.width {
+                let cell = self.get(x, y);
+                if last_fg != Some(cell.color) {
+                    out.push_str(&format!(
+                        "\x1B[38;2;{};{};{}m",
+                        cell.color.r, cell.color.g, cell.color.b
+                    ));
+                    last_fg = Some(cell.color);
+                }
+                out.push(cell.ch);
+            }
+        }
+        if last_fg.is_some() {
+            out.push_str("\x1B[0m");
+        }
+        out
+    }
+
     /// Width of actual content (rightmost non-space column + 1).
     /// Color effects use this instead of buf.width so hue/position
     /// calculations scale to the text, not the buffer.
@@ -149,7 +236,10 @@ impl FrameBuffer {
                 }
 
                 if last_fg != Some(cell.color) {
-                    out.push_str(&format!("\x1B[38;2;{};{};{}m", cell.color.r, cell.color.g, cell.color.b));
+                    out.push_str(&format!(
+                        "\x1B[38;2;{};{};{}m",
+                        cell.color.r, cell.color.g, cell.color.b
+                    ));
                     last_fg = Some(cell.color);
                 }
                 out.push(cell.ch);
@@ -169,7 +259,9 @@ pub trait Effect: Send + 'static {
 
     /// Inherent size of this effect's content (width, height).
     /// Used by Scene for layout. Returns (0, 0) for pure color transforms.
-    fn size(&self) -> (usize, usize) { (0, 0) }
+    fn size(&self) -> (usize, usize) {
+        (0, 0)
+    }
 }
 
 /// Wraps any effect with text. Writes text into the buffer before the
@@ -182,23 +274,33 @@ pub struct On<E> {
 }
 
 impl<E: Effect> On<E> {
+    /// Render a single frame. Returns ANSI string if colors enabled, plain text in CI.
+    pub fn frame(&self, frame: usize) -> String {
+        let mut buf = FrameBuffer::new(self.w.max(1), self.h.max(1));
+        <Self as Effect>::render(self, &mut buf, frame);
+        buf.to_string_auto()
+    }
+
     /// Spawn in a terminal area sized to the text. Runs until `.stop()`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn spawn(self) -> AnimationHandle {
         let (w, h) = self.size();
         spawn_effect(self, w.max(1), h.max(1), 1.0)
     }
 
     /// Run in a terminal area sized to the text for `seconds`, then stop.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn run(self, seconds: f64) {
+        use std::time::Duration;
         let (w, h) = self.size();
-        run_effect(self, w.max(1), h.max(1), Duration::from_secs_f64(seconds), 1.0).await;
-    }
-
-    /// Render a single frame to an ANSI string. For inline use.
-    pub fn frame(&self, frame: usize) -> String {
-        let mut buf = FrameBuffer::new(self.w.max(1), self.h.max(1));
-        <Self as Effect>::render(self, &mut buf, frame);
-        buf.to_ansi_string()
+        run_effect(
+            self,
+            w.max(1),
+            h.max(1),
+            Duration::from_secs_f64(seconds),
+            1.0,
+        )
+        .await;
     }
 }
 
@@ -214,7 +316,9 @@ impl<E: Effect> Effect for On<E> {
         self.effect.render(buf, frame);
     }
 
-    fn size(&self) -> (usize, usize) { (self.w, self.h) }
+    fn size(&self) -> (usize, usize) {
+        (self.w, self.h)
+    }
 }
 
 /// Extension trait: `.on(text)` wraps any effect with text.
@@ -223,16 +327,30 @@ pub trait EffectExt: Effect + Sized {
         let lines: Vec<Vec<char>> = text.split('\n').map(|l| l.chars().collect()).collect();
         let h = lines.len();
         let w = lines.iter().map(|l| l.len()).max().unwrap_or(0);
-        On { lines, w, h, effect: self }
+        On {
+            lines,
+            w,
+            h,
+            effect: self,
+        }
     }
 }
 
 impl<E: Effect> EffectExt for E {}
 
+// ── Animation runtime (terminal only, not available on WASM) ──────────────────
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
+
 /// Shared mailbox between animation and renderer.
+#[cfg(not(target_arch = "wasm32"))]
 type Mailbox = Arc<Mutex<Option<FrameBuffer>>>;
 
 /// Commands sent from AnimationHandle to the animation task.
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(dead_code)]
 enum Command {
     FadeOut {
@@ -248,6 +366,7 @@ enum Command {
     Stop,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 type CommandSlot = Arc<Mutex<Option<Command>>>;
 
 /// Get current cursor row via ANSI DSR (Device Status Report).
@@ -266,7 +385,9 @@ fn get_cursor_row() -> Option<usize> {
     let fd = tty.as_raw_fd();
     let old = unsafe {
         let mut t = std::mem::zeroed();
-        if libc::tcgetattr(fd, &mut t) != 0 { return None; }
+        if libc::tcgetattr(fd, &mut t) != 0 {
+            return None;
+        }
         t
     };
 
@@ -289,13 +410,17 @@ fn get_cursor_row() -> Option<usize> {
             Ok(0) => break,
             Ok(n) => {
                 len += n;
-                if buf[..len].contains(&b'R') { break; }
+                if buf[..len].contains(&b'R') {
+                    break;
+                }
             }
             Err(_) => break,
         }
     }
 
-    unsafe { libc::tcsetattr(fd, libc::TCSANOW, &old); }
+    unsafe {
+        libc::tcsetattr(fd, libc::TCSANOW, &old);
+    }
 
     let s = std::str::from_utf8(&buf[..len]).ok()?;
     let inner = s.strip_prefix("\x1B[")?.strip_suffix('R')?;
@@ -303,7 +428,7 @@ fn get_cursor_row() -> Option<usize> {
     row_str.parse().ok()
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
 fn get_cursor_row() -> Option<usize> {
     None
 }
@@ -311,6 +436,7 @@ fn get_cursor_row() -> Option<usize> {
 /// Diff two framebuffers and produce minimal ANSI output.
 ///
 /// Uses absolute cursor positioning — no newlines, no scrolling.
+#[cfg(not(target_arch = "wasm32"))]
 fn diff_render(prev: Option<&FrameBuffer>, curr: &FrameBuffer, start_row: usize) -> String {
     let mut out = String::with_capacity(curr.width * curr.height * 4);
     let mut last_fg: Option<Color> = None;
@@ -343,7 +469,10 @@ fn diff_render(prev: Option<&FrameBuffer>, curr: &FrameBuffer, start_row: usize)
 
                 // Foreground color
                 if last_fg != Some(cell.color) {
-                    out.push_str(&format!("\x1B[38;2;{};{};{}m", cell.color.r, cell.color.g, cell.color.b));
+                    out.push_str(&format!(
+                        "\x1B[38;2;{};{};{}m",
+                        cell.color.r, cell.color.g, cell.color.b
+                    ));
                     last_fg = Some(cell.color);
                 }
                 out.push(cell.ch);
@@ -363,6 +492,7 @@ fn diff_render(prev: Option<&FrameBuffer>, curr: &FrameBuffer, start_row: usize)
 ///
 /// Both animation and render run at the same fixed framerate (60fps).
 /// Animation produces a frame, render consumes it — no overproduction.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn run_effect(
     effect: impl Effect,
     width: usize,
@@ -372,6 +502,17 @@ pub async fn run_effect(
 ) {
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    // CI / no-terminal: render one static frame to stderr and sleep
+    if !crate::color_enabled() {
+        let mut buf = FrameBuffer::new(width, height);
+        effect.render(&mut buf, 0);
+        let mut stderr = std::io::stderr().lock();
+        let _ = writeln!(stderr, "{}", buf.to_plain_string());
+        let _ = stderr.flush();
+        tokio::time::sleep(duration).await;
+        return;
+    }
 
     let mailbox: Mailbox = Arc::new(Mutex::new(None));
     let running = Arc::new(AtomicBool::new(true));
@@ -389,8 +530,7 @@ pub async fn run_effect(
 
     let start_row = get_cursor_row().unwrap_or(1);
 
-    let fps = 30u64;
-    let frame_ms = (1000.0 / fps as f64 / speed) as u64;
+    let frame_ms = (1000.0 / FPS / speed) as u64;
     let frame_duration = Duration::from_millis(frame_ms.max(1));
 
     // Animation task — same framerate as renderer
@@ -436,7 +576,12 @@ pub async fn run_effect(
 
                 let fps_str = format!(" {}fps ", displayed_fps);
                 let fps_col = term_width.saturating_sub(fps_str.len());
-                output.push_str(&format!("\x1B[{};{}H\x1B[90m{}\x1B[0m", start_row, fps_col + 1, fps_str));
+                output.push_str(&format!(
+                    "\x1B[{};{}H\x1B[90m{}\x1B[0m",
+                    start_row,
+                    fps_col + 1,
+                    fps_str
+                ));
 
                 let mut stderr = std::io::stderr().lock();
                 let _ = stderr.write_all(output.as_bytes());
@@ -462,6 +607,7 @@ pub async fn run_effect(
 }
 
 /// Handle for a running animation.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct AnimationHandle {
     running: Arc<std::sync::atomic::AtomicBool>,
     command: CommandSlot,
@@ -469,11 +615,13 @@ pub struct AnimationHandle {
     start_row: usize,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl AnimationHandle {
     /// Hard stop — kills the animation immediately.
     pub fn stop(&self) {
         use std::io::Write;
-        self.running.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.running
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         std::thread::sleep(Duration::from_millis(50));
         let mut stderr = std::io::stderr().lock();
         let _ = write!(stderr, "\x1B[{};1H\x1B[?25h", self.start_row + self.height);
@@ -482,7 +630,11 @@ impl AnimationHandle {
 
     /// Fade out over `seconds` to background color (EaseOut), then stop.
     pub fn fade_out(&self, seconds: f64) {
-        self.fade_out_with(crate::terminal::bg_color(), seconds, super::easing::Easing::EaseOut);
+        self.fade_out_with(
+            crate::terminal::bg_color(),
+            seconds,
+            super::easing::Easing::EaseOut,
+        );
     }
 
     /// Fade out over `seconds` to a specific color (EaseOut), then stop.
@@ -492,8 +644,12 @@ impl AnimationHandle {
 
     /// Fade out with full control over color, duration, and easing.
     pub fn fade_out_with(&self, color: Color, seconds: f64, easing: super::easing::Easing) {
-        let frames = (seconds * 30.0).round() as usize;
-        *self.command.lock().unwrap() = Some(Command::FadeOut { frames, color, easing });
+        let frames = secs_to_frames(seconds);
+        *self.command.lock().unwrap() = Some(Command::FadeOut {
+            frames,
+            color,
+            easing,
+        });
     }
 
     /// Crossfade to a new effect over `seconds` (EaseInOut).
@@ -502,8 +658,13 @@ impl AnimationHandle {
     }
 
     /// Crossfade to a new effect with custom easing.
-    pub fn transition_to_with(&self, effect: impl Effect, seconds: f64, easing: super::easing::Easing) {
-        let frames = (seconds * 30.0).round() as usize;
+    pub fn transition_to_with(
+        &self,
+        effect: impl Effect,
+        seconds: f64,
+        easing: super::easing::Easing,
+    ) {
+        let frames = secs_to_frames(seconds);
         *self.command.lock().unwrap() = Some(Command::TransitionTo {
             effect: Box::new(effect),
             frames,
@@ -520,6 +681,7 @@ impl AnimationHandle {
 }
 
 /// Spawn an effect that runs until stopped. Returns a handle.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn spawn_effect(
     effect: impl Effect,
     width: usize,
@@ -528,6 +690,23 @@ pub fn spawn_effect(
 ) -> AnimationHandle {
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    // CI / no-terminal: render one static frame, return a no-op handle
+    if !crate::color_enabled() {
+        let mut buf = FrameBuffer::new(width, height);
+        effect.render(&mut buf, 0);
+        let mut stderr = std::io::stderr().lock();
+        let _ = writeln!(stderr, "{}", buf.to_plain_string());
+        let _ = stderr.flush();
+        let running = Arc::new(AtomicBool::new(false));
+        let command: CommandSlot = Arc::new(Mutex::new(None));
+        return AnimationHandle {
+            running,
+            command,
+            height,
+            start_row: 0,
+        };
+    }
 
     let mailbox: Mailbox = Arc::new(Mutex::new(None));
     let running = Arc::new(AtomicBool::new(true));
@@ -546,8 +725,7 @@ pub fn spawn_effect(
 
     let start_row = get_cursor_row().unwrap_or(1);
 
-    let fps = 30u64;
-    let frame_ms = (1000.0 / fps as f64 / speed) as u64;
+    let frame_ms = (1000.0 / FPS / speed) as u64;
     let frame_duration = Duration::from_millis(frame_ms.max(1));
 
     // Animation task
@@ -563,7 +741,8 @@ pub fn spawn_effect(
         // Fade state: (color, easing, total_frames, elapsed)
         let mut fade: Option<(Color, super::easing::Easing, usize, usize)> = None;
         // Transition state: (old_effect, easing, total_frames, elapsed, new_frame_offset)
-        let mut transition: Option<(Box<dyn Effect>, super::easing::Easing, usize, usize, usize)> = None;
+        let mut transition: Option<(Box<dyn Effect>, super::easing::Easing, usize, usize, usize)> =
+            None;
 
         while r.load(Ordering::Relaxed) {
             interval.tick().await;
@@ -571,10 +750,18 @@ pub fn spawn_effect(
             // Check for commands
             if let Some(cmd) = cmd.lock().unwrap().take() {
                 match cmd {
-                    Command::FadeOut { frames, color, easing } => {
+                    Command::FadeOut {
+                        frames,
+                        color,
+                        easing,
+                    } => {
                         fade = Some((color, easing, frames, 0));
                     }
-                    Command::TransitionTo { effect: new_effect, frames, easing } => {
+                    Command::TransitionTo {
+                        effect: new_effect,
+                        frames,
+                        easing,
+                    } => {
                         let old = std::mem::replace(&mut effect, new_effect);
                         transition = Some((old, easing, frames, 0, frame));
                     }
@@ -670,7 +857,12 @@ pub fn spawn_effect(
 
                 let fps_str = format!(" {}fps ", displayed_fps);
                 let fps_col = term_width.saturating_sub(fps_str.len());
-                output.push_str(&format!("\x1B[{};{}H\x1B[90m{}\x1B[0m", start_row, fps_col + 1, fps_str));
+                output.push_str(&format!(
+                    "\x1B[{};{}H\x1B[90m{}\x1B[0m",
+                    start_row,
+                    fps_col + 1,
+                    fps_str
+                ));
 
                 let mut stderr = std::io::stderr().lock();
                 let _ = stderr.write_all(output.as_bytes());
@@ -681,7 +873,12 @@ pub fn spawn_effect(
         }
     });
 
-    AnimationHandle { running, command, height, start_row }
+    AnimationHandle {
+        running,
+        command,
+        height,
+        start_row,
+    }
 }
 
 #[cfg(test)]

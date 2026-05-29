@@ -1,6 +1,9 @@
+[workspace]
+members = [".", "chromakopia-wasm"]
+
 [package]
 name = "chromakopia"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Beautiful terminal string gradients and animations for Rust"
 license = "MIT"
@@ -10,11 +13,22 @@ keywords = ["terminal", "color", "gradient", "animation", "cli"]
 categories = ["command-line-interface"]
 
 [dependencies]
+rand = "0.9"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 colored = "3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
-rand = "0.9"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
 
 [[example]]
 name = "demo"

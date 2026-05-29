@@ -88,6 +88,9 @@ pub mod framebuffer;
 mod scene;
 
 pub use easing::Easing;
-pub use effects::{Rainbow, Glow, Plasma, Pulse, Glitch, Radar, Neon, Karaoke, Flap, Scroll, ScrollDirection, Spread, SpreadOrigin, Dycp, Fade, FadeEnvelope, Chain, Composite, DelayedStart, Blend, BlendMode, Transition, Solid, text};
-pub use framebuffer::{Cell, Effect, EffectExt, On, FrameBuffer, AnimationHandle, run_effect, spawn_effect};
+pub use effects::{Rainbow, Glow, Plasma, Pulse, Glitch, Radar, Neon, Karaoke, Flap, Scroll, ScrollDirection, Spread, SpreadOrigin, Dycp, Fld, Wind, Fade, FadeEnvelope, Chain, Composite, DelayedStart, Blend, BlendMode, Transition, Solid, text, Timeline, AlphaIn, AlphaOut};
+pub use framebuffer::{Cell, Effect, EffectExt, On, FrameBuffer};
 pub use scene::{Scene, Line};
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use framebuffer::{AnimationHandle, run_effect, spawn_effect};

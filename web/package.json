@@ -1,0 +1,20 @@
+{
+  "name": "chromakopia-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "rspress dev",
+    "build": "rspress build",
+    "preview": "rspress preview",
+    "build:wasm": "wasm-pack build ../chromakopia-wasm --target web --out-dir ../web/wasm"
+  },
+  "devDependencies": {
+    "@rspress/core": "^2.0.5",
+    "@types/react": "^19",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0"
+  }
+}

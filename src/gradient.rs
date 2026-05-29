@@ -1,3 +1,4 @@
+#[cfg(not(target_arch = "wasm32"))]
 use colored::Colorize;
 
 use crate::color::Color;
@@ -139,6 +140,7 @@ impl Gradient {
     ///
     /// Whitespace characters are preserved without consuming a color,
     /// so the gradient flows smoothly across visible characters only.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn apply(&self, text: &str) -> String {
         let visible: usize = text.chars().filter(|c| !c.is_whitespace()).count();
         let n = visible.max(self.stops.len());
@@ -165,6 +167,7 @@ impl Gradient {
     ///
     /// Colors are assigned by column position, so the gradient stays
     /// vertically aligned across lines — ideal for ASCII art.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn multiline(&self, text: &str) -> String {
         let lines: Vec<&str> = text.split('\n').collect();
         let max_len = lines
@@ -196,6 +199,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn basic_gradient() {
         colored::control::set_override(true);
         let g = Gradient::new(vec![Color::new(255, 0, 0), Color::new(0, 0, 255)]);

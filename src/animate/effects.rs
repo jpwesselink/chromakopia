@@ -4,33 +4,37 @@
 //! number, writes `(char, Color)` cells directly. No ANSI strings, no parsing.
 
 use crate::color::Color;
-use super::framebuffer::{Cell, Effect, EffectExt, On, FrameBuffer, AnimationHandle};
+use super::framebuffer::{Cell, Effect, EffectExt, On, FrameBuffer};
+#[cfg(not(target_arch = "wasm32"))]
+use super::framebuffer::AnimationHandle;
 
 /// Adds `.spawn()`, `.run()`, `.frame()` to effects that carry their own text.
 macro_rules! impl_text_effect_convenience {
     ($ty:ty) => {
         impl $ty {
-            /// Spawn in a terminal area. Runs until `.stop()` or `.fade_out()`.
-            pub fn spawn(self) -> AnimationHandle {
-                let (w, h) = <Self as Effect>::size(&self);
-                super::framebuffer::spawn_effect(self, w.max(1), h.max(1), 1.0)
-            }
-
-            /// Run in a terminal area for `seconds`, then stop.
-            pub async fn run(self, seconds: f64) {
-                let (w, h) = <Self as Effect>::size(&self);
-                super::framebuffer::run_effect(
-                    self, w.max(1), h.max(1),
-                    std::time::Duration::from_secs_f64(seconds), 1.0,
-                ).await;
-            }
-
             /// Render a single frame to an ANSI string.
             pub fn frame(&self, frame: usize) -> String {
                 let (w, h) = <Self as Effect>::size(self);
                 let mut buf = FrameBuffer::new(w.max(1), h.max(1));
                 <Self as Effect>::render(self, &mut buf, frame);
                 buf.to_ansi_string()
+            }
+
+            /// Spawn in a terminal area. Runs until `.stop()` or `.fade_out()`.
+            #[cfg(not(target_arch = "wasm32"))]
+            pub fn spawn(self) -> AnimationHandle {
+                let (w, h) = <Self as Effect>::size(&self);
+                super::framebuffer::spawn_effect(self, w.max(1), h.max(1), 1.0)
+            }
+
+            /// Run in a terminal area for `seconds`, then stop.
+            #[cfg(not(target_arch = "wasm32"))]
+            pub async fn run(self, seconds: f64) {
+                let (w, h) = <Self as Effect>::size(&self);
+                super::framebuffer::run_effect(
+                    self, w.max(1), h.max(1),
+                    std::time::Duration::from_secs_f64(seconds), 1.0,
+                ).await;
             }
         }
     };
@@ -420,15 +424,30 @@ impl Neon {
 
 impl Effect for Neon {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        let color = if frame.is_multiple_of(2) {
-            Color::new(88, 80, 85)
-        } else {
-            Color::new(0xff, 0x44, 0xcc)
-        };
+        let bright = Color::new(0xff, 0x44, 0xcc);
+        let dim    = Color::new(88, 50, 70);
 
+        // Mostly bright, occasional random flicker to dim
+        // Use a simple hash of frame to get pseudo-random per-character flicker
         for y in 0..buf.height {
             for x in 0..buf.width {
                 if buf.get(x, y).ch == ' ' { continue; }
+
+                // Per-character flicker: hash of (x, y, frame)
+                let hash = (x.wrapping_mul(7919) ^ y.wrapping_mul(104729) ^ frame.wrapping_mul(31)) % 100;
+
+                let color = if hash < 6 {
+                    // 6% chance of dim flicker per char per frame
+                    dim
+                } else {
+                    // Subtle brightness variation (pulsing glow)
+                    let pulse = ((frame as f64 * 0.15 + x as f64 * 0.1).sin() * 0.15 + 0.85).max(0.0);
+                    Color::new(
+                        (bright.r as f64 * pulse) as u8,
+                        (bright.g as f64 * pulse) as u8,
+                        (bright.b as f64 * pulse) as u8,
+                    )
+                };
                 buf.set_color(x, y, color);
             }
         }
@@ -605,7 +624,7 @@ impl Effect for Scroll {
         let max_width = self.chars.iter().map(|l| l.len()).max().unwrap_or(0);
         if max_width == 0 { return; }
 
-        let term_width = crate::terminal::terminal_width();
+        let term_width = buf.width;
         let pal = &self.palette;
 
         // If we have a color source, render it at the text's REST positions first.
@@ -701,6 +720,10 @@ impl Effect for Scroll {
 /// based on the current opacity (0.0 = fully target, 1.0 = fully effect).
 ///
 /// Use `Fade::in_from()` for fade-in, `Fade::out_to()` for fade-out.
+///
+/// **For new code, prefer `Timeline` + `AlphaIn` / `AlphaOut`** — the same
+/// effect, but composes with the rest of your animation as separate tracks
+/// instead of nesting wrappers.
 pub struct Fade {
     inner: Box<dyn Effect>,
     target_color: Color,
@@ -771,6 +794,12 @@ impl Effect for Fade {
 
 
 /// Chained effect: run A for N seconds, then B, etc.
+///
+/// **For new code, prefer `Timeline` with `.at(start..end, effect)` calls.**
+/// Chain resets the inner effect's frame counter at every stage boundary
+/// (so a `Plasma` continuing across stages will visibly stutter), while
+/// Timeline lets continuous effects span multiple sub-windows by giving
+/// them one long-window track.
 pub struct Chain {
     effects: Vec<(usize, Box<dyn Effect>)>, // (duration_frames, effect)
 }
@@ -956,6 +985,7 @@ pub struct Dycp {
     speed: f64,
     scroll_speed: f64,
     scroll_offset: i64,
+    ease_in_frames: usize,
     wave_delay: usize,
     phase_offset: f64,
     shadow: Option<(i32, i32, Color)>,
@@ -973,6 +1003,7 @@ impl Dycp {
             speed: 0.08,
             scroll_speed: 0.0,
             scroll_offset: 0,
+            ease_in_frames: 0,
             wave_delay: 0,
             phase_offset: 0.0,
             shadow: None,
@@ -1008,6 +1039,13 @@ impl Dycp {
     /// Start text off-screen and scroll it in. Negative = start right, positive = start left.
     pub fn scroll_in(mut self, offset: i64) -> Self {
         self.scroll_offset = offset;
+        self
+    }
+
+    /// Ease-out the scroll-in over `frames` frames, then rest at natural position.
+    /// Must be combined with `scroll_in`. After `frames` the text stays put and only waves.
+    pub fn ease_in(mut self, frames: usize) -> Self {
+        self.ease_in_frames = frames;
         self
     }
 
@@ -1063,9 +1101,15 @@ impl Effect for Dycp {
             }
         }
 
-        let scroll_px = (frame as f64 * self.scroll_speed) as i64 + self.scroll_offset;
+        let scroll_px = if self.ease_in_frames > 0 {
+            let t = (frame as f64 / self.ease_in_frames as f64).min(1.0);
+            let t_ease = 1.0 - (1.0 - t).powi(3); // cubic ease-out
+            (self.scroll_offset as f64 * (1.0 - t_ease)) as i64
+        } else {
+            (frame as f64 * self.scroll_speed) as i64 + self.scroll_offset
+        };
         let w = buf.width as i64;
-        let wrapping = self.scroll_offset == 0;
+        let wrapping = self.scroll_offset == 0 && self.ease_in_frames == 0;
 
         for (line_idx, line) in self.chars.iter().enumerate() {
             let base_y = line_idx as f64;
@@ -1139,6 +1183,10 @@ impl Effect for Dycp {
 // ── FadeEnvelope ──
 
 /// Fade in, hold, fade out — smooth opacity envelope over an inner effect.
+///
+/// **For new code, prefer `Timeline` + `AlphaIn` / `AlphaOut`** as separate
+/// tracks. The envelope pattern collapses to:
+/// `Timeline.at(0..total, inner).at(0..fade_in, AlphaIn::new(fade_in)).at(total-fade_out..total, AlphaOut::new(fade_out))`.
 pub struct FadeEnvelope {
     inner: Box<dyn Effect>,
     target_color: Color,
@@ -1153,9 +1201,13 @@ pub struct FadeEnvelope {
 impl FadeEnvelope {
     /// Wrap an effect with a fade envelope. Defaults: 0.5s in, 1s out, EaseOut/EaseInOut, bg color.
     pub fn new(inner: impl Effect) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        let default_bg = crate::terminal::bg_color();
+        #[cfg(target_arch = "wasm32")]
+        let default_bg = Color::new(0, 0, 0);
         Self {
             inner: Box::new(inner),
-            target_color: crate::terminal::bg_color(),
+            target_color: default_bg,
             fade_out_color: None,
             fade_in_frames: super::framebuffer::secs_to_frames(0.5),
             fade_out_frames: super::framebuffer::secs_to_frames(1.0),
@@ -1243,6 +1295,9 @@ impl Effect for FadeEnvelope {
 /// During the delay, all cells are cleared to spaces. Once the delay
 /// is over, the inner effect renders normally with frame counting
 /// starting from 0.
+///
+/// **For new code, prefer `Timeline.at(delay_secs..total, inner)`** —
+/// same behaviour, expressed as a track window.
 pub struct DelayedStart {
     delay: usize,
     inner: Box<dyn Effect>,
@@ -1493,6 +1548,555 @@ impl Effect for Composite {
     }
 }
 
+// ── FLD (Flexible Line Distance) ──
+
+/// Flexible Line Distance — shifts entire scanlines vertically with a sine wave.
+///
+/// Classic demoscene effect: the rendered output ripples like a rubber sheet.
+/// Wraps any inner effect, renders it into a scratch buffer, then copies each
+/// row to a displaced y position.
+pub struct Fld {
+    inner: Box<dyn Effect>,
+    amplitude: f64,
+    frequency: f64,
+    speed: f64,
+    phase: f64,
+    delay: usize,
+    ramp: usize,
+}
+
+impl Fld {
+    /// Wrap an effect with FLD. Defaults: amplitude 3.0, frequency 0.15, speed 0.05.
+    pub fn new(inner: impl Effect) -> Self {
+        Self {
+            inner: Box::new(inner),
+            amplitude: 3.0,
+            frequency: 0.15,
+            speed: 0.05,
+            phase: 0.0,
+            delay: 0,
+            ramp: 30,
+        }
+    }
+
+    pub fn amplitude(mut self, v: f64) -> Self { self.amplitude = v; self }
+    pub fn frequency(mut self, v: f64) -> Self { self.frequency = v; self }
+    pub fn speed(mut self, v: f64) -> Self { self.speed = v; self }
+    pub fn phase(mut self, v: f64) -> Self { self.phase = v; self }
+
+    /// Frames to wait before bounce starts.
+    pub fn delay(mut self, v: usize) -> Self { self.delay = v; self }
+
+    /// Frames to ramp amplitude from 0 to full after delay.
+    pub fn ramp(mut self, v: usize) -> Self { self.ramp = v; self }
+}
+
+impl Effect for Fld {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        // Render inner effect into a scratch buffer
+        let mut scratch = FrameBuffer::new(buf.width, buf.height);
+        self.inner.render(&mut scratch, frame);
+
+        // Before delay: just copy through, no displacement
+        if frame < self.delay {
+            for y in 0..buf.height {
+                for x in 0..buf.width {
+                    buf.set(x, y, scratch.get(x, y));
+                }
+            }
+            return;
+        }
+
+        // Ramp amplitude from 0 → full over `ramp` frames after delay
+        let since = frame - self.delay;
+        let amp = if self.ramp > 0 && since < self.ramp {
+            let t = since as f64 / self.ramp as f64;
+            self.amplitude * t * t // quadratic ease-in
+        } else {
+            self.amplitude
+        };
+
+        buf.clear();
+
+        let t = frame as f64 * self.speed + self.phase;
+
+        // Displace each row
+        for y in 0..scratch.height {
+            let wave = (y as f64 * self.frequency + t).sin();
+            let dy = (wave * amp).round() as i32;
+            let dest_y = y as i32 + dy;
+
+            if dest_y < 0 || dest_y as usize >= buf.height { continue; }
+
+            for x in 0..buf.width {
+                let cell = scratch.get(x, y);
+                if cell.ch != ' ' {
+                    buf.set(x, dest_y as usize, cell);
+                }
+            }
+        }
+    }
+
+    fn size(&self) -> (usize, usize) { self.inner.size() }
+}
+
+// ── Wind: cloth-in-wind dissolve ──
+//
+// One-shot transition. Treats the inner effect's output as a coherent cloth:
+// every still-attached cell is displaced by a low-frequency noise-like field
+// (sum of sines) so neighbours wave together. A wind force builds over the
+// first 70% of the duration. Each cell has a release time τ that grows along
+// the wind direction (upwind cells release first). After release, a cell
+// becomes a free particle: closed-form damped motion under the wind it saw
+// at release, fading out over `fade_tail` seconds.
+//
+// No per-cell mutable state — the entire effect is a pure function of
+// (frame, w, h, params), which keeps the renderer cacheable and the tests
+// trivially deterministic.
+
+/// Visual aspect ratio of a terminal cell (rows are roughly twice as tall
+/// as columns are wide). Applied to vertical displacement so diagonal wind
+/// reads as ~equal angles on screen.
+const Y_ASPECT: f64 = 0.5;
+
+pub struct Wind {
+    /// `None` = read the existing buffer state as the source (use as a
+    /// Timeline track). `Some(_)` = render this effect each frame and
+    /// dissolve its output (the wrapper case).
+    inner: Option<Box<dyn Effect>>,
+    duration: f64,
+    delay: f64,
+    angle_rad: f64,
+    /// Direction the tear front sweeps across the cloth. `None` = same as wind angle
+    /// (upwind tears first — the physically natural case). Set explicitly to
+    /// decouple visual dissolve order from flight direction.
+    tear_angle_rad: Option<f64>,
+    strength: f64,
+    flutter_amp: f64,
+    flutter_freq: f64,
+    flutter_speed: f64,
+    damping: f64,
+    fade_tail: f64,
+    /// Pre-release downwind drift: cells lean by `lean × wind_mag` in the wind direction.
+    /// Makes the cloth visibly bow into the wind before it tears.
+    lean: f64,
+    seed: u64,
+}
+
+impl Wind {
+    /// Read the buffer state as the source — for use as a Timeline track,
+    /// or any context where another effect has already populated the buffer.
+    /// Builders configure the dissolve: `.duration(...)`, `.angle_deg(...)`, etc.
+    pub fn new() -> Self {
+        Self::with_inner(None)
+    }
+
+    /// Wrap an inner effect — Wind renders the inner each frame into its own
+    /// scratch buffer and dissolves the result. Use for "show then blow away"
+    /// arcs outside a Timeline.
+    pub fn wrap(inner: impl Effect) -> Self {
+        Self::with_inner(Some(Box::new(inner)))
+    }
+
+    fn with_inner(inner: Option<Box<dyn Effect>>) -> Self {
+        Self {
+            inner,
+            duration: 2.5,
+            delay: 0.0,
+            angle_rad: 15.0_f64.to_radians(),
+            tear_angle_rad: None,
+            strength: 30.0,
+            flutter_amp: 0.6,
+            flutter_freq: 0.25,
+            flutter_speed: 2.0,
+            damping: 1.5,
+            fade_tail: 0.8,
+            lean: 0.04,
+            seed: 0,
+        }
+    }
+
+    pub fn duration(mut self, seconds: f64) -> Self { self.duration = seconds; self }
+    /// Hold the inner effect statically for `seconds` before any flutter or tearing begins.
+    pub fn delay(mut self, seconds: f64) -> Self { self.delay = seconds; self }
+    pub fn angle_deg(mut self, deg: f64) -> Self { self.angle_rad = deg.to_radians(); self }
+    pub fn angle_rad(mut self, rad: f64) -> Self { self.angle_rad = rad; self }
+    /// Direction the tear front sweeps. `0°` = tear starts on the left edge,
+    /// `180°` = right edge, `90°` = top, etc. By default the tear follows the wind.
+    pub fn tear_angle_deg(mut self, deg: f64) -> Self { self.tear_angle_rad = Some(deg.to_radians()); self }
+    pub fn tear_angle_rad(mut self, rad: f64) -> Self { self.tear_angle_rad = Some(rad); self }
+    pub fn strength(mut self, cells_per_second: f64) -> Self { self.strength = cells_per_second; self }
+    pub fn flutter(mut self, amp: f64, freq: f64, speed: f64) -> Self {
+        self.flutter_amp = amp;
+        self.flutter_freq = freq;
+        self.flutter_speed = speed;
+        self
+    }
+    pub fn damping(mut self, d: f64) -> Self { self.damping = d; self }
+    pub fn fade_tail(mut self, seconds: f64) -> Self { self.fade_tail = seconds; self }
+    /// Pre-release downwind drift, in cells per (cell/s of wind magnitude).
+    /// At default strength=30 and lean=0.04 the cloth bows ~1.2 cells at peak wind.
+    pub fn lean(mut self, factor: f64) -> Self { self.lean = factor; self }
+    pub fn seed(mut self, s: u64) -> Self { self.seed = s; self }
+}
+
+impl Default for Wind {
+    fn default() -> Self { Self::new() }
+}
+
+#[inline]
+fn wind_flutter_offset(c: f64, r: f64, t: f64, amp: f64, freq: f64, speed: f64) -> (f64, f64) {
+    let dx = amp * (
+        (c * freq + t * speed).sin()
+        + ((c + r) * 0.4 * freq + t * speed * 1.3).sin()
+    );
+    let dy = amp * (
+        (r * freq * 1.1 + t * speed * 0.9 + 1.7).sin()
+        + ((c - r) * 0.4 * freq + t * speed * 1.1 + 0.3).sin()
+    );
+    (dx, dy)
+}
+
+/// d/dt of `wind_flutter_offset` — used as the initial velocity at release.
+#[inline]
+fn wind_flutter_velocity(c: f64, r: f64, t: f64, amp: f64, freq: f64, speed: f64) -> (f64, f64) {
+    let dvx = amp * speed * (
+        (c * freq + t * speed).cos()
+        + 1.3 * ((c + r) * 0.4 * freq + t * speed * 1.3).cos()
+    );
+    let dvy = amp * speed * (
+        0.9 * (r * freq * 1.1 + t * speed * 0.9 + 1.7).cos()
+        + 1.1 * ((c - r) * 0.4 * freq + t * speed * 1.1 + 0.3).cos()
+    );
+    (dvx, dvy)
+}
+
+/// Cheap deterministic hash → uniform float in [0, 1).
+/// Same `(c, r, seed)` always returns the same value — no rand crate calls.
+#[inline]
+fn wind_hash01(c: usize, r: usize, seed: u64) -> f64 {
+    let mut h = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h ^= (c as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h = h.rotate_left(31);
+    h ^= (r as u64).wrapping_mul(0x94D0_49BB_1331_11EB);
+    h = h.rotate_left(27);
+    h = h.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    ((h >> 11) as f64) / ((1u64 << 53) as f64)
+}
+
+#[inline]
+fn wind_smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
+    if edge1 <= edge0 { return if x >= edge1 { 1.0 } else { 0.0 }; }
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+impl Effect for Wind {
+    fn render(&self, out: &mut FrameBuffer, frame: usize) {
+        let raw_t = frame as f64 / super::framebuffer::FPS;
+        let w = out.width;
+        let h = out.height;
+        if w == 0 || h == 0 { return; }
+
+        // Hold period: render inner effect straight through, untouched.
+        // In buffer mode (no inner), `out` is already populated by earlier
+        // tracks — leave it alone.
+        if raw_t < self.delay {
+            if let Some(inner) = &self.inner {
+                inner.render(out, frame);
+            }
+            return;
+        }
+        let t = raw_t - self.delay;
+
+        // Build the scratch buffer that holds the source we're going to dissolve.
+        let scratch = if let Some(inner) = &self.inner {
+            let mut s = FrameBuffer::new(w, h);
+            inner.render(&mut s, frame);
+            s
+        } else {
+            // Buffer mode: snapshot the current `out` (populated by earlier
+            // Timeline tracks) before we clear it.
+            out.clone()
+        };
+        out.clear();
+
+        let cos_th = self.angle_rad.cos();
+        let sin_th = self.angle_rad.sin();
+        let tear_angle = self.tear_angle_rad.unwrap_or(self.angle_rad);
+        let cos_tr = tear_angle.cos();
+        let sin_tr = tear_angle.sin();
+
+        // Normalize the tear projection (c·cos + r·sin) to [0, 1] over the grid,
+        // regardless of direction sign. The tear-axis low corner releases first.
+        let corners = [
+            0.0,
+            (w as f64 - 1.0) * cos_tr,
+            (h as f64 - 1.0) * sin_tr,
+            (w as f64 - 1.0) * cos_tr + (h as f64 - 1.0) * sin_tr,
+        ];
+        let min_proj = corners.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max_proj = corners.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let proj_range = (max_proj - min_proj).max(1e-9);
+
+        // Per-output-cell highest-α-seen, for collision resolution.
+        let mut alpha_grid = vec![-1.0_f64; w * h];
+        let bg = Color::new(0, 0, 0);
+
+        for r in 0..h {
+            for c in 0..w {
+                let cell = scratch.get(c, r);
+                if cell.ch == ' ' { continue; }
+
+                let raw_proj = c as f64 * cos_tr + r as f64 * sin_tr;
+                let proj = ((raw_proj - min_proj) / proj_range).clamp(0.0, 1.0);
+                let release_noise = wind_hash01(c, r, self.seed);
+                let tau = self.duration * (0.1 + 0.7 * proj + 0.15 * release_noise);
+
+                let (dx, dy, alpha) = if t < tau {
+                    let (mut dx, mut dy) = wind_flutter_offset(
+                        c as f64, r as f64, t,
+                        self.flutter_amp, self.flutter_freq, self.flutter_speed,
+                    );
+                    // Pre-release lean: cloth bows into the wind as wind builds.
+                    let wm = self.strength
+                        * wind_smoothstep(0.0, 0.7 * self.duration, t).powi(2);
+                    dx += wm * self.lean * cos_th;
+                    dy += wm * self.lean * sin_th;
+                    (dx, dy, 1.0)
+                } else {
+                    let delta = t - tau;
+                    if delta >= self.fade_tail { continue; }
+
+                    // Position offset at the moment of release — flutter + lean,
+                    // so released cells start from where the leaned attached cell was.
+                    let (mut dx0, mut dy0) = wind_flutter_offset(
+                        c as f64, r as f64, tau,
+                        self.flutter_amp, self.flutter_freq, self.flutter_speed,
+                    );
+                    let wm_at_tau = self.strength
+                        * wind_smoothstep(0.0, 0.7 * self.duration, tau).powi(2);
+                    dx0 += wm_at_tau * self.lean * cos_th;
+                    dy0 += wm_at_tau * self.lean * sin_th;
+                    // Velocity at release (cells/s in flutter terms).
+                    let (vfx, vfy) = wind_flutter_velocity(
+                        c as f64, r as f64, tau,
+                        self.flutter_amp, self.flutter_freq, self.flutter_speed,
+                    );
+                    // Wind terminal velocity (cells/s) at the moment of release.
+                    // Same magnitude as wm_at_tau above — strength is already cells/s
+                    // because terminal velocity = wind/k in our model and we treat
+                    // strength as terminal velocity directly.
+                    let term_vx = wm_at_tau * cos_th;
+                    let term_vy = wm_at_tau * sin_th;
+
+                    // Closed-form: dv/dt = -k(v - term_v) →
+                    //   v(Δ)        = (v0 - term_v)·exp(-kΔ) + term_v
+                    //   pos(Δ) - p0 = (v0 - term_v)/k · (1 - exp(-kΔ)) + term_v·Δ
+                    let k = self.damping.max(1e-3);
+                    let exp_kt = (-k * delta).exp();
+                    let one_minus = 1.0 - exp_kt;
+                    let dx_free = (vfx - term_vx) / k * one_minus + term_vx * delta;
+                    let dy_free = (vfy - term_vy) / k * one_minus + term_vy * delta;
+
+                    let alpha = (1.0 - delta / self.fade_tail).max(0.0);
+                    (dx0 + dx_free, dy0 + dy_free, alpha)
+                };
+
+                // Apply terminal aspect ratio to vertical motion only at write time.
+                let target_x = (c as f64 + dx).round() as i32;
+                let target_y = (r as f64 + dy * Y_ASPECT).round() as i32;
+                if target_x < 0 || target_x >= w as i32 { continue; }
+                if target_y < 0 || target_y >= h as i32 { continue; }
+                let tx = target_x as usize;
+                let ty = target_y as usize;
+
+                let idx = ty * w + tx;
+                if alpha > alpha_grid[idx] {
+                    alpha_grid[idx] = alpha;
+                    let dimmed = if alpha >= 0.999 {
+                        cell.color
+                    } else {
+                        Color::lerp_rgb(cell.color, bg, 1.0 - alpha)
+                    };
+                    out.set(tx, ty, Cell { ch: cell.ch, color: dimmed, bg: cell.bg });
+                }
+            }
+        }
+    }
+
+    fn size(&self) -> (usize, usize) {
+        match &self.inner {
+            Some(inner) => inner.size(),
+            None => (0, 0), // buffer mode — caller (Timeline) provides size
+        }
+    }
+}
+
+// ── Timeline: keyframed multi-track stacking ──
+//
+// `Timeline` lets you compose effects as parallel tracks, each with its own
+// activation window. Tracks render in the order they were added; each gets a
+// LOCAL frame counter that resets to 0 at the start of its window. Outside
+// its window a track is inert.
+//
+// Example:
+// ```ignore
+// Timeline::new("hello", 14.0)
+//     .at(0.0..2.0, Scroll::new("hello").direction(ScrollDirection::Left))
+//     .at(0.0..14.0, Plasma::new().palette(fire))
+//     .at(0.0..3.0, AlphaIn::new(3.0))
+//     .at(12.0..14.0, AlphaOut::new(2.0))
+// ```
+//
+// Conventions:
+// - The `text` argument seeds the buffer with chars (with DEFAULT_TEXT_COLOR)
+//   on every frame, so tracks always see the text underneath them. Pass an
+//   empty string if you want effects that draw their own chars (Scroll, etc.).
+// - For continuous effects you want to "tick smoothly across" multiple
+//   sub-windows (e.g., Plasma that fades in then holds), give them ONE
+//   long-window track rather than chaining short windows — chained windows
+//   reset the inner effect's frame counter and produce visible stutter.
+
+use crate::color::Color as TimelineColor; // alias to keep the use line obvious
+
+pub struct Timeline {
+    /// The seed buffer is copied into the render target at the start of each
+    /// frame. Built from text via `new`, or supplied directly via `from_buffer`.
+    seed: FrameBuffer,
+    tracks: Vec<TimelineTrack>,
+}
+
+struct TimelineTrack {
+    start: usize,
+    end: usize,
+    effect: Box<dyn Effect>,
+}
+
+impl Timeline {
+    /// Create a timeline whose base content is `text` (rendered with the
+    /// default text colour). Tracks layer on top.
+    pub fn new(text: &str, _total_seconds: f64) -> Self {
+        Self::from_buffer(
+            FrameBuffer::from_text(text, super::framebuffer::DEFAULT_TEXT_COLOR),
+            _total_seconds,
+        )
+    }
+
+    /// Create a timeline from a pre-rendered framebuffer. Useful when the
+    /// "base" is something more elaborate than a string — a coloured banner,
+    /// a snapshot from another effect, an imported image, etc.
+    pub fn from_buffer(seed: FrameBuffer, _total_seconds: f64) -> Self {
+        Self { seed, tracks: Vec::new() }
+    }
+
+    /// Add a track that activates during `window` (in seconds). The track's
+    /// effect receives frame counts starting at 0 when the window opens.
+    pub fn at(mut self, window: std::ops::Range<f64>, effect: impl Effect) -> Self {
+        self.tracks.push(TimelineTrack {
+            start: super::framebuffer::secs_to_frames(window.start),
+            end: super::framebuffer::secs_to_frames(window.end),
+            effect: Box::new(effect),
+        });
+        self
+    }
+}
+
+impl Effect for Timeline {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        // Seed the base content every frame.
+        let h = self.seed.height.min(buf.height);
+        let w = self.seed.width.min(buf.width);
+        for y in 0..h {
+            for x in 0..w {
+                buf.set(x, y, self.seed.get(x, y));
+            }
+        }
+
+        for track in &self.tracks {
+            if frame >= track.start && frame < track.end {
+                let local = frame - track.start;
+                track.effect.render(buf, local);
+            }
+        }
+    }
+
+    fn size(&self) -> (usize, usize) { (self.seed.width, self.seed.height) }
+}
+
+// ── AlphaIn / AlphaOut: buffer-modifying alpha tracks ──
+//
+// Unlike `Fade` / `FadeEnvelope` these don't wrap an inner effect — they read
+// the buffer's current colours and lerp them toward / away from a target
+// colour over `seconds`. Designed to be used as Timeline tracks where the
+// "content" is provided by other tracks running underneath.
+
+pub struct AlphaIn {
+    duration: usize,
+    from: TimelineColor,
+    easing: super::easing::Easing,
+}
+
+impl AlphaIn {
+    /// Fade everything from `from_color` (default: black) toward whatever
+    /// each cell currently holds, over `seconds`.
+    pub fn new(seconds: f64) -> Self {
+        Self {
+            duration: super::framebuffer::secs_to_frames(seconds).max(1),
+            from: TimelineColor::new(0, 0, 0),
+            easing: super::easing::Easing::EaseOut,
+        }
+    }
+    pub fn from_color(mut self, c: TimelineColor) -> Self { self.from = c; self }
+    pub fn easing(mut self, e: super::easing::Easing) -> Self { self.easing = e; self }
+}
+
+impl Effect for AlphaIn {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        let t = self.easing.apply((frame as f64 / self.duration as f64).min(1.0));
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                let cell = buf.get(x, y);
+                if cell.ch == ' ' { continue; }
+                buf.set_color(x, y, TimelineColor::lerp_rgb(self.from, cell.color, t));
+            }
+        }
+    }
+}
+
+pub struct AlphaOut {
+    duration: usize,
+    to: TimelineColor,
+    easing: super::easing::Easing,
+}
+
+impl AlphaOut {
+    /// Fade everything from each cell's current colour toward `to_color`
+    /// (default: black), over `seconds`.
+    pub fn new(seconds: f64) -> Self {
+        Self {
+            duration: super::framebuffer::secs_to_frames(seconds).max(1),
+            to: TimelineColor::new(0, 0, 0),
+            easing: super::easing::Easing::EaseInOut,
+        }
+    }
+    pub fn to_color(mut self, c: TimelineColor) -> Self { self.to = c; self }
+    pub fn easing(mut self, e: super::easing::Easing) -> Self { self.easing = e; self }
+}
+
+impl Effect for AlphaOut {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        let t = self.easing.apply((frame as f64 / self.duration as f64).min(1.0));
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                let cell = buf.get(x, y);
+                if cell.ch == ' ' { continue; }
+                buf.set_color(x, y, TimelineColor::lerp_rgb(cell.color, self.to, t));
+            }
+        }
+    }
+}
+
 // Layout effects carry text — give them the same convenience as On<E>.
 impl_text_effect_convenience!(Glitch);
 impl_text_effect_convenience!(Flap);
@@ -1686,5 +2290,144 @@ mod tests {
         let mut buf = make_buf("hi");
         effect.render(&mut buf, 100);
         assert_ne!(buf.get(0, 0).color, Color::new(0, 0, 0));
+    }
+
+    fn count_non_space(buf: &FrameBuffer) -> usize {
+        let mut n = 0;
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                if buf.get(x, y).ch != ' ' { n += 1; }
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn wind_starts_with_inner_text() {
+        // At t=0, every character should still be present (some may be displaced
+        // by ≤1 cell from flutter, but no fading or release has happened yet).
+        let inner = Solid(Color::new(255, 255, 255)).on("hello world");
+        let (w, h) = inner.size();
+        let effect = Wind::wrap(inner).duration(2.0);
+        let mut buf = FrameBuffer::new(w + 2, h + 2);
+        <Wind as Effect>::render(&effect, &mut buf, 0);
+        let n = count_non_space(&buf);
+        // Allow a tiny loss from collisions when two cells round to the same target.
+        let expected = "hello world".chars().filter(|c| *c != ' ').count();
+        assert!(n >= expected.saturating_sub(2), "want ≥{}, got {}", expected.saturating_sub(2), n);
+    }
+
+    #[test]
+    fn wind_ends_empty() {
+        // Past duration + fade_tail, every cell must be released and faded out.
+        let inner = Solid(Color::new(255, 255, 255));
+        let effect = Wind::wrap(inner.on("hello world"))
+            .duration(1.0)
+            .fade_tail(0.3);
+        let mut buf = FrameBuffer::new(20, 3);
+        // duration (1.0s) + fade_tail (0.3s) + small slack
+        let frame = super::super::framebuffer::secs_to_frames(1.0 + 0.3 + 0.2);
+        <Wind as Effect>::render(&effect, &mut buf, frame);
+        assert_eq!(count_non_space(&buf), 0);
+    }
+
+    #[test]
+    fn wind_dissolves_over_time() {
+        // Stuff goes away, doesn't come back. We can't assert strict monotonicity
+        // because flutter + free-flight can cause cells to collide/separate from
+        // frame to frame; instead, assert that late counts are strictly below
+        // early counts, with margin.
+        use super::super::framebuffer::secs_to_frames;
+        let inner = Solid(Color::new(255, 255, 255)).on("hello world there");
+        let effect = Wind::wrap(inner).duration(1.5);
+        let mut buf = FrameBuffer::new(40, 5);
+
+        <Wind as Effect>::render(&effect, &mut buf, 0);
+        let n_start = count_non_space(&buf);
+
+        <Wind as Effect>::render(&effect, &mut buf, secs_to_frames(1.5));
+        let n_mid = count_non_space(&buf);
+
+        <Wind as Effect>::render(&effect, &mut buf, secs_to_frames(1.5 + 0.4));
+        let n_late = count_non_space(&buf);
+
+        assert!(n_mid < n_start, "mid {} should be less than start {}", n_mid, n_start);
+        assert!(n_late < n_mid, "late {} should be less than mid {}", n_late, n_mid);
+    }
+
+    #[test]
+    fn wind_is_deterministic() {
+        let make = || Wind::wrap(Solid(Color::new(255, 255, 255)).on("hello")).duration(1.0);
+        let mut a = FrameBuffer::new(10, 2);
+        let mut b = FrameBuffer::new(10, 2);
+        <Wind as Effect>::render(&make(), &mut a, 12);
+        <Wind as Effect>::render(&make(), &mut b, 12);
+        for y in 0..a.height {
+            for x in 0..a.width {
+                assert_eq!(a.get(x, y), b.get(x, y), "differ at ({},{})", x, y);
+            }
+        }
+    }
+
+    #[test]
+    fn timeline_track_is_inert_outside_window() {
+        // Track active 1.0..2.0; at frame 0 it should not affect colors.
+        use super::super::framebuffer::secs_to_frames;
+        let timeline = Timeline::new("hi", 3.0)
+            .at(1.0..2.0, Solid(Color::new(255, 0, 0)));
+        let mut buf = FrameBuffer::new(2, 1);
+        <Timeline as Effect>::render(&timeline, &mut buf, 0);
+        // Default text color, not red.
+        assert_ne!(buf.get(0, 0).color, Color::new(255, 0, 0));
+        // Inside window: red.
+        let mid = secs_to_frames(1.5);
+        <Timeline as Effect>::render(&timeline, &mut buf, mid);
+        assert_eq!(buf.get(0, 0).color, Color::new(255, 0, 0));
+        // After window: red goes away.
+        let after = secs_to_frames(2.5);
+        <Timeline as Effect>::render(&timeline, &mut buf, after);
+        assert_ne!(buf.get(0, 0).color, Color::new(255, 0, 0));
+    }
+
+    #[test]
+    fn timeline_tracks_layer_in_order() {
+        // Two tracks both active; second wins on shared cells.
+        let timeline = Timeline::new("x", 2.0)
+            .at(0.0..2.0, Solid(Color::new(255, 0, 0)))
+            .at(0.0..2.0, Solid(Color::new(0, 255, 0)));
+        let mut buf = FrameBuffer::new(1, 1);
+        <Timeline as Effect>::render(&timeline, &mut buf, 0);
+        assert_eq!(buf.get(0, 0).color, Color::new(0, 255, 0));
+    }
+
+    #[test]
+    fn alpha_in_lerps_from_black_to_inner() {
+        // Solid red track underneath; AlphaIn fades from black to red.
+        use super::super::framebuffer::secs_to_frames;
+        let timeline = Timeline::new("x", 2.0)
+            .at(0.0..2.0, Solid(Color::new(255, 0, 0)))
+            .at(0.0..1.0, AlphaIn::new(1.0).easing(super::super::Easing::Linear));
+        let mut buf = FrameBuffer::new(1, 1);
+        <Timeline as Effect>::render(&timeline, &mut buf, 0);
+        // At frame 0 of AlphaIn, color is the from-color (black).
+        let c0 = buf.get(0, 0).color;
+        assert!(c0.r < 30, "expected near-black, got {:?}", c0);
+        // Past AlphaIn duration: full red.
+        <Timeline as Effect>::render(&timeline, &mut buf, secs_to_frames(1.5));
+        assert_eq!(buf.get(0, 0).color, Color::new(255, 0, 0));
+    }
+
+    #[test]
+    fn wind_no_panic_across_sizes() {
+        use super::super::framebuffer::secs_to_frames;
+        for &(w, h) in &[(1, 1), (3, 1), (10, 4), (40, 8), (90, 20)] {
+            let inner = Solid(Color::new(255, 255, 255)).on("hello world");
+            let effect = Wind::wrap(inner).duration(1.0).fade_tail(0.4);
+            let frames_total = secs_to_frames(1.0 + 0.4 + 0.1);
+            for f in (0..=frames_total).step_by(5) {
+                let mut buf = FrameBuffer::new(w, h);
+                <Wind as Effect>::render(&effect, &mut buf, f);
+            }
+        }
     }
 }

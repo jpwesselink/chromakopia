@@ -1,8 +1,9 @@
 //! Declarative scene builder for framebuffer animations.
 
 use crate::color::Color;
-use super::framebuffer::{Cell, Effect, FrameBuffer, AnimationHandle};
-use std::time::Duration;
+use super::framebuffer::{Cell, Effect, FrameBuffer};
+#[cfg(not(target_arch = "wasm32"))]
+use super::framebuffer::AnimationHandle;
 
 /// A segment within a line — either static text or an animated region.
 enum Segment {
@@ -189,6 +190,7 @@ impl Scene {
     }
 
     /// Spawn in a terminal area. Runs until `.stop()` or `.fade_out()`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn spawn(self) -> AnimationHandle {
         let width = crate::terminal::terminal_width();
         let height = self.height();
@@ -205,7 +207,9 @@ impl Scene {
     }
 
     /// Run in a terminal area for `seconds`, then stop.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn run(self, seconds: f64) {
+        use std::time::Duration;
         let width = crate::terminal::terminal_width().max(1);
         let height = self.height().max(1);
         super::framebuffer::run_effect(self, width, height, Duration::from_secs_f64(seconds), 1.0).await;
