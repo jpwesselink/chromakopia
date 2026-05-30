@@ -1,0 +1,10 @@
+{
+  "stable": [],
+  "beta": null,
+  "prs": [
+    {
+      "label": "#7 feat/framebuffer-renderer",
+      "path": "/pr-7/"
+    }
+  ]
+}
