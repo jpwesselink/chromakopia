@@ -74,7 +74,7 @@ pub mod prelude {
     pub use crate::animate::{
         Scene, Line, FrameBuffer, Effect, EffectExt, On,
         Rainbow, Plasma, Glow, Pulse, Radar, Neon, Karaoke, Glitch, Flap,
-        Scroll, ScrollDirection, Spread, SpreadOrigin, Dycp, Wind,
+        Scroll, ScrollDirection, Spread, SpreadOrigin, Dycp, Fld, Wind,
         Fade, FadeEnvelope, Chain, Blend, BlendMode, Transition, Composite, DelayedStart,
         Solid, text, Easing, Timeline, AlphaIn, AlphaOut,
     };
