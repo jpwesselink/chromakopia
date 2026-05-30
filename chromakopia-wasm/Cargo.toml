@@ -1,0 +1,19 @@
+[package]
+name = "chromakopia-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+chromakopia = { path = ".." }
+wasm-bindgen = "0.2"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+console_error_panic_hook = "0.1"
+
+# Workspace-level [profile.release] enables LTO + bulk-memory ops, which the
+# bundled wasm-opt rejects. Skip wasm-opt; the wasm size hit is ~10K and not
+# what we're optimizing for here.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

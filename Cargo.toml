@@ -1,93 +1,51 @@
+[workspace]
+members = [".", "chromakopia-wasm"]
+
 [package]
 name = "chromakopia"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Beautiful terminal string gradients and animations for Rust"
 license = "MIT"
+repository = "https://github.com/jpwesselink/chromakopia"
+homepage = "https://github.com/jpwesselink/chromakopia"
+keywords = ["terminal", "color", "gradient", "animation", "cli"]
+categories = ["command-line-interface"]
 
 [dependencies]
+rand = "0.9"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 colored = "3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
-rand = "0.9"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
 
 [[example]]
 name = "demo"
 path = "examples/demo.rs"
 
 [[example]]
-name = "loading"
-path = "examples/loading.rs"
-
-[[example]]
-name = "ascii_art"
-path = "examples/ascii_art.rs"
-
-[[example]]
 name = "rainbow"
 path = "examples/rainbow.rs"
 
 [[example]]
-name = "pulse"
-path = "examples/pulse.rs"
+name = "plasma"
+path = "examples/plasma.rs"
 
 [[example]]
-name = "glitch"
-path = "examples/glitch.rs"
+name = "license"
+path = "examples/license.rs"
 
 [[example]]
-name = "radar"
-path = "examples/radar.rs"
-
-[[example]]
-name = "neon"
-path = "examples/neon.rs"
-
-[[example]]
-name = "karaoke"
-path = "examples/karaoke.rs"
-
-[[example]]
-name = "glow"
-path = "examples/glow.rs"
-
-[[example]]
-name = "cycle"
-path = "examples/cycle.rs"
-
-[[example]]
-name = "flap"
-path = "examples/flap.rs"
-
-[[example]]
-name = "sequence"
-path = "examples/sequence.rs"
-
-[[example]]
-name = "fade_in"
-path = "examples/fade_in.rs"
-
-[[example]]
-name = "flap_fade"
-path = "examples/flap_fade.rs"
-
-[[example]]
-name = "settle"
-path = "examples/settle.rs"
-
-[[example]]
-name = "layers"
-path = "examples/layers.rs"
-
-[[example]]
-name = "emerge"
-path = "examples/emerge.rs"
-
-[[example]]
-name = "breathe"
-path = "examples/breathe.rs"
-
-[[example]]
-name = "cinematic"
-path = "examples/cinematic.rs"
+name = "fb_demo"
+path = "examples/fb_demo.rs"

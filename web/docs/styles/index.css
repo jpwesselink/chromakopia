@@ -1,0 +1,380 @@
+/* ── Monospace terminal theme ───────────────────────────────────────────── */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root {
+  --rp-font-family-base: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  --rp-font-family-mono: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  --rp-radius: 3px;
+  --rp-radius-small: 2px;
+  --rp-radius-large: 4px;
+}
+
+/* Force dark mode always */
+:root {
+  color-scheme: dark;
+}
+
+html:not(.rp-dark) {
+  --rp-c-bg: #0a0a0a;
+  --rp-c-bg-soft: #111111;
+  --rp-c-bg-mute: #1a1a1a;
+  --rp-c-bg-alt: #000;
+  --rp-c-divider: #2a2a2a;
+  --rp-c-divider-light: #1e1e1e;
+  --rp-c-text-0: #e8ffe8;
+  --rp-c-text-1: #ccffcc;
+  --rp-c-text-2: #88bb88;
+  --rp-c-text-3: #446644;
+  --rp-c-text-4: #2a442a;
+  --rp-c-text-code: #88ffcc;
+  --rp-c-text-code-bg: #00ff4108;
+  --rp-c-text-code-border: #00ff4114;
+  --rp-c-link: #00dd88;
+}
+
+html.rp-dark, :root {
+  --rp-c-bg: #0a0a0a;
+  --rp-c-bg-soft: #111111;
+  --rp-c-bg-mute: #1a1a1a;
+  --rp-c-bg-alt: #000;
+  --rp-c-divider: #2a2a2a;
+  --rp-c-divider-light: #1e1e1e;
+  --rp-c-text-0: #e8ffe8;
+  --rp-c-text-1: #ccffcc;
+  --rp-c-text-2: #88bb88;
+  --rp-c-text-3: #446644;
+  --rp-c-text-4: #2a442a;
+  --rp-c-text-code: #88ffcc;
+  --rp-c-text-code-bg: #00ff4108;
+  --rp-c-text-code-border: #00ff4114;
+  --rp-c-link: #00dd88;
+}
+
+/* Brand: phosphor green */
+:root {
+  --rp-c-brand: #00ff88;
+  --rp-c-brand-light: #33ffaa;
+  --rp-c-brand-lighter: #99ffdd;
+  --rp-c-brand-dark: #00cc66;
+  --rp-c-brand-darker: #009944;
+  --rp-c-brand-tint: #00ff4114;
+}
+
+/* Hero */
+html.rp-dark, :root {
+  --rp-home-hero-title-color: transparent;
+  --rp-home-hero-title-bg: linear-gradient(90deg, #00ff88 0%, #00ffcc 50%, #00bbff 100%);
+  --rp-home-hero-secondary-color: #00ffcc;
+  --rp-home-background-bg: #0a0a0a;
+  --rp-home-feature-bg: linear-gradient(135deg, #0f1f0f, #0a150a);
+}
+
+html:not(.rp-dark) {
+  --rp-home-hero-title-color: transparent;
+  --rp-home-hero-title-bg: linear-gradient(90deg, #00ff88 0%, #00ffcc 50%, #00bbff 100%);
+  --rp-home-hero-secondary-color: #00ffcc;
+  --rp-home-background-bg: #0a0a0a;
+  --rp-home-feature-bg: linear-gradient(135deg, #0f1f0f, #0a150a);
+}
+
+/* Hide the RSPress hero title — the WASM animation already renders a huge
+   animated chromakopia banner. */
+.rp-home-hero__title-brand {
+  display: none !important;
+}
+
+/* Force dark background + single font size */
+body {
+  background: #0a0a0a !important;
+  font-size: 14px !important;
+}
+
+* {
+  font-size: inherit !important;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+h1::before { content: "# "; color: #446644; }
+h2::before { content: "## "; color: #446644; }
+h3::before { content: "### "; color: #446644; }
+
+/* Nav */
+.rp-nav {
+  background: rgba(10, 10, 10, 0.92) !important;
+  border-bottom-color: #1a2a1a !important;
+  backdrop-filter: blur(8px);
+}
+
+/* Feature cards — ASCII box-drawing borders */
+.rp-home-feature-item {
+  border: none !important;
+  border-radius: 0 !important;
+  position: relative;
+  background: #0a100a !important;
+  padding: 1.5rem !important;
+  margin: 6px !important;
+}
+
+/* Draw the box with ::before (full border overlay) */
+.rp-home-feature-item::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid #2a4a2a;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Corner characters via ::after using background-image SVGs */
+.rp-home-feature-item::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  pointer-events: none;
+  z-index: 2;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14'%3E%3Ctext x='0' y='12' fill='%23446644' font-family='monospace' font-size='14'%3E%E2%94%8C%3C/text%3E%3C/svg%3E") no-repeat top left,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14'%3E%3Ctext x='0' y='12' fill='%23446644' font-family='monospace' font-size='14'%3E%E2%94%90%3C/text%3E%3C/svg%3E") no-repeat top right,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14'%3E%3Ctext x='0' y='12' fill='%23446644' font-family='monospace' font-size='14'%3E%E2%94%94%3C/text%3E%3C/svg%3E") no-repeat bottom left,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14'%3E%3Ctext x='0' y='12' fill='%23446644' font-family='monospace' font-size='14'%3E%E2%94%98%3C/text%3E%3C/svg%3E") no-repeat bottom right;
+}
+
+.rp-home-feature-item:hover::before {
+  border-color: #00ff8833;
+}
+
+.rp-home-feature-item:hover::after {
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14'%3E%3Ctext x='0' y='12' fill='%2300ff88' font-family='monospace' font-size='14'%3E%E2%94%8C%3C/text%3E%3C/svg%3E") no-repeat top left,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14'%3E%3Ctext x='0' y='12' fill='%2300ff88' font-family='monospace' font-size='14'%3E%E2%94%90%3C/text%3E%3C/svg%3E") no-repeat top right,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14'%3E%3Ctext x='0' y='12' fill='%2300ff88' font-family='monospace' font-size='14'%3E%E2%94%94%3C/text%3E%3C/svg%3E") no-repeat bottom left,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14'%3E%3Ctext x='0' y='12' fill='%2300ff88' font-family='monospace' font-size='14'%3E%E2%94%98%3C/text%3E%3C/svg%3E") no-repeat bottom right;
+}
+
+/* Hero tagline */
+.rp-home-hero-tagline {
+  color: #88bb88 !important;
+}
+
+/* Action buttons */
+.rp-button {
+  padding: 12px 32px !important;
+  border-radius: 0 !important;
+  font-family: 'JetBrains Mono', monospace !important;
+}
+
+.rp-button--brand {
+  background: #00cc66 !important;
+  border-color: #00cc66 !important;
+  color: #000 !important;
+  font-weight: 600 !important;
+}
+
+.rp-button--brand:hover {
+  background: #00ff88 !important;
+  border-color: #00ff88 !important;
+}
+
+.rp-button--alt {
+  border-color: #1a3a1a !important;
+  color: #88bb88 !important;
+}
+
+.rp-button--alt:hover {
+  border-color: #00ff8844 !important;
+  color: #ccffcc !important;
+}
+
+/* Code blocks */
+.rp-code-block {
+  border: 1px solid #1a2a1a !important;
+}
+
+/* Inline code */
+code {
+  color: #00ffaa !important;
+  background: #00ff410a !important;
+  border: 1px solid #00ff4114 !important;
+}
+
+/* Links */
+a {
+  color: #00dd88;
+}
+
+a:hover {
+  color: #00ff88;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track { background: #0a0a0a; }
+::-webkit-scrollbar-thumb { background: #1e3a1e; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #2a4a2a; }
+
+/* ── Bare terminal (hero) ─────────────────────────────────────────────── */
+
+/* Absolute-positioned container: the bare terminal becomes a background
+   layer for the homepage. Forced to actual viewport width via 100vw +
+   centered offset so RSPress's narrower content column doesn't constrain
+   it. Hero text + feature cards sit ON TOP via higher z-index below. */
+.terminal-hero-bg {
+  position: absolute;
+  top: 5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100vw;
+  z-index: 0;
+  display: flex;
+  justify-content: center;
+  padding-top: 0;
+  pointer-events: none;
+}
+
+.terminal-bare {
+  background: transparent;
+}
+
+/* RSPress home root needs to be a positioning context for the absolute
+   terminal-hero-bg above. */
+.rp-home {
+  position: relative;
+}
+
+/* Hero text + feature cards rise above the terminal background.
+   Add a subtle backdrop blur+darken on features so text stays readable
+   when the animation passes underneath them. */
+.rp-home-hero,
+.rp-home-feature {
+  position: relative;
+  z-index: 1;
+}
+
+/* Push the hero block down so it sits comfortably below the terminal's
+   top edge instead of overlapping it from frame 0. */
+.rp-home-hero--no-image,
+.rp-home-hero {
+  padding-top: 10rem !important;
+}
+
+.rp-home-feature-item {
+  backdrop-filter: blur(6px);
+}
+
+/* ── Terminal demo widget ─────────────────────────────────────────────── */
+
+.terminal-window {
+  background: #0a0a0a;
+  border-radius: 4px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 0 1px #1a2a1a;
+  overflow: hidden;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+  border: 1px solid #1a2a1a;
+}
+
+.terminal-titlebar {
+  background: #111;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid #1a2a1a;
+}
+
+.terminal-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.terminal-dot.red    { background: #ff5f57; }
+.terminal-dot.yellow { background: #ffbd2e; }
+.terminal-dot.green  { background: #28c840; }
+
+.terminal-title {
+  flex: 1;
+  text-align: center;
+  font-size: 12px;
+  color: #446644;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.02em;
+}
+
+.terminal-body {
+  padding: 0;
+  background: #0a0a0a;
+  overflow: hidden;
+}
+
+#xterm-container {
+  padding: 12px 16px;
+}
+
+.demo-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: #111;
+  border-top: 1px solid #1a2a1a;
+}
+
+.demo-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: #446644;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.demo-nav {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.demo-nav button {
+  background: transparent;
+  border: 1px solid #1a3a1a;
+  color: #88bb88;
+  padding: 4px 12px;
+  border-radius: 2px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
+  transition: all 0.15s;
+}
+
+.demo-nav button:hover {
+  background: #00ff4108;
+  border-color: #00ff8844;
+  color: #ccffcc;
+}
+
+.demo-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.demo-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #1a3a1a;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.demo-dot.active {
+  background: #00cc66;
+}

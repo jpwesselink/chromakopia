@@ -24,6 +24,7 @@ fn main() {
     println!("dark_n_stormy: {}", presets::dark_n_stormy().apply(sample));
     println!("mist:          {}", presets::mist().apply(sample));
     println!("relic:         {}", presets::relic().apply(sample));
+    println!("storm:         {}", presets::storm().apply(sample));
     println!("flughafen:     {}", presets::flughafen().apply(sample));
     println!();
 

@@ -1,0 +1,26 @@
+---
+title: Demo
+---
+
+import { TerminalDemo } from '../../components/TerminalDemo';
+
+# Live Demo
+
+All effects run live in your browser via WebAssembly — the same Rust code that runs in your terminal.
+
+<TerminalDemo />
+
+Use the dots or arrows to switch between demos. Each cycles automatically every 30 seconds.
+
+## Effect showcase
+
+| Demo | Effects used |
+|------|-------------|
+| **Showcase** | `Timeline` + everything: bouncing letters with halo + per-letter plasma, horizontal bg scroll with vertical sine, multi-phase color transitions (Glow → Neon → synth-plasma → Radar), compound license slide with alternating-side per-line motion, Wind dissolve finale |
+| **Rainbow** | `Rainbow`, `FadeEnvelope` |
+| **Plasma Fire** | `Plasma` with fire palette, `FadeEnvelope` |
+| **Mist Glow** | `Glow` with mist palette, `FadeEnvelope` |
+| **DYCP** | `Dycp`, `Fld`, `FadeEnvelope`, `Rainbow`, `Plasma`, `Glow` |
+| **Progress Bars** | `ProgressBar`, `Rainbow`, `Plasma`, `Glow`, `Radar` |
+| **Wind** | `Wind`, `Plasma`, `FadeEnvelope` — text dissolves like cloth in a building gust |
+| **About** | Branded card with Plasma colors, dissolved by Wind at the end |

@@ -1,1 +1,6 @@
 /target
+
+web/doc_build/
+web/node_modules/
+web/wasm/
+web/profile.json.gz
