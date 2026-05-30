@@ -1,0 +1,243 @@
+name: Deploy docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, closed]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to deploy (e.g. "v0.2.0" for stable, "beta" for beta). Leave empty for beta.'
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: docs-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  deploy:
+    if: github.event.action != 'closed' && (github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v') || startsWith(github.event.release.tag_name, 'chromakopia-v'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install docs dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Determine deploy target
+        id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "subdir=pr-${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "base=/chromakopia/pr-${PR_NUMBER}/" >> "$GITHUB_OUTPUT"
+            echo "label=#${PR_NUMBER} ${PR_HEAD_REF}" >> "$GITHUB_OUTPUT"
+            echo "type=pr" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "release" ]; then
+            RELEASE_VERSION=$(echo "$RELEASE_TAG" | sed 's/^chromakopia-//' | sed 's/^v//')
+            echo "subdir=v${RELEASE_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "base=/chromakopia/v${RELEASE_VERSION}/" >> "$GITHUB_OUTPUT"
+            echo "label=v${RELEASE_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "type=stable" >> "$GITHUB_OUTPUT"
+            echo "version=${RELEASE_VERSION}" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$DISPATCH_VERSION" ] && [ "$DISPATCH_VERSION" != "beta" ]; then
+            DV="${DISPATCH_VERSION#v}"
+            echo "subdir=v${DV}" >> "$GITHUB_OUTPUT"
+            echo "base=/chromakopia/v${DV}/" >> "$GITHUB_OUTPUT"
+            echo "label=v${DV}" >> "$GITHUB_OUTPUT"
+            echo "type=stable" >> "$GITHUB_OUTPUT"
+            echo "version=${DV}" >> "$GITHUB_OUTPUT"
+          else
+            NEXT_PATCH=$(echo "$CARGO_VERSION" | awk -F. '{print $1"."$2"."$3+1}')
+            echo "subdir=beta" >> "$GITHUB_OUTPUT"
+            echo "base=/chromakopia/beta/" >> "$GITHUB_OUTPUT"
+            echo "label=beta (${NEXT_PATCH})" >> "$GITHUB_OUTPUT"
+            echo "type=beta" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build WASM bundle
+        working-directory: web
+        run: npm run build:wasm
+
+      - name: Patch rspress base path
+        working-directory: web
+        env:
+          NEW_BASE: ${{ steps.target.outputs.base }}
+        run: |
+          # Replace existing base path with the deploy-target one.
+          sed -i "s|base: \"/chromakopia/\"|base: \"${NEW_BASE}\"|" rspress.config.ts
+
+      - name: Build Rspress site
+        working-directory: web
+        run: npx rspress build
+
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./web/doc_build
+          destination_dir: ${{ steps.target.outputs.subdir }}
+          keep_files: true
+
+      - name: Update versions.json
+        env:
+          DEPLOY_TYPE: ${{ steps.target.outputs.type }}
+          DEPLOY_SUBDIR: ${{ steps.target.outputs.subdir }}
+          DEPLOY_LABEL: ${{ steps.target.outputs.label }}
+        run: |
+          git fetch origin gh-pages || true
+          if git rev-parse --verify origin/gh-pages >/dev/null 2>&1; then
+            git worktree add gh-pages-wt origin/gh-pages
+          else
+            git worktree add --orphan gh-pages-wt
+          fi
+
+          if [ ! -f gh-pages-wt/versions.json ]; then
+            echo '{"stable":[],"beta":null,"prs":[]}' > gh-pages-wt/versions.json
+          fi
+
+          cd gh-pages-wt
+
+          node -e "
+            const fs = require('fs');
+            let v = JSON.parse(fs.readFileSync('versions.json', 'utf8'));
+            const type = process.env.DEPLOY_TYPE;
+            const subdir = process.env.DEPLOY_SUBDIR;
+            const label = process.env.DEPLOY_LABEL;
+            if (Array.isArray(v)) {
+              v = { stable: v.map(e => ({ version: e.version, path: '/' + e.version + '/' })), beta: null, prs: [] };
+            }
+            if (!v.stable) v.stable = [];
+            if (!v.prs) v.prs = [];
+            if (type === 'stable') {
+              const entry = { version: label, path: '/' + subdir + '/' };
+              v.stable = v.stable.filter(s => s.version !== label);
+              v.stable.unshift(entry);
+              v.latest = '/' + subdir + '/';
+            } else if (type === 'beta') {
+              v.beta = { label: label, path: '/' + subdir + '/' };
+            } else if (type === 'pr') {
+              const entry = { label: label, path: '/' + subdir + '/' };
+              v.prs = v.prs.filter(p => p.path !== '/' + subdir + '/');
+              v.prs.push(entry);
+            }
+            fs.writeFileSync('versions.json', JSON.stringify(v, null, 2) + '\n');
+          "
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add versions.json
+          git diff --cached --quiet || git commit -m "docs: update versions.json"
+          git push origin HEAD:gh-pages
+
+      - name: Update root redirect
+        if: steps.target.outputs.type == 'stable' || steps.target.outputs.type == 'beta'
+        env:
+          DEPLOY_TYPE: ${{ steps.target.outputs.type }}
+          DEPLOY_SUBDIR: ${{ steps.target.outputs.subdir }}
+        run: |
+          cd gh-pages-wt
+          if [ "$DEPLOY_TYPE" = "stable" ] || [ ! -f index.html ]; then
+            cat > index.html << REDIRECT_END
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta http-equiv="refresh" content="0; url=/chromakopia/${DEPLOY_SUBDIR}/">
+            <link rel="canonical" href="https://jpwesselink.github.io/chromakopia/${DEPLOY_SUBDIR}/">
+            <title>Redirecting to chromakopia docs</title>
+          </head>
+          <body>
+            <p>Redirecting to <a href="/chromakopia/${DEPLOY_SUBDIR}/">chromakopia ${DEPLOY_SUBDIR}</a>...</p>
+          </body>
+          </html>
+          REDIRECT_END
+            touch .nojekyll
+            git add index.html .nojekyll
+            git diff --cached --quiet || git commit -m "docs: update root redirect to ${DEPLOY_SUBDIR}"
+            git push origin HEAD:gh-pages
+          fi
+
+      - name: Comment PR with docs link
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: docs-preview
+          message: |
+            <!-- docs-preview-comment -->
+            **Docs preview** is ready:
+            https://jpwesselink.github.io/chromakopia/pr-${{ github.event.pull_request.number }}/
+
+            _Updated for commit ${{ github.event.pull_request.head.sha }}_
+
+  cleanup:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Remove PR docs and update versions.json
+        env:
+          PR_NUM: ${{ github.event.pull_request.number }}
+        run: |
+          rm -rf "pr-${PR_NUM}"
+          if [ -f versions.json ]; then
+            node -e "
+              const fs = require('fs');
+              const prNum = process.env.PR_NUM;
+              const v = JSON.parse(fs.readFileSync('versions.json', 'utf8'));
+              v.prs = v.prs.filter(p => p.path !== '/pr-' + prNum + '/');
+              fs.writeFileSync('versions.json', JSON.stringify(v, null, 2) + '\n');
+            "
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "docs: remove pr-${PR_NUM} preview"
+          git push
+
+      - name: Update PR comment with removal notice
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: docs-preview
+          message: |
+            <!-- docs-preview-comment -->
+            ~~**Docs preview** is ready:~~
+            ~~https://jpwesselink.github.io/chromakopia/pr-${{ github.event.pull_request.number }}/~~
+
+            _Preview removed -- PR closed._
