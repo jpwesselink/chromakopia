@@ -138,6 +138,92 @@ fn parse_cues(msg: &str) -> (String, Vec<(u32, usize)>) {
     (display, cues)
 }
 
+// ── Outline ─────────────────────────────────────────────────────────
+
+/// Draws a `▒` stroke on every empty cell touching a glyph cell, in the
+/// neighbor's color. The half-shade block lights 50% of the cell's
+/// pixels — a 50%-alpha outline that works on any background.
+struct Outline {
+    inner: Box<dyn Effect>,
+}
+
+impl Outline {
+    fn wrap(inner: impl Effect) -> Self {
+        Self { inner: Box::new(inner) }
+    }
+}
+
+impl Effect for Outline {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        self.inner.render(buf, frame);
+        // Two-phase so strokes don't cascade off each other.
+        let mut strokes: Vec<(usize, usize, Color)> = Vec::new();
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                if buf.get(x, y).ch != ' ' {
+                    continue;
+                }
+                'scan: for dy in -1i32..=1 {
+                    for dx in -1i32..=1 {
+                        if dx == 0 && dy == 0 {
+                            continue;
+                        }
+                        let (nx, ny) = (x as i32 + dx, y as i32 + dy);
+                        if nx < 0 || ny < 0 || nx as usize >= buf.width || ny as usize >= buf.height
+                        {
+                            continue;
+                        }
+                        let n = buf.get(nx as usize, ny as usize);
+                        if n.ch != ' ' {
+                            strokes.push((x, y, n.color));
+                            break 'scan;
+                        }
+                    }
+                }
+            }
+        }
+        for (x, y, color) in strokes {
+            buf.set(x, y, Cell::new('▒', color));
+        }
+    }
+
+    fn size(&self) -> (usize, usize) {
+        self.inner.size()
+    }
+}
+
+// ── Layering ────────────────────────────────────────────────────────
+
+/// Z-composite: the names render first (back layer), then the message
+/// block composites over them — its glyphs and outline occlude, its
+/// gaps let the names show through.
+struct Layered {
+    back: NamesSequence,
+    front: Box<dyn Effect>,
+    front_h: usize,
+    height: usize,
+}
+
+impl Effect for Layered {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        self.back.render(buf, frame);
+        let mut front = FrameBuffer::new(buf.width, self.front_h);
+        self.front.render(&mut front, frame);
+        for y in 0..self.front_h.min(buf.height) {
+            for x in 0..buf.width {
+                let cell = front.get(x, y);
+                if cell.ch != ' ' {
+                    buf.set(x, y, cell);
+                }
+            }
+        }
+    }
+
+    fn size(&self) -> (usize, usize) {
+        (0, self.height)
+    }
+}
+
 // ── Name choreography ───────────────────────────────────────────────
 // Per name: descend from above the top edge (BounceOut, with a sine
 // wobble that fades as it lands) → dwell at the bottom → small hop →
@@ -253,6 +339,7 @@ async fn main() {
     .speed(0.075) // crests at 45 cells/s, right at the strobe ceiling
     .delay(8.0) // flat horizontal scroll first...
     .ramp(2.0); // ...then the wave fades in
+    let message = Outline::wrap(message); // 50%-alpha stroke, rides the wave
 
     // Names: basic font, cycling accent colors.
     let palette = [
@@ -282,17 +369,18 @@ async fn main() {
     let message_end = loop_w as f64 / SPEED + 2.0;
     let total = message_end.max(names_end);
 
-    // Scene: 1 header + 15 message rows + 4 landing rows = 20 rows.
-    // The overlay is added first so it anchors at row 0 and spans it all.
-    let scene_height = 20;
+    // Stage: names in back, 15-row message block in front, 4 landing rows
+    // below it — 19 rows, plus the header line above.
+    let stage = Layered {
+        back: seq,
+        front: Box::new(message),
+        front_h: 15,
+        height: 19,
+    };
+
     Scene::new()
-        .overlay(seq, scene_height, 0)
         .add(text("greetings — colossal edition", Color::new(110, 110, 110)))
-        .add(message)
-        .blank()
-        .blank()
-        .blank()
-        .blank()
+        .add(stage)
         .quit_key('q')
         .run(total)
         .await;
