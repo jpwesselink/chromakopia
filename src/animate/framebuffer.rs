@@ -391,10 +391,6 @@ use std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
-/// Shared mailbox between animation and renderer.
-#[cfg(not(target_arch = "wasm32"))]
-type Mailbox = Arc<Mutex<Option<FrameBuffer>>>;
-
 /// Commands sent from AnimationHandle to the animation task.
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(dead_code)]
@@ -595,10 +591,10 @@ fn diff_render(prev: Option<&FrameBuffer>, curr: &FrameBuffer, start_row: usize)
     out
 }
 
-/// Run an effect with the two-loop framebuffer renderer.
+/// Run an effect with the framebuffer renderer.
 ///
-/// Both animation and render run at the same fixed framerate (60fps).
-/// Animation produces a frame, render consumes it — no overproduction.
+/// One loop per frame: animate, diff against the previous frame, write.
+/// Frame production and display are 1:1 — no overproduction, no mailbox.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn run_effect(
     effect: impl Effect,
@@ -622,7 +618,6 @@ pub async fn run_effect(
         return;
     }
 
-    let mailbox: Mailbox = Arc::new(Mutex::new(None));
     let running = Arc::new(AtomicBool::new(true));
 
     // Hide cursor and reserve space
@@ -644,76 +639,49 @@ pub async fn run_effect(
         spawn_quit_listener(key, running.clone());
     }
 
-    let frame_ms = (1000.0 / FPS / speed) as u64;
-    let frame_duration = Duration::from_millis(frame_ms.max(1));
-
-    // Animation task — same framerate as renderer
-    let m = mailbox.clone();
-    let r = running.clone();
-    let anim_handle = tokio::spawn(async move {
-        let mut frame: usize = 0;
-        let mut buf = FrameBuffer::new(width, height);
-        let mut interval = tokio::time::interval(frame_duration);
-        while r.load(Ordering::Relaxed) {
-            interval.tick().await;
-            effect.render(&mut buf, frame);
-            *m.lock().unwrap() = Some(buf.clone());
-            frame += 1;
-        }
-    });
-
-    // Render task — same framerate
-    let m = mailbox.clone();
-    let r = running.clone();
+    let frame_duration = Duration::from_secs_f64(1.0 / FPS / speed.max(0.001));
     let term_width = crate::terminal::terminal_width();
-    let render_handle = tokio::spawn(async move {
-        let mut prev: Option<FrameBuffer> = None;
-        let mut interval = tokio::time::interval(frame_duration);
-        let mut last_fps_time = std::time::Instant::now();
-        let mut render_count: u32 = 0;
-        let mut displayed_fps: u32 = 0;
-
-        while r.load(Ordering::Relaxed) {
-            interval.tick().await;
-
-            let new_frame = m.lock().unwrap().take();
-            if let Some(buf) = new_frame {
-                let mut output = diff_render(prev.as_ref(), &buf, start_row);
-                render_count += 1;
-
-                let now = std::time::Instant::now();
-                if now.duration_since(last_fps_time) >= Duration::from_secs(1) {
-                    displayed_fps = render_count;
-                    render_count = 0;
-                    last_fps_time = now;
-                }
-
-                let fps_str = format!(" {}fps ", displayed_fps);
-                let fps_col = term_width.saturating_sub(fps_str.len());
-                output.push_str(&format!(
-                    "\x1B[{};{}H\x1B[90m{}\x1B[0m",
-                    start_row,
-                    fps_col + 1,
-                    fps_str
-                ));
-
-                let mut stderr = std::io::stderr().lock();
-                let _ = stderr.write_all(output.as_bytes());
-                let _ = stderr.flush();
-
-                prev = Some(buf);
-            }
-        }
-    });
-
     let deadline = tokio::time::Instant::now() + duration;
+    let mut interval = tokio::time::interval(frame_duration);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    let mut frame: usize = 0;
+    let mut buf = FrameBuffer::new(width, height);
+    let mut prev: Option<FrameBuffer> = None;
+    let mut last_fps_time = std::time::Instant::now();
+    let mut render_count: u32 = 0;
+    let mut displayed_fps: u32 = 0;
+
     while running.load(Ordering::Relaxed) && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(16)).await;
+        interval.tick().await;
+        effect.render(&mut buf, frame);
+
+        let mut output = diff_render(prev.as_ref(), &buf, start_row);
+        render_count += 1;
+        let now = std::time::Instant::now();
+        if now.duration_since(last_fps_time) >= Duration::from_secs(1) {
+            displayed_fps = render_count;
+            render_count = 0;
+            last_fps_time = now;
+        }
+        let fps_str = format!(" {}fps ", displayed_fps);
+        let fps_col = term_width.saturating_sub(fps_str.len());
+        output.push_str(&format!(
+            "\x1B[{};{}H\x1B[90m{}\x1B[0m",
+            start_row,
+            fps_col + 1,
+            fps_str
+        ));
+
+        {
+            let mut stderr = std::io::stderr().lock();
+            let _ = stderr.write_all(output.as_bytes());
+            let _ = stderr.flush();
+        }
+        prev = Some(buf.clone());
+        frame += 1;
     }
     running.store(false, Ordering::Relaxed);
-
-    let _ = anim_handle.await;
-    let _ = render_handle.await;
 
     // Show cursor, move below rendered area
     {
@@ -826,7 +794,6 @@ pub fn spawn_effect(
         };
     }
 
-    let mailbox: Mailbox = Arc::new(Mutex::new(None));
     let running = Arc::new(AtomicBool::new(true));
     let command: CommandSlot = Arc::new(Mutex::new(None));
 
@@ -849,18 +816,22 @@ pub fn spawn_effect(
         spawn_quit_listener(key, running.clone());
     }
 
-    let frame_ms = (1000.0 / FPS / speed) as u64;
-    let frame_duration = Duration::from_millis(frame_ms.max(1));
+    let frame_duration = Duration::from_secs_f64(1.0 / FPS / speed.max(0.001));
+    let term_width = crate::terminal::terminal_width();
 
-    // Animation task
-    let m = mailbox.clone();
+    // Single loop: animate, diff, write — frame production and display 1:1.
     let r = running.clone();
     let cmd = command.clone();
     tokio::spawn(async move {
         let mut frame: usize = 0;
         let mut effect: Box<dyn Effect> = Box::new(effect);
         let mut buf = FrameBuffer::new(width, height);
+        let mut prev: Option<FrameBuffer> = None;
         let mut interval = tokio::time::interval(frame_duration);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_fps_time = std::time::Instant::now();
+        let mut render_count: u32 = 0;
+        let mut displayed_fps: u32 = 0;
 
         // Fade state: (color, easing, total_frames, elapsed)
         let mut fade: Option<(Color, super::easing::Easing, usize, usize)> = None;
@@ -936,65 +907,41 @@ pub fn spawn_effect(
                     }
                 }
                 if *elapsed >= total {
-                    *m.lock().unwrap() = Some(buf.clone());
+                    // Draw this final faded frame below, then stop.
                     r.store(false, Ordering::Relaxed);
-                    break;
                 }
             }
 
-            *m.lock().unwrap() = Some(buf.clone());
+            // Diff + fps counter + write
+            let mut output = diff_render(prev.as_ref(), &buf, start_row);
+            render_count += 1;
+            let now = std::time::Instant::now();
+            if now.duration_since(last_fps_time) >= Duration::from_secs(1) {
+                displayed_fps = render_count;
+                render_count = 0;
+                last_fps_time = now;
+            }
+            let fps_str = format!(" {}fps ", displayed_fps);
+            let fps_col = term_width.saturating_sub(fps_str.len());
+            output.push_str(&format!(
+                "\x1B[{};{}H\x1B[90m{}\x1B[0m",
+                start_row,
+                fps_col + 1,
+                fps_str
+            ));
+            {
+                let mut stderr = std::io::stderr().lock();
+                let _ = stderr.write_all(output.as_bytes());
+                let _ = stderr.flush();
+            }
+            prev = Some(buf.clone());
             frame += 1;
         }
 
         // Cleanup: show cursor, move below
-        std::thread::sleep(Duration::from_millis(50));
         let mut stderr = std::io::stderr().lock();
         let _ = write!(stderr, "\x1B[{};1H\x1B[?25h", start_row + height);
         let _ = stderr.flush();
-    });
-
-    // Render task
-    let m = mailbox.clone();
-    let r = running.clone();
-    let term_width = crate::terminal::terminal_width();
-    tokio::spawn(async move {
-        let mut prev: Option<FrameBuffer> = None;
-        let mut interval = tokio::time::interval(frame_duration);
-        let mut last_fps_time = std::time::Instant::now();
-        let mut render_count: u32 = 0;
-        let mut displayed_fps: u32 = 0;
-
-        while r.load(Ordering::Relaxed) {
-            interval.tick().await;
-
-            let new_frame = m.lock().unwrap().take();
-            if let Some(buf) = new_frame {
-                let mut output = diff_render(prev.as_ref(), &buf, start_row);
-                render_count += 1;
-
-                let now = std::time::Instant::now();
-                if now.duration_since(last_fps_time) >= Duration::from_secs(1) {
-                    displayed_fps = render_count;
-                    render_count = 0;
-                    last_fps_time = now;
-                }
-
-                let fps_str = format!(" {}fps ", displayed_fps);
-                let fps_col = term_width.saturating_sub(fps_str.len());
-                output.push_str(&format!(
-                    "\x1B[{};{}H\x1B[90m{}\x1B[0m",
-                    start_row,
-                    fps_col + 1,
-                    fps_str
-                ));
-
-                let mut stderr = std::io::stderr().lock();
-                let _ = stderr.write_all(output.as_bytes());
-                let _ = stderr.flush();
-
-                prev = Some(buf);
-            }
-        }
     });
 
     AnimationHandle {
