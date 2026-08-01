@@ -84,15 +84,15 @@ async fn main() {
         .blank()
         .add(text("6. scroll + VSineWave — the ripple marquee", label))
         // Wave speed detuned from the phase-lock (lock would be
-        // frequency * scroll_cells_per_sec / FPS): crests tear along at
-        // 32 cells/s over text scrolling at 8 — full demoscene throttle.
-        // Exact lock freezes the wave onto the text; the faster the wave,
-        // the more it dominates the eye over the scroll.
+        // frequency * scroll_cells_per_sec / FPS): crests scream along at
+        // 44 cells/s over text scrolling at 8 — redline. Beyond ~45 the
+        // 30fps renderer skips >1.5 cells of phase per frame and the
+        // ripple strobes instead of rolling.
         // Wavelength = 2π/0.08 ≈ 79 cols — gentle shear across the glyphs.
         .add(VSineWave::wrap(Marquee::wrap(Rainbow::on(&banner_wave)).speed(8.0))
             .amplitude(2.0)
             .frequency(0.08)
-            .speed(0.08 * 32.0 / 30.0))
+            .speed(0.08 * 44.0 / 30.0))
         .quit_key('q')
         .run(30.0)
         .await;
