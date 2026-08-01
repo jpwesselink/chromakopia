@@ -7,7 +7,7 @@
 
 use chromakopia::animate::{
     framebuffer::{secs_to_frames, Cell, DEFAULT_TEXT_COLOR},
-    AlphaIn, Easing, Effect, FrameBuffer, Glow, Neon, Plasma, Radar, Scene, Solid, Timeline,
+    AlphaIn, Easing, Effect, FrameBuffer, Glow, Neon, Phases, Plasma, Radar, Scene, Solid, Timeline,
     Wind,
 };
 use chromakopia::gradient;
@@ -257,60 +257,6 @@ impl Effect for HBackgroundScroll {
 ///   • INNER: at the same time, each line independently slides in horizontally
 ///     from off-screen left or right (alternating), staggered line-by-line.
 ///
-/// Multi-phase color transitions using a SINGLE inner-effect frame counter,
-/// so the same effect spans phase boundaries without the visible "jump" you
-/// get when stacking separate Transition tracks (each of which resets the
-/// inner effect's frame to 0 at track-window start).
-///
-/// `phases` is a list of `(start_frame, effect)` — effects activate at their
-/// start_frame, and a `fade_frames`-long crossfade blends the previous phase
-/// into the active one. All inner effects are called with the GLOBAL frame.
-struct PhaseTransitions {
-    phases: Vec<(usize, Box<dyn Effect>)>,
-    fade_frames: usize,
-}
-
-impl Effect for PhaseTransitions {
-    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        if self.phases.is_empty() { return; }
-        // Find the latest phase whose start_frame <= frame.
-        let mut active_idx = 0;
-        for (i, (start, _)) in self.phases.iter().enumerate() {
-            if frame >= *start { active_idx = i; }
-        }
-        let (start, ref active_effect) = self.phases[active_idx];
-        // Render active phase at GLOBAL frame.
-        active_effect.render(buf, frame);
-
-        // Crossfade with the previous phase during the fade window.
-        if active_idx > 0 && frame < start + self.fade_frames {
-            let t = (frame - start) as f64 / self.fade_frames.max(1) as f64;
-            let prev_effect = &self.phases[active_idx - 1].1;
-            // Copy current buf into scratch so prev_effect renders against
-            // the same underlying content (cell chars).
-            let mut prev_buf = FrameBuffer::new(buf.width, buf.height);
-            for y in 0..buf.height {
-                for x in 0..buf.width {
-                    let mut cell = buf.get(x, y);
-                    // Restore default color so prev_effect colors from a clean slate.
-                    cell.color = chromakopia::animate::framebuffer::DEFAULT_TEXT_COLOR;
-                    prev_buf.set(x, y, cell);
-                }
-            }
-            prev_effect.render(&mut prev_buf, frame);
-            // Lerp prev → active.
-            for y in 0..buf.height {
-                for x in 0..buf.width {
-                    if buf.get(x, y).ch == ' ' { continue; }
-                    let prev_c = prev_buf.get(x, y).color;
-                    let cur_c = buf.get(x, y).color;
-                    buf.set_color(x, y, chromakopia::Color::lerp_rgb(prev_c, cur_c, t));
-                }
-            }
-        }
-    }
-}
-
 /// The two axes are independent — the block keeps bouncing vertically while
 /// each line continues sliding into its column position.
 struct CompoundLicenseBounce {
@@ -744,19 +690,16 @@ async fn main() {
         .frequency(0.04)   // longer wavelength → smoother arc
         .speed(0.10))
         // 1) Color phases: Solid black → Glow → Neon → synth-plasma → Radar.
-        //    Single PhaseTransitions effect = continuous frame counter across
-        //    all phases, so the same effect (e.g. Neon) spans a phase boundary
-        //    without resetting its animation and "jumping" visually.
-        .at(BG_APPEAR..TOTAL_SECS, PhaseTransitions {
-            phases: vec![
-                (0, Box::new(Solid(chromakopia::Color::new(0, 0, 0)))),
-                (secs_to_frames(1.0), Box::new(Glow::new())),
-                (secs_to_frames(BG_AFTER_GLOW - BG_APPEAR), Box::new(Neon::new())),
-                (secs_to_frames(BG_AFTER_NEON - BG_APPEAR), Box::new(Plasma::new().palette(synth).seed(42.0))),
-                (secs_to_frames(BG_AFTER_ZEBRA - BG_APPEAR), Box::new(Radar::new())),
-            ],
-            fade_frames: secs_to_frames(1.0),
-        })
+        //    Phases = continuous frame counter across all phases, so the
+        //    same effect (e.g. Neon) spans a phase boundary without
+        //    resetting its animation and "jumping" visually.
+        .at(BG_APPEAR..TOTAL_SECS, Phases::new()
+            .at(0.0, Solid(chromakopia::Color::new(0, 0, 0)))
+            .at(1.0, Glow::new())
+            .at(BG_AFTER_GLOW - BG_APPEAR, Neon::new())
+            .at(BG_AFTER_NEON - BG_APPEAR, Plasma::new().palette(synth).seed(42.0))
+            .at(BG_AFTER_ZEBRA - BG_APPEAR, Radar::new())
+            .crossfade(1.0))
         // 2) License: compound animation with built-in plasma + halo.
         //    Halo dims BG cells around license letters by 1 cell.
         //    Plasma colors only license cells (cool palette, same seed).
