@@ -7,7 +7,7 @@
 
 use chromakopia::animate::{
     framebuffer::{secs_to_frames, Cell, DEFAULT_TEXT_COLOR},
-    AlphaIn, Easing, Effect, FrameBuffer, Glow, Neon, Phases, Plasma, Radar, Scene, Solid, Timeline,
+    AlphaIn, Easing, Effect, FrameBuffer, Glow, Neon, Phases, Plasma, Radar, Scene, Solid, Timeline, VSineWave,
     Wind,
 };
 use chromakopia::gradient;
@@ -160,51 +160,6 @@ fn scale_letter(art: &str, scale_x: usize, scale_y: usize, target_width: usize) 
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// Vertical sine-wave displacement: each column shifts UP/DOWN by an amount
-/// driven by `sin(x * frequency + t * speed)`. Each character bobs up/down
-/// as it passes a fixed buffer column.
-struct VSineWave {
-    inner: Box<dyn Effect>,
-    amplitude: f64,
-    frequency: f64,
-    speed: f64,
-}
-
-impl VSineWave {
-    fn new(inner: impl Effect) -> Self {
-        Self {
-            inner: Box::new(inner),
-            amplitude: 4.0,
-            frequency: 0.15,
-            speed: 0.05,
-        }
-    }
-    fn amplitude(mut self, v: f64) -> Self { self.amplitude = v; self }
-    fn frequency(mut self, v: f64) -> Self { self.frequency = v; self }
-    fn speed(mut self, v: f64) -> Self { self.speed = v; self }
-}
-
-impl Effect for VSineWave {
-    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        let mut scratch = FrameBuffer::new(buf.width, buf.height);
-        self.inner.render(&mut scratch, frame);
-        let t = frame as f64 * self.speed;
-        for x in 0..scratch.width {
-            let wave = (x as f64 * self.frequency + t).sin();
-            let dy = (wave * self.amplitude).round() as i32;
-            for y in 0..scratch.height {
-                let cell = scratch.get(x, y);
-                if cell.ch == ' ' { continue; }
-                let dest_y = y as i32 + dy;
-                if dest_y < 0 || dest_y as usize >= buf.height { continue; }
-                if buf.get(x, dest_y as usize).ch == ' ' {
-                    buf.set(x, dest_y as usize, cell);
-                }
-            }
-        }
-    }
 }
 
 /// Horizontal background scroll: source content slides RIGHT → LEFT through
@@ -680,7 +635,7 @@ async fn main() {
         //    gets a vertical sine displacement, so characters bob up/down as
         //    they pass by from right to left. Starts after the banner has
         //    settled so it doesn't compete during the entrance.
-        .at(BG_APPEAR..TOTAL_SECS, VSineWave::new(HBackgroundScroll::new(
+        .at(BG_APPEAR..TOTAL_SECS, VSineWave::wrap(HBackgroundScroll::new(
             &horizontal_source,
             scroll_speed_cols_per_frame,
             chromakopia::Color::new(85, 85, 105),
