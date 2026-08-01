@@ -12,13 +12,16 @@ use chromakopia::prelude::*;
 const RIBBON: &str = "  CHROMAKOPIA ★ TERMINAL ANIMATIONS ★ EFFECTS ★ SCENES ★";
 const STRIP: &str = "════════╡ chromakopia ╞════════════════════";
 const SWING_LINE: &str = "◄ ─────────── swing ─────────── ►";
+// Three blank rows at the end: the vertical marquee wraps seamlessly, so
+// without a gap the last line and the first line would sit adjacent in
+// the window and the loop would read as a jumble.
 const CREDITS: &str = "\
       a chromakopia production      \n\
                                     \n\
        effects ... the library      \n\
         motion ....... Marquee      \n\
                                     \n\
-      thanks for scrolling by       ";
+      thanks for scrolling by       \n\n\n";
 
 #[tokio::main]
 async fn main() {
@@ -46,7 +49,7 @@ async fn main() {
             .cycle(5.0, Easing::Linear)
             .swing())
         .blank()
-        .add(text("5. vertical crawl — 6 lines through a 3-row window", label))
+        .add(text("5. vertical crawl — credits loop through a 3-row window", label))
         .add(Marquee::wrap(Rainbow::on(CREDITS))
             .direction(ScrollDirection::Top)
             .speed(3.0)
