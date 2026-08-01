@@ -1419,6 +1419,10 @@ pub struct VSineWave {
     frequency: f64,
     /// Radians per frame.
     speed: f64,
+    /// Frames before the wave starts (amplitude held at 0).
+    delay: usize,
+    /// Frames over which amplitude ramps 0 → full after the delay.
+    ramp: usize,
 }
 
 impl VSineWave {
@@ -1428,21 +1432,43 @@ impl VSineWave {
             amplitude: 4.0,
             frequency: 0.15,
             speed: 0.05,
+            delay: 0,
+            ramp: 0,
         }
     }
     pub fn amplitude(mut self, v: f64) -> Self { self.amplitude = v; self }
     pub fn frequency(mut self, v: f64) -> Self { self.frequency = v; self }
     pub fn speed(mut self, v: f64) -> Self { self.speed = v; self }
+
+    /// Hold the wave flat for `seconds` before it starts.
+    pub fn delay(mut self, seconds: f64) -> Self {
+        self.delay = super::framebuffer::secs_to_frames(seconds);
+        self
+    }
+
+    /// Ease the amplitude from 0 to full over `seconds` after the delay.
+    pub fn ramp(mut self, seconds: f64) -> Self {
+        self.ramp = super::framebuffer::secs_to_frames(seconds);
+        self
+    }
 }
 
 impl Effect for VSineWave {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
         let mut scratch = FrameBuffer::new(buf.width, buf.height);
         self.inner.render(&mut scratch, frame);
+        let envelope = if frame < self.delay {
+            0.0
+        } else if self.ramp == 0 {
+            1.0
+        } else {
+            (((frame - self.delay) as f64) / self.ramp as f64).min(1.0)
+        };
+        let amplitude = self.amplitude * envelope;
         let t = frame as f64 * self.speed;
         for x in 0..scratch.width {
             let wave = (x as f64 * self.frequency + t).sin();
-            let dy = (wave * self.amplitude).round() as i32;
+            let dy = (wave * amplitude).round() as i32;
             for y in 0..scratch.height {
                 let cell = scratch.get(x, y);
                 if cell.ch == ' ' { continue; }
@@ -2990,6 +3016,49 @@ mod tests {
         wave.render(&mut buf, 1);
         assert_eq!(buf.get(0, 2).ch, '@', "char should land 2 rows down");
         assert_eq!(buf.get(0, 0).ch, ' ', "source row should be empty");
+    }
+
+    #[test]
+    fn vsinewave_delay_holds_wave_flat() {
+        let inner = text("@", Color::new(200, 0, 0));
+        let wave = VSineWave::wrap(inner)
+            .amplitude(2.0)
+            .frequency(0.0)
+            .speed(std::f64::consts::FRAC_PI_2)
+            .delay(1.0);
+        let mut buf = FrameBuffer::new(1, 5);
+        wave.render(&mut buf, 1); // sin = 1 here, but frame 1 < 30-frame delay
+        assert_eq!(buf.get(0, 0).ch, '@');
+    }
+
+    #[test]
+    fn vsinewave_full_after_delay() {
+        // Frame 33 is past the 30-frame delay; ramp defaults to 0 → full
+        // amplitude. sin(33·π/2) = sin(π/2) = 1 → dy = 2.
+        let inner = text("@", Color::new(200, 0, 0));
+        let wave = VSineWave::wrap(inner)
+            .amplitude(2.0)
+            .frequency(0.0)
+            .speed(std::f64::consts::FRAC_PI_2)
+            .delay(1.0);
+        let mut buf = FrameBuffer::new(1, 5);
+        wave.render(&mut buf, 33);
+        assert_eq!(buf.get(0, 2).ch, '@');
+    }
+
+    #[test]
+    fn vsinewave_ramp_scales_amplitude() {
+        // No delay; ramp 2.2s = 66 frames. At frame 33 the envelope is 0.5,
+        // sin = 1 → dy = round(2.0 · 0.5) = 1.
+        let inner = text("@", Color::new(200, 0, 0));
+        let wave = VSineWave::wrap(inner)
+            .amplitude(2.0)
+            .frequency(0.0)
+            .speed(std::f64::consts::FRAC_PI_2)
+            .ramp(2.2);
+        let mut buf = FrameBuffer::new(1, 5);
+        wave.render(&mut buf, 33);
+        assert_eq!(buf.get(0, 1).ch, '@');
     }
 
     #[test]
