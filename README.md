@@ -194,6 +194,7 @@ cargo run --release --example rainbow   # animated rainbow text
 cargo run --release --example plasma    # demoscene plasma
 cargo run --release --example demo      # gradient presets
 cargo run --release --example license   # composed multi-effect scene
+cargo run --release --example marquee   # every Marquee mode, labeled
 ```
 
 ## License
