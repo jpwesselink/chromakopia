@@ -11,8 +11,19 @@ use chromakopia::prelude::*;
 
 const RIBBON: &str = "  CHROMAKOPIA ★ TERMINAL ANIMATIONS ★ EFFECTS ★ SCENES ★";
 const STRIP: &str = "════════╡ chromakopia ╞════════════════════";
-/// The ribbon with 2 blank rows above and below — headroom for the wave.
-const RIBBON_WAVE: &str = "\n\n  CHROMAKOPIA ★ TERMINAL ANIMATIONS ★ EFFECTS ★ SCENES ★\n\n";
+/// Figlet banner for the ripple row: two blank rows above and below give
+/// the ±2-cell wave its headroom. (`lines()` drops a lone trailing empty
+/// line, hence the explicit extra blank row before the closing quote.)
+const BANNER_WAVE: &str = r#"
+
+   ________  ______  ____  __  ______    __ ______  ____  _______
+  / ____/ / / / __ \/ __ \/  |/  /   |  / //_/ __ \/ __ \/  _/   |
+ / /   / /_/ / /_/ / / / / /|_/ / /| | / ,< / / / / /_/ // // /| |
+/ /___/ __  / _, _/ /_/ / /  / / ___ |/ /| / /_/ / ____// // ___ |
+\____/_/ /_/_/ |_|\____/_/  /_/_/  |_/_/ |_\____/_/   /___/_/  |_|
+
+
+"#;
 const SWING_LINE: &str = "◄ ─────────── swing ─────────── ►";
 // Three blank rows at the end: the vertical marquee wraps seamlessly, so
 // without a gap the last line and the first line would sit adjacent in
@@ -29,6 +40,14 @@ const CREDITS: &str = "\
 async fn main() {
     let label = Color::new(110, 110, 110);
     let fire = gradient(&["#331000", "#ff6a00", "#ffd000"]).palette(64);
+
+    // Pad every banner line to 78 cols so the horizontal loop has a gap
+    // between repeats (Marquee wraps at the content's max line width).
+    let banner_wave: String = BANNER_WAVE
+        .lines()
+        .map(|l| format!("{l:<78}"))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     Scene::new()
         .add(text("Marquee — one wrapper, six personalities", Color::new(160, 160, 160)))
@@ -59,13 +78,14 @@ async fn main() {
         .blank()
         .add(text("6. scroll + VSineWave — the ripple marquee", label))
         // Phase-locked: wave speed = frequency * scroll_cells_per_sec / FPS,
-        // so the crests travel at exactly the text's speed and the ribbon
-        // reads as one rigid wavy banner sliding left. A faster wave speed
+        // so the crests travel at exactly the text's speed and the banner
+        // reads as one rigid wavy ribbon sliding left. A faster wave speed
         // makes the wave sweep along the (seemingly static) text instead.
-        .add(VSineWave::wrap(Marquee::wrap(Rainbow::on(RIBBON_WAVE)).speed(8.0))
+        // Wavelength = 2π/0.08 ≈ 79 cols — gentle shear across the glyphs.
+        .add(VSineWave::wrap(Marquee::wrap(Rainbow::on(&banner_wave)).speed(8.0))
             .amplitude(2.0)
-            .frequency(0.12)
-            .speed(0.12 * 8.0 / 30.0))
+            .frequency(0.08)
+            .speed(0.08 * 8.0 / 30.0))
         .quit_key('q')
         .run(30.0)
         .await;
