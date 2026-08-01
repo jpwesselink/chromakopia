@@ -77,15 +77,17 @@ async fn main() {
             .size(36, 3))
         .blank()
         .add(text("6. scroll + VSineWave — the ripple marquee", label))
-        // Phase-locked: wave speed = frequency * scroll_cells_per_sec / FPS,
-        // so the crests travel at exactly the text's speed and the banner
-        // reads as one rigid wavy ribbon sliding left. A faster wave speed
-        // makes the wave sweep along the (seemingly static) text instead.
+        // Wave speed detuned from the phase-lock (lock would be
+        // frequency * scroll_cells_per_sec / FPS): crests glide left at
+        // 5 cells/s while the text scrolls at 8, so BOTH motions read —
+        // the sinus undulates on screen and the letters flow through it.
+        // Exact lock freezes the wave onto the text; much faster than the
+        // scroll and the wave dominates while the text seems static.
         // Wavelength = 2π/0.08 ≈ 79 cols — gentle shear across the glyphs.
         .add(VSineWave::wrap(Marquee::wrap(Rainbow::on(&banner_wave)).speed(8.0))
             .amplitude(2.0)
             .frequency(0.08)
-            .speed(0.08 * 8.0 / 30.0))
+            .speed(0.08 * 5.0 / 30.0))
         .quit_key('q')
         .run(30.0)
         .await;
