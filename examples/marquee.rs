@@ -1,4 +1,4 @@
-//! Marquee — one wrapper, five personalities.
+//! Marquee — one wrapper, six personalities.
 //!
 //! Every row below is the same `Marquee` effect with different knobs:
 //! constant scroll (left/right), an eased cycle that moves in swipes,
@@ -11,6 +11,8 @@ use chromakopia::prelude::*;
 
 const RIBBON: &str = "  CHROMAKOPIA ★ TERMINAL ANIMATIONS ★ EFFECTS ★ SCENES ★";
 const STRIP: &str = "════════╡ chromakopia ╞════════════════════";
+/// The ribbon with 2 blank rows above and below — headroom for the wave.
+const RIBBON_WAVE: &str = "\n\n  CHROMAKOPIA ★ TERMINAL ANIMATIONS ★ EFFECTS ★ SCENES ★\n\n";
 const SWING_LINE: &str = "◄ ─────────── swing ─────────── ►";
 // Three blank rows at the end: the vertical marquee wraps seamlessly, so
 // without a gap the last line and the first line would sit adjacent in
@@ -29,7 +31,7 @@ async fn main() {
     let fire = gradient(&["#331000", "#ff6a00", "#ffd000"]).palette(64);
 
     Scene::new()
-        .add(text("Marquee — one wrapper, five personalities", Color::new(160, 160, 160)))
+        .add(text("Marquee — one wrapper, six personalities", Color::new(160, 160, 160)))
         .blank()
         .add(text("1. scroll left (default), constant speed", label))
         .add(Marquee::wrap(Rainbow::on(RIBBON)).speed(10.0))
@@ -54,6 +56,12 @@ async fn main() {
             .direction(ScrollDirection::Top)
             .speed(3.0)
             .size(36, 3))
+        .blank()
+        .add(text("6. scroll + VSineWave — the ripple marquee", label))
+        .add(VSineWave::wrap(Marquee::wrap(Rainbow::on(RIBBON_WAVE)).speed(8.0))
+            .amplitude(2.0)
+            .frequency(0.12)
+            .speed(0.08))
         .quit_key('q')
         .run(30.0)
         .await;
