@@ -12,8 +12,10 @@ const BANNER: &str = r#"
 #[tokio::main]
 async fn main() {
     let text = BANNER.trim_matches('\n');
-    let anim = Plasma::on(text).spawn();
-    tokio::time::sleep(Duration::from_secs(8)).await;
-    anim.fade_out(2.0);
+    let anim = Plasma::on(text).quit_key('q').spawn();
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_secs(8)) => anim.fade_out(2.0),
+        _ = anim.wait() => {}
+    }
     anim.wait().await;
 }

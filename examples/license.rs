@@ -102,7 +102,7 @@ async fn main() {
                 .direction(ScrollDirection::Left)
                 .easing(Easing::Elastic(0.25))
                 .duration(2.0)
-                .stagger(2)
+                .stagger(2.0 / 30.0)
                 .color(Blend::new(
                     Plasma::new().palette(fire.clone()).seed(42.0)
                         .y_offset(top_y)
@@ -119,7 +119,7 @@ async fn main() {
                 .direction(ScrollDirection::Left)
                 .easing(Easing::Elastic(0.25))
                 .duration(2.0)
-                .stagger(2)
+                .stagger(2.0 / 30.0)
                 .color(Blend::new(
                     Plasma::new().palette(fire.clone()).seed(42.0)
                         .y_offset(mid_y)
@@ -136,7 +136,7 @@ async fn main() {
                 .direction(ScrollDirection::Right)
                 .easing(Easing::Elastic(0.25))
                 .duration(2.0)
-                .stagger(2)
+                .stagger(2.0 / 30.0)
                 .color(Blend::new(
                     Plasma::new().palette(fire.clone()).seed(42.0)
                         .y_offset(tail_y)
@@ -146,5 +146,5 @@ async fn main() {
                 )),
         ).total(15.0).fade_in(1.0, Easing::EaseOut).fade_out(2.0, Easing::EaseInOut).from_color(fg))
     ;
-    scene.run(15.0).await;
+    scene.quit_key('q').run(15.0).await;
 }
