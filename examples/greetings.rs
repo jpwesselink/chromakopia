@@ -317,16 +317,19 @@ async fn main() {
     let cue_col = colossal.width(&prefix);
     let cue1_secs = (cue_col as f64 - term_w as f64 / 2.0).max(0.0) / SPEED;
 
-    // Message block: 2 pad rows, 11 colossal rows, 2 pad rows — every row
-    // padded past the art so the horizontal loop has a breather.
+    // Message block: 4 pad rows, 11 colossal rows, 4 pad rows — headroom
+    // for the ±3.5-cell wave; every row padded past the art so the
+    // horizontal loop has a breather.
     let msg_rows = colossal.render(&display);
     let loop_w = colossal.width(&display) + 60;
-    let mut block: Vec<String> = Vec::with_capacity(msg_rows.len() + 4);
-    block.push(String::new());
-    block.push(String::new());
+    let mut block: Vec<String> = Vec::with_capacity(msg_rows.len() + 8);
+    for _ in 0..4 {
+        block.push(String::new());
+    }
     block.extend(msg_rows.iter().map(|r| format!("{r:<loop_w$}")));
-    block.push(String::new());
-    block.push(String::new());
+    for _ in 0..4 {
+        block.push(String::new());
+    }
     let message_block = block.join("\n");
 
     // Plasma flowing through the colossal glyphs — hot magenta/gold palette.
@@ -334,9 +337,9 @@ async fn main() {
     let message = VSineWave::wrap(
         Marquee::wrap(Plasma::on(&message_block).palette(lava).seed(7.0)).speed(SPEED),
     )
-    .amplitude(2.0)
-    .frequency(0.05) // ~126-col wavelength — gentle over colossal glyphs
-    .speed(0.075) // crests at 45 cells/s, right at the strobe ceiling
+    .amplitude(3.5) // big bouncy swing (the block has 4 pad rows each side)
+    .frequency(0.12) // ~52-col wavelength — the wave curls inside a word
+    .speed(0.2) // crests at 50 cells/s — funky, well under the 90 ceiling
     .delay(8.0) // flat horizontal scroll first...
     .ramp(2.0); // ...then the wave fades in
     let message = Outline::wrap(message); // 50%-alpha stroke, rides the wave
@@ -369,13 +372,13 @@ async fn main() {
     let message_end = loop_w as f64 / SPEED + 2.0;
     let total = message_end.max(names_end);
 
-    // Stage: names in back, 15-row message block in front, 4 landing rows
-    // below it — 19 rows, plus the header line above.
+    // Stage: names in back, 19-row message block in front, 4 landing rows
+    // below it — 23 rows, plus the header line above.
     let stage = Layered {
         back: seq,
         front: Box::new(message),
-        front_h: 15,
-        height: 19,
+        front_h: 19,
+        height: 23,
     };
 
     Scene::new()
