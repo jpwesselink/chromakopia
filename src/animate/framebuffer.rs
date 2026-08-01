@@ -285,7 +285,7 @@ impl<E: Effect> On<E> {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn spawn(self) -> AnimationHandle {
         let (w, h) = self.size();
-        spawn_effect(self, w.max(1), h.max(1), 1.0)
+        spawn_effect(self, w.max(1), h.max(1), 1.0, None)
     }
 
     /// Run in a terminal area sized to the text for `seconds`, then stop.
@@ -299,6 +299,7 @@ impl<E: Effect> On<E> {
             h.max(1),
             Duration::from_secs_f64(seconds),
             1.0,
+            None,
         )
         .await;
     }
@@ -433,6 +434,67 @@ fn get_cursor_row() -> Option<usize> {
     None
 }
 
+/// Watch `/dev/tty` for `key` (case-insensitive) and flip `running` to
+/// false when pressed. Clears only ICANON|ECHO — ISIG stays on so Ctrl-C
+/// still works. Restores the original termios when the thread exits.
+#[cfg(unix)]
+fn spawn_quit_listener(key: char, running: Arc<std::sync::atomic::AtomicBool>) {
+    use std::io::Read;
+    use std::os::unix::io::AsRawFd;
+    use std::sync::atomic::Ordering;
+
+    std::thread::spawn(move || {
+        let Ok(mut tty) = std::fs::OpenOptions::new().read(true).open("/dev/tty") else {
+            return;
+        };
+        let fd = tty.as_raw_fd();
+
+        let old = unsafe {
+            let mut t = std::mem::zeroed();
+            if libc::tcgetattr(fd, &mut t) != 0 {
+                return;
+            }
+            t
+        };
+
+        struct TermiosGuard {
+            fd: i32,
+            original: libc::termios,
+        }
+        impl Drop for TermiosGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    libc::tcsetattr(self.fd, libc::TCSANOW, &self.original);
+                }
+            }
+        }
+        let _guard = TermiosGuard { fd, original: old };
+
+        let mut raw = old;
+        raw.c_lflag &= !(libc::ICANON | libc::ECHO);
+        raw.c_cc[libc::VMIN] = 0;
+        raw.c_cc[libc::VTIME] = 1; // read() returns after ≤100ms — lets us poll `running`
+        if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
+            return;
+        }
+
+        let mut byte = [0u8; 1];
+        while running.load(Ordering::Relaxed) {
+            match tty.read(&mut byte) {
+                Ok(1) if (byte[0] as char).eq_ignore_ascii_case(&key) => {
+                    running.store(false, Ordering::Relaxed);
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
+fn spawn_quit_listener(_key: char, _running: Arc<std::sync::atomic::AtomicBool>) {}
+
 /// Diff two framebuffers and produce minimal ANSI output.
 ///
 /// Uses absolute cursor positioning — no newlines, no scrolling.
@@ -499,6 +561,7 @@ pub async fn run_effect(
     height: usize,
     duration: Duration,
     speed: f64,
+    quit_key: Option<char>,
 ) {
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -529,6 +592,12 @@ pub async fn run_effect(
     }
 
     let start_row = get_cursor_row().unwrap_or(1);
+
+    if let Some(key) = quit_key {
+        // Force the OSC color probe now, while we still own the tty.
+        crate::terminal::probe_colors();
+        spawn_quit_listener(key, running.clone());
+    }
 
     let frame_ms = (1000.0 / FPS / speed) as u64;
     let frame_duration = Duration::from_millis(frame_ms.max(1));
@@ -592,7 +661,10 @@ pub async fn run_effect(
         }
     });
 
-    tokio::time::sleep(duration).await;
+    let deadline = tokio::time::Instant::now() + duration;
+    while running.load(Ordering::Relaxed) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(16)).await;
+    }
     running.store(false, Ordering::Relaxed);
 
     let _ = anim_handle.await;
@@ -687,6 +759,7 @@ pub fn spawn_effect(
     width: usize,
     height: usize,
     speed: f64,
+    quit_key: Option<char>,
 ) -> AnimationHandle {
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -724,6 +797,12 @@ pub fn spawn_effect(
     }
 
     let start_row = get_cursor_row().unwrap_or(1);
+
+    if let Some(key) = quit_key {
+        // Force the OSC color probe now, while we still own the tty.
+        crate::terminal::probe_colors();
+        spawn_quit_listener(key, running.clone());
+    }
 
     let frame_ms = (1000.0 / FPS / speed) as u64;
     let frame_duration = Duration::from_millis(frame_ms.max(1));

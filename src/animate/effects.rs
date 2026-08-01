@@ -24,7 +24,7 @@ macro_rules! impl_text_effect_convenience {
             #[cfg(not(target_arch = "wasm32"))]
             pub fn spawn(self) -> AnimationHandle {
                 let (w, h) = <Self as Effect>::size(&self);
-                super::framebuffer::spawn_effect(self, w.max(1), h.max(1), 1.0)
+                super::framebuffer::spawn_effect(self, w.max(1), h.max(1), 1.0, None)
             }
 
             /// Run in a terminal area for `seconds`, then stop.
@@ -33,7 +33,7 @@ macro_rules! impl_text_effect_convenience {
                 let (w, h) = <Self as Effect>::size(&self);
                 super::framebuffer::run_effect(
                     self, w.max(1), h.max(1),
-                    std::time::Duration::from_secs_f64(seconds), 1.0,
+                    std::time::Duration::from_secs_f64(seconds), 1.0, None,
                 ).await;
             }
         }
@@ -283,6 +283,539 @@ impl On<Plasma> {
     pub fn scene_size(mut self, width: f64, height: f64) -> Self {
         self.effect = self.effect.scene_size(width, height);
         self
+    }
+}
+
+// ── VectorField ──
+
+/// Animated 2D vector field rendered as Unicode arrows. Each cell shows
+/// the direction of the local flow `f(x, y, t)` as one of eight arrows
+/// (`← ↖ ↑ ↗ → ↘ ↓ ↙`) and is coloured by the flow's magnitude through a
+/// palette. The flow is a sum of sines — eddies form, dissolve, collide.
+///
+/// ```
+/// use chromakopia::animate::VectorField;
+/// use chromakopia::presets;
+///
+/// let field = VectorField::new().palette(presets::storm().palette(64));
+/// ```
+pub struct VectorField {
+    palette: Vec<Color>,
+    seed: f64,
+    speed: f64,
+    /// Spatial frequency multiplier — larger = smaller, busier eddies.
+    scale: f64,
+    /// Custom 8-arrow set, ordered by octant (0 = →, 1 = ↘, ..., 7 = ↗).
+    arrows: [char; 8],
+    /// Optional cycle through multiple arrow sets — empty = use `arrows`.
+    arrow_cycle: Vec<[char; 8]>,
+    /// Frames each cycled set is shown before swapping. 0 = no cycling.
+    cycle_frames: usize,
+    /// Render an arrow every N columns. 1 = every column (default).
+    h_spacing: usize,
+    /// Render a row every N rows. 1 = every row (default).
+    v_spacing: usize,
+}
+
+impl VectorField {
+    pub fn new() -> Self {
+        use rand::Rng;
+        Self {
+            palette: crate::presets::storm().palette(64),
+            seed: rand::rng().random::<f64>() * 1000.0,
+            speed: 1.0,
+            scale: 1.0,
+            // Octant order: 0=East, 1=SE, 2=South, 3=SW, 4=West, 5=NW, 6=North, 7=NE.
+            // Screen-y grows downward, so positive fy → south.
+            arrows: ['→', '↘', '↓', '↙', '←', '↖', '↑', '↗'],
+            arrow_cycle: Vec::new(),
+            cycle_frames: 0,
+            h_spacing: 1,
+            v_spacing: 1,
+        }
+    }
+
+    pub fn palette(mut self, palette: Vec<Color>) -> Self { self.palette = palette; self }
+    pub fn seed(mut self, seed: f64) -> Self { self.seed = seed; self }
+    pub fn speed(mut self, speed: f64) -> Self { self.speed = speed; self }
+    pub fn scale(mut self, scale: f64) -> Self { self.scale = scale; self }
+    /// Override the arrow set. Indices: 0=E, 1=SE, 2=S, 3=SW, 4=W, 5=NW, 6=N, 7=NE.
+    pub fn arrows(mut self, arrows: [char; 8]) -> Self { self.arrows = arrows; self }
+    /// Cycle through N arrow sets, swapping every `seconds`. Each set is
+    /// the same octant layout as `arrows`.
+    pub fn arrow_cycle(mut self, sets: Vec<[char; 8]>, seconds: f64) -> Self {
+        self.arrow_cycle = sets;
+        self.cycle_frames = super::framebuffer::secs_to_frames(seconds).max(1);
+        self
+    }
+    /// Cell spacing — render an arrow every `h` columns and every `v`
+    /// rows. (1, 1) = every cell. (2, 2) = quarter density.
+    pub fn spacing(mut self, h: usize, v: usize) -> Self {
+        self.h_spacing = h.max(1);
+        self.v_spacing = v.max(1);
+        self
+    }
+}
+
+impl Default for VectorField {
+    fn default() -> Self { Self::new() }
+}
+
+impl Effect for VectorField {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        if self.palette.is_empty() || buf.width == 0 || buf.height == 0 { return; }
+        let t = frame as f64 * 0.05 * self.speed;
+        let pal = &self.palette;
+        let last = (pal.len() - 1) as f64;
+
+        // Four point vortices (alternating cyclone / anticyclone) orbit
+        // slowly across the buffer. Each contributes a swirling 1/r² field;
+        // they sum to a continuously deforming flow.
+        let w = buf.width as f64;
+        let h = buf.height as f64;
+        let cx = w * 0.5;
+        let cy = h * 0.5;
+        // Use the full buffer extent. Staggered per-vortex radii (below)
+        // push some vortices toward the edges.
+        let max_r_x = w * 0.48;
+        let max_r_y = h * 0.48;
+
+        const N: usize = 3;
+        let mut vortices = [(0.0_f64, 0.0_f64, 0.0_f64); N];
+        for (i, v) in vortices.iter_mut().enumerate() {
+            let phase = i as f64 * std::f64::consts::TAU / N as f64 + self.seed;
+            // Spread radii across [0.35, 1.0] × max_r so vortices live at
+            // a mix of distances from the centre instead of all on one ring.
+            let r_frac = 0.35 + 0.65 * ((i * 5) % N) as f64 / (N - 1) as f64;
+            let rx = max_r_x * r_frac;
+            let ry = max_r_y * r_frac;
+            // Different orbit frequencies per vortex add Lissajous wobble.
+            let vx = cx + rx * (t * 0.7 + phase).cos();
+            let vy = cy + ry * (t * 0.5 + phase * 1.3).sin();
+            let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+            *v = (vx, vy, sign);
+        }
+
+        // Pick the active arrow set, with a stochastic dissolve during the
+        // last third of each cycle: each cell independently flips to the
+        // next set based on a stable per-cell hash. Looks like the field
+        // is melting from one glyph style into another.
+        let cur_set: &[char; 8];
+        let next_set: &[char; 8];
+        let dissolve_progress: f64;
+        if !self.arrow_cycle.is_empty() && self.cycle_frames > 0 {
+            let cycle_idx = frame / self.cycle_frames;
+            let in_cycle = frame % self.cycle_frames;
+            let transition_frames = (self.cycle_frames / 3).max(1);
+            let transition_start = self.cycle_frames.saturating_sub(transition_frames);
+            cur_set = &self.arrow_cycle[cycle_idx % self.arrow_cycle.len()];
+            next_set = &self.arrow_cycle[(cycle_idx + 1) % self.arrow_cycle.len()];
+            dissolve_progress = if in_cycle >= transition_start {
+                (in_cycle - transition_start) as f64 / transition_frames as f64
+            } else {
+                0.0
+            };
+        } else {
+            cur_set = &self.arrows;
+            next_set = &self.arrows;
+            dissolve_progress = 0.0;
+        }
+        let dissolving = dissolve_progress > 0.0;
+        let hash_seed = (frame / self.cycle_frames.max(1)) as u32;
+
+        let s = self.scale.max(0.1);
+        // y-distances scaled ×2 to compensate for terminal cell aspect, so
+        // vortices look circular instead of squashed.
+        for y in 0..buf.height {
+            if y % self.v_spacing != 0 { continue; }
+            let yf = y as f64;
+            for x in 0..buf.width {
+                if x % self.h_spacing != 0 { continue; }
+                let xf = x as f64;
+                let mut fx = 0.0;
+                let mut fy = 0.0;
+                for &(vx, vy, sign) in &vortices {
+                    let dx = (xf - vx) * s;
+                    let dy = (yf - vy) * s * 2.0;
+                    let r2 = dx * dx + dy * dy + 4.0;
+                    fx += sign * -dy / r2;
+                    fy += sign * dx / r2;
+                }
+
+                // Octant via sign/magnitude comparison (no atan2). The
+                // tan(67.5°) ≈ 2.414 threshold splits the eight wedges.
+                let afx = fx.abs();
+                let afy = fy.abs();
+                let octant = if afx > afy * 2.414 {
+                    if fx > 0.0 { 0 } else { 4 }
+                } else if afy > afx * 2.414 {
+                    if fy > 0.0 { 2 } else { 6 }
+                } else {
+                    match (fx > 0.0, fy > 0.0) {
+                        (true,  true)  => 1,
+                        (false, true)  => 3,
+                        (false, false) => 5,
+                        (true,  false) => 7,
+                    }
+                };
+                let active_set = if dissolving {
+                    // Stable per-cell hash → flip to next set when below progress.
+                    let mut h = (x as u32).wrapping_mul(73856093)
+                        ^ (y as u32).wrapping_mul(19349663)
+                        ^ hash_seed.wrapping_mul(83492791);
+                    h = h.wrapping_mul(2654435761);
+                    let cell_r = (h as f64) / (u32::MAX as f64);
+                    if cell_r < dissolve_progress { next_set } else { cur_set }
+                } else {
+                    cur_set
+                };
+                let ch = active_set[octant];
+
+                // Colour by proximity to vortex centres rather than by
+                // rotation speed. The pure rotational field is zero at
+                // the centre (the "eye"), which would otherwise leave a
+                // bright dot at every core.
+                let mut depth = 0.0;
+                for &(vx, vy, _) in &vortices {
+                    let ddx = xf - vx;
+                    let ddy = (yf - vy) * 2.0;
+                    depth += 1.0 / (ddx * ddx + ddy * ddy + 1.0);
+                }
+                let intensity = depth / (depth + 0.015);
+                let fi = (intensity * last).round() as usize;
+                buf.set(x, y, Cell::new(ch, pal[fi.min(pal.len() - 1)]));
+            }
+        }
+    }
+
+    fn size(&self) -> (usize, usize) { (60, 20) }
+}
+
+// ── HeightMap ──
+
+/// Animated topographic contour map. A scalar height field — sum of N
+/// moving Gaussian bumps that orbit slowly — is rendered as isolines using
+/// box-drawing characters. Cells whose height is near a contour level draw
+/// a line oriented perpendicular to the local gradient; other cells are
+/// left blank (transparent over whatever's underneath).
+///
+/// ```
+/// use chromakopia::animate::HeightMap;
+/// let map = HeightMap::new().interval(0.6).thickness(0.1);
+/// ```
+pub struct HeightMap {
+    palette: Vec<Color>,
+    seed: f64,
+    /// Time evolution rate (1.0 = default).
+    speed: f64,
+    /// Vertical distance (in field units) between contour levels.
+    interval: f64,
+    /// Half-thickness of each contour line in field units. Cells with
+    /// `|h - nearest_level| <= thickness` are drawn.
+    thickness: f64,
+    /// Number of orbiting Gaussian peaks.
+    peaks: usize,
+    /// Gaussian σ — larger = smoother, gentler hills.
+    sigma: f64,
+    /// Optional panel background. When set, every cell is filled with this
+    /// colour, and contour chars draw with this colour as their bg.
+    bg: Option<Color>,
+    /// If true, stamp height labels on horizontal contour segments.
+    labels_enabled: bool,
+    /// Printed elevation = `label_base + level * label_step`.
+    label_base: f64,
+    label_step: f64,
+    /// Min horizontal distance between consecutive labels in the same row.
+    label_spacing: usize,
+    /// Optional override for the effect's declared size in cells.
+    size_override: Option<(usize, usize)>,
+}
+
+impl HeightMap {
+    pub fn new() -> Self {
+        use rand::Rng;
+        Self {
+            palette: vec![Color::new(180, 180, 180)],
+            seed: rand::rng().random::<f64>() * 1000.0,
+            speed: 1.0,
+            interval: 0.6,
+            thickness: 0.08,
+            peaks: 6,
+            sigma: 14.0,
+            bg: None,
+            labels_enabled: false,
+            label_base: 5000.0,
+            label_step: 100.0,
+            label_spacing: 28,
+            size_override: None,
+        }
+    }
+    pub fn palette(mut self, p: Vec<Color>) -> Self { self.palette = p; self }
+    pub fn seed(mut self, s: f64) -> Self { self.seed = s; self }
+    pub fn speed(mut self, s: f64) -> Self { self.speed = s; self }
+    pub fn interval(mut self, v: f64) -> Self { self.interval = v.max(0.01); self }
+    pub fn thickness(mut self, v: f64) -> Self { self.thickness = v.max(0.001); self }
+    pub fn peaks(mut self, n: usize) -> Self { self.peaks = n.max(1); self }
+    pub fn sigma(mut self, v: f64) -> Self { self.sigma = v.max(0.5); self }
+    /// Set a solid panel background — every cell fills with this colour and
+    /// contour chars use it as their bg, so the lines sit on the panel.
+    pub fn bg(mut self, color: Color) -> Self { self.bg = Some(color); self }
+    /// Stamp elevation labels on horizontal contour segments. Each label
+    /// shows `base + level * step` as an integer — e.g., `5400`. Labels
+    /// "follow" the contour because they're only placed on contour cells:
+    /// as the field drifts, the label positions drift with the lines.
+    pub fn labels(mut self, base: f64, step: f64) -> Self {
+        self.labels_enabled = true;
+        self.label_base = base;
+        self.label_step = step;
+        self
+    }
+
+    /// Override the minimum horizontal spacing between labels in a single
+    /// row (default 28 cells).
+    pub fn label_spacing(mut self, cells: usize) -> Self {
+        self.label_spacing = cells.max(4);
+        self
+    }
+    /// Override the effect's declared size in cells. By default the size
+    /// is (80, 24); set explicitly to claim a different region of the
+    /// terminal in a Scene.
+    pub fn size(mut self, w: usize, h: usize) -> Self {
+        self.size_override = Some((w.max(1), h.max(1)));
+        self
+    }
+}
+
+impl Default for HeightMap {
+    fn default() -> Self { Self::new() }
+}
+
+impl Effect for HeightMap {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        if self.palette.is_empty() || buf.width == 0 || buf.height == 0 { return; }
+        let t = frame as f64 * 0.05 * self.speed;
+        let w = buf.width;
+        let h = buf.height;
+        let pal = &self.palette;
+        let last = (pal.len() - 1) as f64;
+
+        // Pre-compute peak positions, amplitudes and sigmas for this
+        // frame. Per-peak variation gives topological diversity:
+        // negative amplitudes = depressions; small sigma = steep peaks;
+        // large sigma = gentle slopes.
+        let cx = w as f64 * 0.5;
+        let cy = h as f64 * 0.5;
+        let orbit_x = w as f64 * 0.4;
+        let orbit_y = h as f64 * 0.4;
+        let mut peaks: Vec<(f64, f64, f64, f64)> = Vec::with_capacity(self.peaks);
+        for i in 0..self.peaks {
+            let phase = i as f64 * std::f64::consts::TAU / self.peaks as f64 + self.seed;
+            let px = cx + orbit_x * (t * 0.3 + phase).cos();
+            let py = cy + orbit_y * (t * 0.25 + phase * 1.3).sin();
+            // Stable per-peak amplitude/sigma jitter derived from index + seed.
+            let r1 = (i as f64 * 7.31 + self.seed * 3.0).sin();
+            let r2 = (i as f64 * 11.7 + self.seed * 5.0).cos();
+            // ~1/3 of peaks become depressions (negative amp).
+            let amp_sign = if r1 < -0.33 { -0.7 } else { 1.0 };
+            let amp_mag = 0.4 + 0.6 * (r2 * 0.5 + 0.5);    // 0.4..1.0
+            let amp = amp_sign * amp_mag;
+            // Sigma jitter: 0.55..1.5 of base sigma — mix steep and gentle.
+            let sigma = self.sigma * (0.55 + 0.95 * (r1 * 0.5 + 0.5));
+            peaks.push((px, py, amp, sigma));
+        }
+
+        // Height field computed analytically from the peak list — accepts
+        // any f64 coordinate, including out-of-bounds positions which we
+        // need at the buffer edges so the gradient stays a true central
+        // difference (no boundary bias).
+        let height_at = |xf: f64, yf: f64| -> f64 {
+            let mut sum = 0.0;
+            for &(px, py, amp, sigma) in &peaks {
+                let two_sigma_sq = 2.0 * sigma * sigma;
+                let dx = xf - px;
+                let dy = (yf - py) * 2.0;
+                sum += amp * (-(dx * dx + dy * dy) / two_sigma_sq).exp();
+            }
+            sum
+        };
+
+        let mut field = vec![0.0_f64; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                field[y * w + x] = height_at(x as f64, y as f64);
+            }
+        }
+
+        // ── Optional panel background fill ──
+        if let Some(bg) = self.bg {
+            for y in 0..h {
+                for x in 0..w {
+                    buf.set(x, y, Cell::with_bg(' ', bg, bg));
+                }
+            }
+        }
+
+        // ── Two-pass over the field: pass 1 just finds the level range of
+        // visible contour cells so we can map level → palette index across
+        // the full palette dynamically. ──
+        let mut min_level = i32::MAX;
+        let mut max_level = i32::MIN;
+        for y in 0..h {
+            for x in 0..w {
+                let hv = field[y * w + x];
+                let level = (hv / self.interval).round();
+                let dist = (hv - level * self.interval).abs();
+                if dist > self.thickness { continue; }
+                let li = level as i32;
+                if li < min_level { min_level = li; }
+                if li > max_level { max_level = li; }
+            }
+        }
+        // Avoid divide-by-zero when the field happens to be very flat.
+        let level_span = (max_level - min_level).max(1) as f64;
+
+        // ── Contour pass — also records is_contour, level, horizontal flag. ──
+        let mut is_contour = vec![false; w * h];
+        let mut level_at = vec![0_i32; w * h];
+        let mut is_horizontal = vec![false; w * h];
+
+        for y in 0..h {
+            for x in 0..w {
+                let hv = field[y * w + x];
+                let level = (hv / self.interval).round();
+                let dist = (hv - level * self.interval).abs();
+                if dist > self.thickness { continue; }
+
+                let hx_e = if x + 1 < w {
+                    field[y * w + x + 1]
+                } else {
+                    height_at(x as f64 + 1.0, y as f64)
+                };
+                let hx_w = if x > 0 {
+                    field[y * w + x - 1]
+                } else {
+                    height_at(x as f64 - 1.0, y as f64)
+                };
+                let hy_n = if y > 0 {
+                    field[(y - 1) * w + x]
+                } else {
+                    height_at(x as f64, y as f64 - 1.0)
+                };
+                let hy_s = if y + 1 < h {
+                    field[(y + 1) * w + x]
+                } else {
+                    height_at(x as f64, y as f64 + 1.0)
+                };
+                let gx = hx_e - hx_w;
+                let gy = (hy_s - hy_n) * 2.0;
+                let abs_gx = gx.abs();
+                let abs_gy = gy.abs();
+
+                let ch = if abs_gx > abs_gy * 2.414 {
+                    '│'
+                } else if abs_gy > abs_gx * 2.414 {
+                    '─'
+                } else if gx.signum() == gy.signum() {
+                    '╱'
+                } else {
+                    '╲'
+                };
+
+                // Map level into [0, 1] using the *actual* min/max seen this
+                // frame, so the lowest visible contour gets palette[0] and
+                // the highest gets palette[last] regardless of field shape.
+                let li = level as i32;
+                let level_norm = (li - min_level) as f64 / level_span;
+                let fi = (level_norm * last).round() as usize;
+                let color = pal[fi.min(pal.len() - 1)];
+                let cell = if let Some(bg) = self.bg {
+                    Cell::with_bg(ch, color, bg)
+                } else {
+                    Cell::new(ch, color)
+                };
+                buf.set(x, y, cell);
+
+                let idx = y * w + x;
+                is_contour[idx] = true;
+                level_at[idx] = li;
+                is_horizontal[idx] = abs_gy >= abs_gx;
+            }
+        }
+
+        // ── One label per connected contour component. ──
+        if self.labels_enabled {
+            let label_color = pal[pal.len() / 2];
+            let mut visited = vec![false; w * h];
+            let mut queue: Vec<(usize, usize)> = Vec::new();
+            let mut component: Vec<(usize, usize)> = Vec::new();
+
+            for sy in 0..h {
+                for sx in 0..w {
+                    let start_idx = sy * w + sx;
+                    if !is_contour[start_idx] || visited[start_idx] { continue; }
+                    let target_level = level_at[start_idx];
+
+                    // 8-connected BFS over same-level contour cells.
+                    component.clear();
+                    queue.clear();
+                    queue.push((sx, sy));
+                    visited[start_idx] = true;
+                    while let Some((cx, cy)) = queue.pop() {
+                        component.push((cx, cy));
+                        for (dx, dy) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1),
+                                         (-1, -1), (1, -1), (-1, 1), (1, 1)] {
+                            let nx = cx as i32 + dx;
+                            let ny = cy as i32 + dy;
+                            if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 { continue; }
+                            let (nx, ny) = (nx as usize, ny as usize);
+                            let nidx = ny * w + nx;
+                            if visited[nidx] || !is_contour[nidx] { continue; }
+                            if level_at[nidx] != target_level { continue; }
+                            visited[nidx] = true;
+                            queue.push((nx, ny));
+                        }
+                    }
+
+                    // Skip tiny fragments — they're too small to label legibly.
+                    if component.len() < 6 { continue; }
+
+                    // Centroid of the component (for stable label placement).
+                    let cx_sum: f64 = component.iter().map(|&(x, _)| x as f64).sum();
+                    let cy_sum: f64 = component.iter().map(|&(_, y)| y as f64).sum();
+                    let cx = cx_sum / component.len() as f64;
+                    let cy = cy_sum / component.len() as f64;
+
+                    // Build the label string.
+                    let value = (self.label_base + target_level as f64 * self.label_step).round() as i32;
+                    let label = format!("{}", value);
+                    let chars: Vec<char> = label.chars().collect();
+
+                    // Find the horizontal-contour cell closest to the centroid
+                    // where the label fits within the buffer.
+                    let mut best: Option<(usize, usize, f64)> = None;
+                    for &(x, y) in &component {
+                        if !is_horizontal[y * w + x] { continue; }
+                        if x + chars.len() > w { continue; }
+                        let dx = x as f64 - cx;
+                        let dy = (y as f64 - cy) * 2.0;
+                        let d2 = dx * dx + dy * dy;
+                        if best.map_or(true, |(_, _, b)| d2 < b) {
+                            best = Some((x, y, d2));
+                        }
+                    }
+
+                    if let Some((lx, ly, _)) = best {
+                        for (i, ch) in chars.iter().enumerate() {
+                            buf.set(lx + i, ly, Cell::new(*ch, label_color));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn size(&self) -> (usize, usize) {
+        self.size_override.unwrap_or((80, 24))
     }
 }
 
@@ -599,9 +1132,9 @@ impl Scroll {
         self
     }
 
-    /// Per-line stagger in frames. Each successive line starts this many frames later.
-    pub fn stagger(mut self, frames: usize) -> Self {
-        self.line_delay = frames;
+    /// Per-line stagger in seconds. Each successive line starts this much later.
+    pub fn stagger(mut self, seconds: f64) -> Self {
+        self.line_delay = super::framebuffer::secs_to_frames(seconds);
         self
     }
 
@@ -710,6 +1243,157 @@ impl Effect for Scroll {
     }
 
     fn size(&self) -> (usize, usize) { chars_size(&self.chars) }
+}
+
+// ── Marquee ──
+
+/// Infinite horizontal (or vertical) scroller. Wraps another effect and
+/// translates its rendered output continuously, tiling at the buffer edges
+/// so the loop is seamless. Non-space cells overwrite the buffer; spaces
+/// pass through, so a marquee can be overlaid on top of other effects in
+/// a Scene to create parallax layers.
+///
+/// ```
+/// use chromakopia::animate::{Marquee, Rainbow, ScrollDirection};
+/// let banner = Marquee::wrap(Rainbow::on("Hello world! "))
+///     .speed(8.0)
+///     .direction(ScrollDirection::Left);
+/// ```
+pub struct Marquee {
+    inner: Box<dyn Effect>,
+    /// Average cells per second of translation.
+    speed: f64,
+    direction: ScrollDirection,
+    /// Optional explicit output size. If None, uses inner's size.
+    out_size: Option<(usize, usize)>,
+    /// Seconds per cycle. The easing curve shapes the offset over each
+    /// cycle, so within a cycle the marquee accelerates / decelerates.
+    /// 0.0 = no cycling (constant speed, linear).
+    cycle_secs: f64,
+    /// Easing applied to progress within each cycle.
+    easing: super::easing::Easing,
+    /// If true, the marquee oscillates back and forth (sine wave) instead
+    /// of scrolling in one direction. Peak excursion = speed * cycle / 4.
+    swing: bool,
+}
+
+impl Marquee {
+    pub fn wrap(inner: impl Effect) -> Self {
+        Self {
+            inner: Box::new(inner),
+            speed: 8.0,
+            direction: ScrollDirection::Left,
+            out_size: None,
+            cycle_secs: 0.0,
+            easing: super::easing::Easing::Linear,
+            swing: false,
+        }
+    }
+    pub fn speed(mut self, cells_per_sec: f64) -> Self {
+        self.speed = cells_per_sec;
+        self
+    }
+    pub fn direction(mut self, d: ScrollDirection) -> Self {
+        self.direction = d;
+        self
+    }
+    /// Override the effect's declared output size in cells.
+    pub fn size(mut self, w: usize, h: usize) -> Self {
+        self.out_size = Some((w.max(1), h.max(1)));
+        self
+    }
+    /// Apply an easing curve to the scroll, repeated every `seconds`.
+    /// Within each cycle, position progress follows the easing curve,
+    /// so the marquee accelerates / decelerates rather than moving at
+    /// constant speed. Average speed is preserved (`speed` cells/s).
+    ///
+    /// - `EaseOut` → starts fast, slows down each cycle ("decelerating swipes")
+    /// - `EaseIn` → starts slow, speeds up each cycle
+    /// - `EaseInOut` → slow start, fast middle, slow end
+    /// - `Linear` (default) → constant speed, no cycling
+    pub fn cycle(mut self, seconds: f64, easing: super::easing::Easing) -> Self {
+        self.cycle_secs = seconds.max(0.0);
+        self.easing = easing;
+        self
+    }
+
+    /// Oscillate back and forth instead of scrolling one way. The motion
+    /// is a sine wave; peak excursion = `speed * cycle / 4` cells, so
+    /// faster layers swing wider — natural parallax depth cue.
+    pub fn swing(mut self) -> Self {
+        self.swing = true;
+        self
+    }
+}
+
+impl Effect for Marquee {
+    fn render(&self, out: &mut FrameBuffer, frame: usize) {
+        let (cw, ch) = self.inner.size();
+        if cw == 0 || ch == 0 || out.width == 0 || out.height == 0 { return; }
+
+        // Render the inner effect once into a scratch buffer sized to it.
+        let mut scratch = FrameBuffer::new(cw, ch);
+        self.inner.render(&mut scratch, frame);
+
+        let t = frame as f64 / super::framebuffer::FPS;
+        let offset_f = if self.swing && self.cycle_secs > 0.0 {
+            // Sine-wave oscillation. Peak excursion = speed * cycle / 4
+            // (sine peaks at t = cycle/4). Faster layers swing wider →
+            // parallax depth.
+            let amplitude = self.speed * self.cycle_secs * 0.25;
+            let phase = std::f64::consts::TAU * t / self.cycle_secs;
+            amplitude * phase.sin()
+        } else if self.cycle_secs > 0.0 {
+            // Eased one-way cycle: offset accumulates each cycle.
+            let dist_per_cycle = self.speed * self.cycle_secs;
+            let cycles = t / self.cycle_secs;
+            let cycle_idx = cycles.floor();
+            let frac = cycles - cycle_idx;
+            let eased = self.easing.apply(frac);
+            cycle_idx * dist_per_cycle + eased * dist_per_cycle
+        } else {
+            // Linear at constant speed.
+            t * self.speed
+        };
+        let offset = offset_f.floor() as i64;
+
+        match self.direction {
+            ScrollDirection::Left | ScrollDirection::Right => {
+                let sign: i64 = match self.direction {
+                    ScrollDirection::Left => 1,
+                    _ => -1,
+                };
+                for y in 0..out.height.min(ch) {
+                    for x in 0..out.width {
+                        let src_x = (x as i64 + sign * offset).rem_euclid(cw as i64) as usize;
+                        let cell = scratch.get(src_x, y);
+                        if cell.ch != ' ' {
+                            out.set(x, y, cell);
+                        }
+                    }
+                }
+            }
+            ScrollDirection::Top | ScrollDirection::Bottom => {
+                let sign: i64 = match self.direction {
+                    ScrollDirection::Top => 1,
+                    _ => -1,
+                };
+                for y in 0..out.height {
+                    let src_y = (y as i64 + sign * offset).rem_euclid(ch as i64) as usize;
+                    for x in 0..out.width.min(cw) {
+                        let cell = scratch.get(x, src_y);
+                        if cell.ch != ' ' {
+                            out.set(x, y, cell);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn size(&self) -> (usize, usize) {
+        self.out_size.unwrap_or_else(|| self.inner.size())
+    }
 }
 
 // ── Fade ──
@@ -1042,10 +1726,10 @@ impl Dycp {
         self
     }
 
-    /// Ease-out the scroll-in over `frames` frames, then rest at natural position.
-    /// Must be combined with `scroll_in`. After `frames` the text stays put and only waves.
-    pub fn ease_in(mut self, frames: usize) -> Self {
-        self.ease_in_frames = frames;
+    /// Ease-out the scroll-in over `seconds`, then rest at natural position.
+    /// Must be combined with `scroll_in`. After this duration the text stays put and only waves.
+    pub fn ease_in(mut self, seconds: f64) -> Self {
+        self.ease_in_frames = super::framebuffer::secs_to_frames(seconds);
         self
     }
 
@@ -1055,9 +1739,9 @@ impl Dycp {
         self
     }
 
-    /// Delay the wave by N frames — text scrolls flat, then DYCP kicks in.
-    pub fn wave_delay(mut self, frames: usize) -> Self {
-        self.wave_delay = frames;
+    /// Delay the wave by `seconds` — text scrolls flat, then DYCP kicks in.
+    pub fn wave_delay(mut self, seconds: f64) -> Self {
+        self.wave_delay = super::framebuffer::secs_to_frames(seconds);
         self
     }
 
@@ -1304,9 +1988,10 @@ pub struct DelayedStart {
 }
 
 impl DelayedStart {
-    pub fn new(delay: usize, inner: impl Effect) -> Self {
+    /// Hold the inner effect's region blank for `seconds`, then start it.
+    pub fn new(seconds: f64, inner: impl Effect) -> Self {
         Self {
-            delay,
+            delay: super::framebuffer::secs_to_frames(seconds),
             inner: Box::new(inner),
         }
     }
@@ -1584,11 +2269,17 @@ impl Fld {
     pub fn speed(mut self, v: f64) -> Self { self.speed = v; self }
     pub fn phase(mut self, v: f64) -> Self { self.phase = v; self }
 
-    /// Frames to wait before bounce starts.
-    pub fn delay(mut self, v: usize) -> Self { self.delay = v; self }
+    /// Seconds to wait before bounce starts.
+    pub fn delay(mut self, seconds: f64) -> Self {
+        self.delay = super::framebuffer::secs_to_frames(seconds);
+        self
+    }
 
-    /// Frames to ramp amplitude from 0 to full after delay.
-    pub fn ramp(mut self, v: usize) -> Self { self.ramp = v; self }
+    /// Seconds over which amplitude ramps from 0 to full after the delay.
+    pub fn ramp(mut self, seconds: f64) -> Self {
+        self.ramp = super::framebuffer::secs_to_frames(seconds);
+        self
+    }
 }
 
 impl Effect for Fld {
@@ -2237,7 +2928,7 @@ mod tests {
             .direction(ScrollDirection::Left)
             .easing(super::super::Easing::Linear)
             .duration(10.0 / 30.0) // 10 frames
-            .stagger(5);
+            .stagger(5.0 / 30.0); // 5 frames
         let mut buf = FrameBuffer::new(2, 2);
         effect.render(&mut buf, 5);
     }
@@ -2429,5 +3120,35 @@ mod tests {
                 <Wind as Effect>::render(&effect, &mut buf, f);
             }
         }
+    }
+
+    #[test]
+    fn vector_field_renders_only_arrows() {
+        let effect = VectorField::new();
+        let mut buf = FrameBuffer::new(20, 8);
+        effect.render(&mut buf, 0);
+        // Every cell should be one of the 8 arrow chars.
+        let arrows: std::collections::HashSet<char> =
+            "→↘↓↙←↖↑↗".chars().collect();
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                let ch = buf.get(x, y).ch;
+                assert!(arrows.contains(&ch), "non-arrow {:?} at ({},{})", ch, x, y);
+            }
+        }
+    }
+
+    #[test]
+    fn vector_field_evolves_over_time() {
+        let effect = VectorField::new().seed(0.0);
+        let mut a = FrameBuffer::new(15, 6);
+        let mut b = FrameBuffer::new(15, 6);
+        effect.render(&mut a, 0);
+        effect.render(&mut b, 300); // 10s later
+        let differences = (0..a.height)
+            .flat_map(|y| (0..a.width).map(move |x| (x, y)))
+            .filter(|(x, y)| a.get(*x, *y).ch != b.get(*x, *y).ch)
+            .count();
+        assert!(differences > 5, "field should evolve over time; got {differences} diffs");
     }
 }

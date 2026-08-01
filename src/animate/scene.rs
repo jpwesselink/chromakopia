@@ -120,6 +120,17 @@ enum SceneItem {
         height: usize,
         y_offset: i32,
     },
+    /// An overlay with a "halo" — after compositing, cells within
+    /// `halo_radius` of the overlay's non-space content get their existing
+    /// colour lerp'd toward black by `halo_dim` (0..1). Reads as a soft
+    /// shadow around the overlay's glyphs.
+    OverlayHalo {
+        effect: Box<dyn Effect>,
+        height: usize,
+        y_offset: i32,
+        halo_radius: i32,
+        halo_dim: f64,
+    },
 }
 
 impl SceneItem {
@@ -127,7 +138,7 @@ impl SceneItem {
         match self {
             SceneItem::Effect { height, .. } => *height,
             SceneItem::Blank => 1,
-            SceneItem::Overlay { .. } => 0,
+            SceneItem::Overlay { .. } | SceneItem::OverlayHalo { .. } => 0,
         }
     }
 
@@ -135,7 +146,7 @@ impl SceneItem {
         match self {
             SceneItem::Effect { width, .. } => *width,
             SceneItem::Blank => 0,
-            SceneItem::Overlay { .. } => 0,
+            SceneItem::Overlay { .. } | SceneItem::OverlayHalo { .. } => 0,
         }
     }
 }
@@ -181,6 +192,29 @@ impl Scene {
         self
     }
 
+    /// Like `overlay`, but also dims the existing buffer cells within
+    /// `halo_radius` of the overlay's non-space content. `halo_dim` is the
+    /// lerp factor toward black (0 = no change, 1 = fully black). Reads
+    /// as a soft shadow around the overlay's glyphs that lets the layer
+    /// behind partially show through.
+    pub fn overlay_halo(
+        mut self,
+        effect: impl Effect,
+        height: usize,
+        y_offset: i32,
+        halo_radius: i32,
+        halo_dim: f64,
+    ) -> Self {
+        self.items.push(SceneItem::OverlayHalo {
+            effect: Box::new(effect),
+            height,
+            y_offset,
+            halo_radius,
+            halo_dim,
+        });
+        self
+    }
+
     pub fn width(&self) -> usize {
         self.items.iter().map(|item| item.width()).max().unwrap_or(0)
     }
@@ -194,7 +228,7 @@ impl Scene {
     pub fn spawn(self) -> AnimationHandle {
         let width = crate::terminal::terminal_width();
         let height = self.height();
-        super::framebuffer::spawn_effect(self, width.max(1), height.max(1), 1.0)
+        super::framebuffer::spawn_effect(self, width.max(1), height.max(1), 1.0, None)
     }
 
     /// Render a single frame to an ANSI string. For inline use.
@@ -212,7 +246,7 @@ impl Scene {
         use std::time::Duration;
         let width = crate::terminal::terminal_width().max(1);
         let height = self.height().max(1);
-        super::framebuffer::run_effect(self, width, height, Duration::from_secs_f64(seconds), 1.0).await;
+        super::framebuffer::run_effect(self, width, height, Duration::from_secs_f64(seconds), 1.0, None).await;
     }
 }
 
@@ -220,7 +254,9 @@ impl Effect for Scene {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
         buf.clear();
         let mut y = 0;
-        let mut overlays: Vec<(usize, usize, &dyn Effect)> = Vec::new();
+        // (base_y, height, effect, halo_radius, halo_dim) — halo_radius=0
+        // means no halo (regular overlay).
+        let mut overlays: Vec<(usize, usize, &dyn Effect, i32, f64)> = Vec::new();
 
         for item in &self.items {
             match item {
@@ -247,26 +283,87 @@ impl Effect for Scene {
                 SceneItem::Overlay { effect, height, y_offset } => {
                     let base = (y as i32) + y_offset;
                     if base >= 0 {
-                        overlays.push((base as usize, *height, effect.as_ref()));
+                        overlays.push((base as usize, *height, effect.as_ref(), 0, 0.0));
+                    }
+                }
+                SceneItem::OverlayHalo { effect, height, y_offset, halo_radius, halo_dim } => {
+                    let base = (y as i32) + y_offset;
+                    if base >= 0 {
+                        overlays.push((base as usize, *height, effect.as_ref(), *halo_radius, *halo_dim));
                     }
                 }
             }
         }
 
-        // Second pass: render overlays, compositing only non-space cells
-        for (base_y, height, effect) in overlays {
+        // Second pass: render overlays, compositing non-space cells onto
+        // whatever's already in `buf`. When the overlay cell has no
+        // explicit bg, inherit the destination cell's foreground colour
+        // (if it's a non-space glyph — i.e., the layer behind has a real
+        // shape there). This is proper compositing — a tree `▲` over a
+        // brown ground cell picks up brown as its bg so the triangle reads
+        // on the ground instead of leaving a default-bg "halo."
+        for (base_y, height, effect, halo_radius, halo_dim) in overlays {
             let sub_width = buf.width;
             let mut sub = FrameBuffer::new(sub_width, height);
             effect.render(&mut sub, frame);
+
+            // Halo pass (before compositing): dim main-buffer cells around
+            // every non-space cell in the sub-buffer. The dimmed cells keep
+            // their original char but lerp colour toward black.
+            if halo_radius > 0 && halo_dim > 0.0 {
+                let mut content: Vec<(i32, i32)> = Vec::new();
+                for sy in 0..height {
+                    for sx in 0..sub_width.min(buf.width) {
+                        if sub.get(sx, sy).ch != ' ' {
+                            content.push((sx as i32, (base_y + sy) as i32));
+                        }
+                    }
+                }
+                use std::collections::HashSet;
+                let content_set: HashSet<(i32, i32)> = content.iter().copied().collect();
+                let mut dimmed: HashSet<(i32, i32)> = HashSet::new();
+                let black = crate::color::Color::new(0, 0, 0);
+                for (cx, cy) in &content {
+                    for dy in -halo_radius..=halo_radius {
+                        for dx in -halo_radius..=halo_radius {
+                            if dx == 0 && dy == 0 { continue; }
+                            let hx = cx + dx;
+                            let hy = cy + dy;
+                            if hx < 0 || hy < 0
+                                || hx >= buf.width as i32 || hy >= buf.height as i32 { continue; }
+                            if content_set.contains(&(hx, hy)) { continue; }
+                            if !dimmed.insert((hx, hy)) { continue; }
+                            let existing = buf.get(hx as usize, hy as usize);
+                            if existing.ch == ' ' && existing.bg.is_none() { continue; }
+                            let new_fg = crate::color::Color::lerp_rgb(existing.color, black, halo_dim);
+                            let new_bg = existing.bg.map(|b| crate::color::Color::lerp_rgb(b, black, halo_dim));
+                            let new_cell = Cell { ch: existing.ch, color: new_fg, bg: new_bg };
+                            buf.set(hx as usize, hy as usize, new_cell);
+                        }
+                    }
+                }
+            }
 
             for sy in 0..height {
                 let target_y = base_y + sy;
                 if target_y >= buf.height { continue; }
                 for sx in 0..sub_width.min(buf.width) {
                     let cell = sub.get(sx, sy);
-                    if cell.ch != ' ' {
-                        buf.set(sx, target_y, cell);
-                    }
+                    if cell.ch == ' ' { continue; }
+                    let merged = if cell.bg.is_none() {
+                        // Inherit bg only if the destination opted in by
+                        // setting its own bg explicitly. Effects that want
+                        // to act as "solid background layers" (mountains,
+                        // ground) should set Cell.bg = their fg. Sparse
+                        // effects (stars, particles) leave bg=None so
+                        // overlays on top of them don't pick up their
+                        // bright fg as a halo.
+                        let dest = buf.get(sx, target_y);
+                        Cell { ch: cell.ch, color: cell.color, bg: dest.bg }
+                    } else {
+                        cell
+                    };
+                    buf.set(sx, target_y, merged);
                 }
             }
         }
