@@ -11,16 +11,21 @@ use chromakopia::prelude::*;
 
 const RIBBON: &str = "  CHROMAKOPIA ★ TERMINAL ANIMATIONS ★ EFFECTS ★ SCENES ★";
 const STRIP: &str = "════════╡ chromakopia ╞════════════════════";
-/// Figlet banner for the ripple row: two blank rows above and below give
-/// the ±2-cell wave its headroom. (`lines()` drops a lone trailing empty
-/// line, hence the explicit extra blank row before the closing quote.)
+/// Figlet `banner`-font wordmark for the ripple row (`figlet -f banner`):
+/// every letter is a self-contained block of `#` with a gap column, so the
+/// wave's per-column shear bends the word without tearing glyphs apart.
+/// Two blank rows above and below give the ±2-cell wave its headroom.
+/// (`lines()` drops a lone trailing empty line, hence the explicit extra
+/// blank row before the closing quote.)
 const BANNER_WAVE: &str = r#"
 
-   ________  ______  ____  __  ______    __ ______  ____  _______
-  / ____/ / / / __ \/ __ \/  |/  /   |  / //_/ __ \/ __ \/  _/   |
- / /   / /_/ / /_/ / / / / /|_/ / /| | / ,< / / / / /_/ // // /| |
-/ /___/ __  / _, _/ /_/ / /  / / ___ |/ /| / /_/ / ____// // ___ |
-\____/_/ /_/_/ |_|\____/_/  /_/_/  |_/_/ |_\____/_/   /___/_/  |_|
+ #####  #     # ######  ####### #     #    #    #    # ####### ######  ###    #
+#     # #     # #     # #     # ##   ##   # #   #   #  #     # #     #  #    # #
+#       #     # #     # #     # # # # #  #   #  #  #   #     # #     #  #   #   #
+#       ####### ######  #     # #  #  # #     # ###    #     # ######   #  #     #
+#       #     # #   #   #     # #     # ####### #  #   #     # #        #  #######
+#     # #     # #    #  #     # #     # #     # #   #  #     # #        #  #     #
+ #####  #     # #     # ####### #     # #     # #    # ####### #       ### #     #
 
 
 "#;
@@ -41,11 +46,12 @@ async fn main() {
     let label = Color::new(110, 110, 110);
     let fire = gradient(&["#331000", "#ff6a00", "#ffd000"]).palette(64);
 
-    // Pad every banner line to 78 cols so the horizontal loop has a gap
-    // between repeats (Marquee wraps at the content's max line width).
+    // Pad every banner line to 96 cols so the horizontal loop has a gap
+    // between repeats (Marquee wraps at the content's max line width;
+    // the banner-font wordmark itself is ~83 cols).
     let banner_wave: String = BANNER_WAVE
         .lines()
-        .map(|l| format!("{l:<78}"))
+        .map(|l| format!("{l:<96}"))
         .collect::<Vec<_>>()
         .join("\n");
 
