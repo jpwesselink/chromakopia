@@ -10,7 +10,7 @@
 //!
 //! Run: `cargo run --release --example greetings`   (press q to quit)
 
-use chromakopia::animate::framebuffer::secs_to_frames;
+use chromakopia::animate::framebuffer::{secs_to_frames, tempo};
 use chromakopia::animate::Cell;
 use chromakopia::prelude::*;
 
@@ -202,7 +202,7 @@ impl Effect for NamesSequence {
                     if x >= buf.width {
                         continue;
                     }
-                    let dy = ((x as f64 * 0.25 + frame as f64 * 0.2).sin() * wobble).round();
+                    let dy = ((x as f64 * 0.25 + tempo(frame) * 0.2).sin() * wobble).round();
                     let y = base_y + ry as f64 + dy;
                     if y < 0.0 || y as usize >= buf.height {
                         continue;
@@ -243,8 +243,10 @@ async fn main() {
     block.push(String::new());
     let message_block = block.join("\n");
 
+    // Plasma flowing through the colossal glyphs — hot magenta/gold palette.
+    let lava = gradient(&["#2b0a3d", "#ff3670", "#ffd166"]).palette(64);
     let message = VSineWave::wrap(
-        Marquee::wrap(Rainbow::on(&message_block)).speed(SPEED),
+        Marquee::wrap(Plasma::on(&message_block).palette(lava).seed(7.0)).speed(SPEED),
     )
     .amplitude(2.0)
     .frequency(0.05) // ~126-col wavelength — gentle over colossal glyphs

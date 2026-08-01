@@ -6,7 +6,7 @@
 //! Result: the plasma pattern travels with each letter as it bounces.
 
 use chromakopia::animate::{
-    framebuffer::{secs_to_frames, Cell, DEFAULT_TEXT_COLOR},
+    framebuffer::{secs_to_frames, tempo, Cell, DEFAULT_TEXT_COLOR},
     AlphaIn, Easing, Effect, FrameBuffer, Glow, Neon, Phases, Plasma, Radar, Scene, Solid, Timeline, VSineWave,
     Wind,
 };
@@ -187,7 +187,7 @@ impl Effect for HBackgroundScroll {
         let source_w = self.chars.first().map(|l| l.len()).unwrap_or(0) as i32;
         let source_h = self.chars.len() as i32;
         let buf_w = buf.width as i32;
-        let offset = (frame as f64 * self.speed).round() as i32;
+        let offset = (tempo(frame) * self.speed).round() as i32;
 
         for src_y in 0..source_h {
             let dst_y = self.y_offset + src_y;

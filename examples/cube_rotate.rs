@@ -9,7 +9,7 @@
 //! Run: `cargo run --release --example cube_rotate`
 
 use chromakopia::animate::{
-    framebuffer::{Cell, DEFAULT_TEXT_COLOR},
+    framebuffer::{tempo, Cell, DEFAULT_TEXT_COLOR},
     Effect, FrameBuffer, Scene,
 };
 use chromakopia::{gradient, Color};
@@ -84,7 +84,7 @@ impl CubeRoll {
 
 impl Effect for CubeRoll {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        let oscillator = frame as f64 * self.swing_freq;
+        let oscillator = tempo(frame) * self.swing_freq;
         let center_x = (buf.width as i32) / 2;
         let center_y = (buf.height as i32) / 2;
 

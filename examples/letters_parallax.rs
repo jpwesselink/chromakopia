@@ -4,7 +4,7 @@
 //!
 //! Run: `cargo run --release --example letters_parallax`
 
-use chromakopia::animate::framebuffer::{secs_to_frames, Cell as RawCell, FrameBuffer as RawFB};
+use chromakopia::animate::framebuffer::{secs_to_frames, tempo, Cell as RawCell, FrameBuffer as RawFB};
 use chromakopia::prelude::*;
 
 // ── XBin loader (icy_draw "eXtended Binary" format) ─────────────
@@ -402,7 +402,7 @@ impl Effect for SlideTitle {
         // maps each cell to a palette index — boiling leaf shimmer.
         let pal = &self.palette;
         let last = pal.len().saturating_sub(1) as f64;
-        let pt = frame as f64 * 0.08;
+        let pt = tempo(frame) * 0.08;
 
         for (ly, line) in self.lines.iter().enumerate() {
             if ly >= buf.height {
