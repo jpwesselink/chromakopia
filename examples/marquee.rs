@@ -58,10 +58,14 @@ async fn main() {
             .size(36, 3))
         .blank()
         .add(text("6. scroll + VSineWave — the ripple marquee", label))
+        // Phase-locked: wave speed = frequency * scroll_cells_per_sec / FPS,
+        // so the crests travel at exactly the text's speed and the ribbon
+        // reads as one rigid wavy banner sliding left. A faster wave speed
+        // makes the wave sweep along the (seemingly static) text instead.
         .add(VSineWave::wrap(Marquee::wrap(Rainbow::on(RIBBON_WAVE)).speed(8.0))
             .amplitude(2.0)
             .frequency(0.12)
-            .speed(0.08))
+            .speed(0.12 * 8.0 / 30.0))
         .quit_key('q')
         .run(30.0)
         .await;
