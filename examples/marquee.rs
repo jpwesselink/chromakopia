@@ -45,12 +45,12 @@ async fn main() {
     let label = Color::new(110, 110, 110);
     let fire = gradient(&["#331000", "#ff6a00", "#ffd000"]).palette(64);
 
-    // Pad every banner line to 110 cols so the horizontal loop has a gap
-    // between repeats (Marquee wraps at the content's max line width;
-    // the basic-font wordmark itself is ~95 cols).
+    // Pad every banner line to 135 cols: the basic-font wordmark is ~95
+    // cols, so this leaves a ~40-col breather after "CHROMAKOPIA" before
+    // the loop repeats (Marquee wraps at the content's max line width).
     let banner_wave: String = BANNER_WAVE
         .lines()
-        .map(|l| format!("{l:<110}"))
+        .map(|l| format!("{l:<135}"))
         .collect::<Vec<_>>()
         .join("\n");
 
