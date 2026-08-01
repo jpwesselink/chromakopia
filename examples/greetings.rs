@@ -140,16 +140,22 @@ fn parse_cues(msg: &str) -> (String, Vec<(u32, usize)>) {
 
 // ── Outline ─────────────────────────────────────────────────────────
 
-/// Draws a `▒` stroke on every empty cell touching a glyph cell, in the
-/// neighbor's color. The half-shade block lights 50% of the cell's
-/// pixels — a 50%-alpha outline that works on any background.
+/// Draws a `▒` stroke on every empty cell touching a glyph cell, in one
+/// fixed neutral color (terminal foreground blended 50% toward the
+/// background) — the plasma stays on the glyphs, never on the stroke.
+/// The half-shade block lights 50% of the cell's pixels, so the stroke
+/// reads as a 50%-alpha outline on any background.
 struct Outline {
     inner: Box<dyn Effect>,
+    stroke: Color,
 }
 
 impl Outline {
     fn wrap(inner: impl Effect) -> Self {
-        Self { inner: Box::new(inner) }
+        Self {
+            inner: Box::new(inner),
+            stroke: Color::lerp_rgb(bg_color(), fg_color(), 0.5),
+        }
     }
 }
 
@@ -157,7 +163,7 @@ impl Effect for Outline {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
         self.inner.render(buf, frame);
         // Two-phase so strokes don't cascade off each other.
-        let mut strokes: Vec<(usize, usize, Color)> = Vec::new();
+        let mut strokes: Vec<(usize, usize)> = Vec::new();
         for y in 0..buf.height {
             for x in 0..buf.width {
                 if buf.get(x, y).ch != ' ' {
@@ -173,17 +179,16 @@ impl Effect for Outline {
                         {
                             continue;
                         }
-                        let n = buf.get(nx as usize, ny as usize);
-                        if n.ch != ' ' {
-                            strokes.push((x, y, n.color));
+                        if buf.get(nx as usize, ny as usize).ch != ' ' {
+                            strokes.push((x, y));
                             break 'scan;
                         }
                     }
                 }
             }
         }
-        for (x, y, color) in strokes {
-            buf.set(x, y, Cell::new('▒', color));
+        for (x, y) in strokes {
+            buf.set(x, y, Cell::new('▒', self.stroke));
         }
     }
 
