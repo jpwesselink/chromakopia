@@ -1527,6 +1527,88 @@ impl Effect for Chain {
     }
 }
 
+// ── Phases ──
+
+/// Sequential phases with one continuous frame counter and optional
+/// crossfades.
+///
+/// Unlike `Chain` (which restarts each link's frame counter at 0), every
+/// phase's effect receives the frame `Phases` itself receives — inside a
+/// `Timeline` track that's the track-local frame, continuous across all
+/// phase boundaries. A continuous effect (Plasma, Neon, …) therefore spans
+/// a phase change without visually jumping.
+///
+/// The first phase is active from frame 0 even if added with a later
+/// start time.
+pub struct Phases {
+    /// (start_frame, effect), kept sorted by start_frame.
+    phases: Vec<(usize, Box<dyn Effect>)>,
+    fade_frames: usize,
+}
+
+impl Phases {
+    pub fn new() -> Self {
+        Self { phases: Vec::new(), fade_frames: 0 }
+    }
+
+    /// Add a phase starting `at_seconds` into the effect's life.
+    pub fn at(mut self, at_seconds: f64, effect: impl Effect) -> Self {
+        let start = super::framebuffer::secs_to_frames(at_seconds);
+        let idx = self.phases.partition_point(|(s, _)| *s <= start);
+        self.phases.insert(idx, (start, Box::new(effect)));
+        self
+    }
+
+    /// Crossfade duration between consecutive phases. Default: hard cut.
+    pub fn crossfade(mut self, seconds: f64) -> Self {
+        self.fade_frames = super::framebuffer::secs_to_frames(seconds);
+        self
+    }
+}
+
+impl Effect for Phases {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        if self.phases.is_empty() {
+            return;
+        }
+        // Last phase whose start <= frame (phases are sorted by start).
+        let mut active_idx = 0;
+        for (i, (start, _)) in self.phases.iter().enumerate() {
+            if frame >= *start {
+                active_idx = i;
+            }
+        }
+        let (start, ref active) = self.phases[active_idx];
+        active.render(buf, frame);
+
+        // Crossfade with the previous phase during the fade window.
+        if active_idx > 0 && frame < start + self.fade_frames {
+            let t = (frame - start) as f64 / self.fade_frames.max(1) as f64;
+            let prev = &self.phases[active_idx - 1].1;
+            // The previous phase colors the same chars from a clean slate.
+            let mut prev_buf = FrameBuffer::new(buf.width, buf.height);
+            for y in 0..buf.height {
+                for x in 0..buf.width {
+                    let mut cell = buf.get(x, y);
+                    cell.color = super::framebuffer::DEFAULT_TEXT_COLOR;
+                    prev_buf.set(x, y, cell);
+                }
+            }
+            prev.render(&mut prev_buf, frame);
+            for y in 0..buf.height {
+                for x in 0..buf.width {
+                    if buf.get(x, y).ch == ' ' {
+                        continue;
+                    }
+                    let prev_c = prev_buf.get(x, y).color;
+                    let cur_c = buf.get(x, y).color;
+                    buf.set_color(x, y, Color::lerp_rgb(prev_c, cur_c, t));
+                }
+            }
+        }
+    }
+}
+
 // ── Spread ──
 
 /// Lines fan out from a single position to their final rows.
@@ -2807,6 +2889,90 @@ mod tests {
 
     fn make_buf(text: &str) -> FrameBuffer {
         FrameBuffer::from_text(text, Color::new(255, 255, 255))
+    }
+
+    /// Writes the received frame number into the red channel of every
+    /// non-space cell — lets tests observe which frame an effect got.
+    struct FrameProbe;
+    impl Effect for FrameProbe {
+        fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+            for y in 0..buf.height {
+                for x in 0..buf.width {
+                    if buf.get(x, y).ch != ' ' {
+                        buf.set_color(x, y, Color::new((frame % 256) as u8, 0, 0));
+                    }
+                }
+            }
+        }
+    }
+
+    fn phase_buf() -> FrameBuffer {
+        FrameBuffer::from_text("ab", Color::new(9, 9, 9))
+    }
+
+    #[test]
+    fn phases_selects_by_start_time() {
+        use super::super::framebuffer::secs_to_frames;
+        let a = Color::new(10, 0, 0);
+        let b = Color::new(200, 0, 0);
+        let p = Phases::new().at(0.0, Solid(a)).at(2.0, Solid(b));
+        // No crossfade configured — hard cut at 2.0s.
+        let mut buf = phase_buf();
+        p.render(&mut buf, secs_to_frames(2.0) - 1);
+        assert_eq!(buf.get(0, 0).color, a);
+        let mut buf = phase_buf();
+        p.render(&mut buf, secs_to_frames(2.0));
+        assert_eq!(buf.get(0, 0).color, b);
+    }
+
+    #[test]
+    fn phases_crossfade_blends_between_phases() {
+        use super::super::framebuffer::secs_to_frames;
+        let a = Color::new(0, 0, 0);
+        let b = Color::new(200, 0, 0);
+        let p = Phases::new()
+            .at(0.0, Solid(a))
+            .at(2.0, Solid(b))
+            .crossfade(1.0);
+        // Halfway through the fade window: strictly between a and b.
+        let mut buf = phase_buf();
+        p.render(&mut buf, secs_to_frames(2.5));
+        let r = buf.get(0, 0).color.r;
+        assert!(r > 0 && r < 200, "expected blend, got r={r}");
+        // Past the fade window: pure b.
+        let mut buf = phase_buf();
+        p.render(&mut buf, secs_to_frames(3.0));
+        assert_eq!(buf.get(0, 0).color, b);
+    }
+
+    #[test]
+    fn phases_pass_global_frame_to_inner_effects() {
+        use super::super::framebuffer::secs_to_frames;
+        let p = Phases::new().at(0.0, Solid(Color::new(1, 1, 1))).at(1.0, FrameProbe);
+        let frame = secs_to_frames(1.0) + 7; // 7 frames into phase 2
+        let mut buf = phase_buf();
+        p.render(&mut buf, frame);
+        // FrameProbe must see the GLOBAL frame, not (frame - phase_start).
+        assert_eq!(buf.get(0, 0).color.r, (frame % 256) as u8);
+    }
+
+    #[test]
+    fn phases_at_order_does_not_matter() {
+        use super::super::framebuffer::secs_to_frames;
+        let a = Color::new(10, 0, 0);
+        let b = Color::new(200, 0, 0);
+        // Later phase added first.
+        let p = Phases::new().at(2.0, Solid(b)).at(0.0, Solid(a));
+        let mut buf = phase_buf();
+        p.render(&mut buf, secs_to_frames(1.0));
+        assert_eq!(buf.get(0, 0).color, a);
+    }
+
+    #[test]
+    fn phases_empty_is_noop() {
+        let mut buf = phase_buf();
+        Phases::new().render(&mut buf, 5);
+        assert_eq!(buf.get(0, 0).color, Color::new(9, 9, 9));
     }
 
     #[test]
