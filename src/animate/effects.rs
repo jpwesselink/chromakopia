@@ -4,7 +4,7 @@
 //! number, writes `(char, Color)` cells directly. No ANSI strings, no parsing.
 
 use crate::color::Color;
-use super::framebuffer::{Cell, Effect, EffectExt, On, FrameBuffer};
+use super::framebuffer::{tempo, Cell, Effect, EffectExt, On, FrameBuffer};
 #[cfg(not(target_arch = "wasm32"))]
 use super::framebuffer::AnimationHandle;
 
@@ -131,7 +131,7 @@ impl Effect for Glow {
         let pal = &self.palette;
         if pal.is_empty() { return; }
 
-        let spotlight = (frame as f64 * 0.02).sin() * 0.5 + 0.5;
+        let spotlight = (tempo(frame) * 0.02).sin() * 0.5 + 0.5;
 
         for y in 0..buf.height {
             for x in 0..buf.width {
@@ -224,7 +224,7 @@ impl Plasma {
 
 impl Effect for Plasma {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        let t = frame as f64 * 0.08;
+        let t = tempo(frame) * 0.08;
         let pal = &self.palette;
         if pal.is_empty() { return; }
 
@@ -370,7 +370,7 @@ impl Default for VectorField {
 impl Effect for VectorField {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
         if self.palette.is_empty() || buf.width == 0 || buf.height == 0 { return; }
-        let t = frame as f64 * 0.05 * self.speed;
+        let t = tempo(frame) * 0.05 * self.speed;
         let pal = &self.palette;
         let last = (pal.len() - 1) as f64;
 
@@ -599,7 +599,7 @@ impl Default for HeightMap {
 impl Effect for HeightMap {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
         if self.palette.is_empty() || buf.width == 0 || buf.height == 0 { return; }
-        let t = frame as f64 * 0.05 * self.speed;
+        let t = tempo(frame) * 0.05 * self.speed;
         let w = buf.width;
         let h = buf.height;
         let pal = &self.palette;
@@ -838,7 +838,7 @@ impl Pulse {
 impl Effect for Pulse {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
         let w = buf.content_width();
-        let cycle = (frame % 120) + 1;
+        let cycle = (tempo(frame) as usize % 120) + 1;
         let transition = 6;
 
         let on = Color::new(0xff, 0x10, 0x10);
@@ -929,9 +929,9 @@ impl Effect for Radar {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
         let w = buf.content_width();
         let sweep = if self.reverse {
-            1.0 - (frame as f64 * 0.02) % 1.0
+            1.0 - (tempo(frame) * 0.02) % 1.0
         } else {
-            (frame as f64 * 0.02) % 1.0
+            (tempo(frame) * 0.02) % 1.0
         };
 
         for y in 0..buf.height {
@@ -980,7 +980,7 @@ impl Effect for Neon {
                     dim
                 } else {
                     // Subtle brightness variation (pulsing glow)
-                    let pulse = ((frame as f64 * 0.15 + x as f64 * 0.1).sin() * 0.15 + 0.85).max(0.0);
+                    let pulse = ((tempo(frame) * 0.15 + x as f64 * 0.1).sin() * 0.15 + 0.85).max(0.0);
                     Color::new(
                         (bright.r as f64 * pulse) as u8,
                         (bright.g as f64 * pulse) as u8,
@@ -1012,7 +1012,7 @@ impl Effect for Karaoke {
         let total: usize = (0..buf.height)
             .map(|y| (0..buf.width).filter(|&x| buf.get(x, y).ch != ' ').count())
             .sum();
-        let revealed = frame % (total + 20);
+        let revealed = tempo(frame) as usize % (total + 20);
 
         let mut count = 0;
         for y in 0..buf.height {
@@ -1465,7 +1465,7 @@ impl Effect for VSineWave {
             (((frame - self.delay) as f64) / self.ramp as f64).min(1.0)
         };
         let amplitude = self.amplitude * envelope;
-        let t = frame as f64 * self.speed;
+        let t = tempo(frame) * self.speed;
         for x in 0..scratch.width {
             let wave = (x as f64 * self.frequency + t).sin();
             let dy = (wave * amplitude).round() as i32;
@@ -1934,7 +1934,7 @@ impl Effect for Dycp {
         let line_count = self.chars.len();
         if line_count == 0 { return; }
         let pal = &self.palette;
-        let t = frame as f64 * self.speed;
+        let t = tempo(frame) * self.speed;
 
         // Pre-color at rest positions
         let source_colors = self.color_source.as_ref().map(|cs| {
@@ -1962,7 +1962,7 @@ impl Effect for Dycp {
             let t_ease = 1.0 - (1.0 - t).powi(3); // cubic ease-out
             (self.scroll_offset as f64 * (1.0 - t_ease)) as i64
         } else {
-            (frame as f64 * self.scroll_speed) as i64 + self.scroll_offset
+            (tempo(frame) * self.scroll_speed) as i64 + self.scroll_offset
         };
         let w = buf.width as i64;
         let wrapping = self.scroll_offset == 0 && self.ease_in_frames == 0;
@@ -2011,7 +2011,7 @@ impl Effect for Dycp {
                         super::framebuffer::DEFAULT_TEXT_COLOR
                     }
                 } else if !pal.is_empty() {
-                    pal[(x + frame) % pal.len()]
+                    pal[(x + tempo(frame) as usize) % pal.len()]
                 } else {
                     let hue = (x as f64 / buf.width.max(1) as f64 * 360.0 + t * 10.0) % 360.0;
                     Color::from_hsv(hue, 1.0, 1.0)
@@ -2481,7 +2481,7 @@ impl Effect for Fld {
 
         buf.clear();
 
-        let t = frame as f64 * self.speed + self.phase;
+        let t = tempo(frame) * self.speed + self.phase;
 
         // Displace each row
         for y in 0..scratch.height {
@@ -3005,7 +3005,7 @@ mod tests {
 
     #[test]
     fn vsinewave_displaces_by_sine() {
-        // frequency 0 → wave depends only on time. speed = π/2 at frame 1
+        // frequency 0 → wave depends only on time. tempo(2) = 1, speed π/2
         // → sin(π/2) = 1.0 → dy = round(1.0 * 2.0) = 2 rows down.
         let inner = text("@", Color::new(200, 0, 0));
         let wave = VSineWave::wrap(inner)
@@ -3013,7 +3013,7 @@ mod tests {
             .frequency(0.0)
             .speed(std::f64::consts::FRAC_PI_2);
         let mut buf = FrameBuffer::new(1, 5);
-        wave.render(&mut buf, 1);
+        wave.render(&mut buf, 2);
         assert_eq!(buf.get(0, 2).ch, '@', "char should land 2 rows down");
         assert_eq!(buf.get(0, 0).ch, ' ', "source row should be empty");
     }
@@ -3027,14 +3027,14 @@ mod tests {
             .speed(std::f64::consts::FRAC_PI_2)
             .delay(1.0);
         let mut buf = FrameBuffer::new(1, 5);
-        wave.render(&mut buf, 1); // sin = 1 here, but frame 1 < 30-frame delay
+        wave.render(&mut buf, 2); // sin = 1 here, but frame 2 < 60-frame delay
         assert_eq!(buf.get(0, 0).ch, '@');
     }
 
     #[test]
     fn vsinewave_full_after_delay() {
-        // Frame 33 is past the 30-frame delay; ramp defaults to 0 → full
-        // amplitude. sin(33·π/2) = sin(π/2) = 1 → dy = 2.
+        // Frame 66 is past the 60-frame delay; ramp defaults to 0 → full
+        // amplitude. tempo(66) = 33, sin(33·π/2) = sin(π/2) = 1 → dy = 2.
         let inner = text("@", Color::new(200, 0, 0));
         let wave = VSineWave::wrap(inner)
             .amplitude(2.0)
@@ -3042,13 +3042,13 @@ mod tests {
             .speed(std::f64::consts::FRAC_PI_2)
             .delay(1.0);
         let mut buf = FrameBuffer::new(1, 5);
-        wave.render(&mut buf, 33);
+        wave.render(&mut buf, 66);
         assert_eq!(buf.get(0, 2).ch, '@');
     }
 
     #[test]
     fn vsinewave_ramp_scales_amplitude() {
-        // No delay; ramp 2.2s = 66 frames. At frame 33 the envelope is 0.5,
+        // No delay; ramp 2.2s = 132 frames. At frame 66 the envelope is 0.5,
         // sin = 1 → dy = round(2.0 · 0.5) = 1.
         let inner = text("@", Color::new(200, 0, 0));
         let wave = VSineWave::wrap(inner)
@@ -3057,21 +3057,21 @@ mod tests {
             .speed(std::f64::consts::FRAC_PI_2)
             .ramp(2.2);
         let mut buf = FrameBuffer::new(1, 5);
-        wave.render(&mut buf, 33);
+        wave.render(&mut buf, 66);
         assert_eq!(buf.get(0, 1).ch, '@');
     }
 
     #[test]
     fn vsinewave_drops_cells_displaced_outside() {
         // dy = +2 in a 1-row buffer → the char falls off; nothing rendered,
-        // no panic.
+        // no panic. tempo(2) = 1 → sin(π/2) = 1.
         let inner = text("@", Color::new(200, 0, 0));
         let wave = VSineWave::wrap(inner)
             .amplitude(2.0)
             .frequency(0.0)
             .speed(std::f64::consts::FRAC_PI_2);
         let mut buf = FrameBuffer::new(1, 1);
-        wave.render(&mut buf, 1);
+        wave.render(&mut buf, 2);
         assert_eq!(buf.get(0, 0).ch, ' ');
     }
 
@@ -3254,7 +3254,7 @@ mod tests {
             .easing(super::super::Easing::BounceOut)
             .duration(2.0);
         let mut buf = FrameBuffer::new(5, 1);
-        effect.render(&mut buf, 60); // 2 seconds * 30fps = 60 frames
+        effect.render(&mut buf, super::super::framebuffer::secs_to_frames(2.0));
         assert_eq!(buf.get(0, 0).ch, 'h');
         assert_eq!(buf.get(4, 0).ch, 'o');
     }
@@ -3293,7 +3293,7 @@ mod tests {
         let to = Color::new(0, 0, 0);
         let effect = Fade::out_to(Rainbow::new(), to, super::super::Easing::Linear, 2.0);
         let mut buf = make_buf("hi");
-        effect.render(&mut buf, 60);
+        effect.render(&mut buf, super::super::framebuffer::secs_to_frames(2.0));
         assert_eq!(buf.get(0, 0).color, to);
     }
 

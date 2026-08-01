@@ -14,11 +14,19 @@ pub const DEFAULT_TEXT_COLOR: Color = Color {
 };
 
 /// Animation framerate. All seconds→frames conversions use this.
-pub const FPS: f64 = 30.0;
+pub const FPS: f64 = 60.0;
 
 /// Convert seconds to frames.
 pub fn secs_to_frames(seconds: f64) -> usize {
     (seconds * FPS).round() as usize
+}
+
+/// Frame count in "tempo units" — one unit = one frame at the original
+/// 30fps tuning. Phase-accumulating effects multiply their speed knobs
+/// by this instead of the raw frame count, so tuned constants keep the
+/// same on-screen speed at any FPS.
+pub fn tempo(frame: usize) -> f64 {
+    frame as f64 * 30.0 / FPS
 }
 
 /// A single cell in the framebuffer.
