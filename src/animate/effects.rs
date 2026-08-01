@@ -36,6 +36,12 @@ macro_rules! impl_text_effect_convenience {
                     std::time::Duration::from_secs_f64(seconds), 1.0, None,
                 ).await;
             }
+
+            /// Stop the animation early when `key` is pressed (case-insensitive).
+            #[cfg(not(target_arch = "wasm32"))]
+            pub fn quit_key(self, key: char) -> super::framebuffer::QuitKey<Self> {
+                super::framebuffer::QuitKey::new(self, key)
+            }
         }
     };
 }

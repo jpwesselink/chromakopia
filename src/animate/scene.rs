@@ -155,11 +155,18 @@ impl SceneItem {
 /// nothing about terminals or rendering targets.
 pub struct Scene {
     items: Vec<SceneItem>,
+    quit_key: Option<char>,
 }
 
 impl Scene {
     pub fn new() -> Self {
-        Self { items: Vec::new() }
+        Self { items: Vec::new(), quit_key: None }
+    }
+
+    /// Stop the animation early when `key` is pressed (case-insensitive).
+    pub fn quit_key(mut self, key: char) -> Self {
+        self.quit_key = Some(key);
+        self
     }
 
     /// Add an effect. Uses the effect's size() for layout.
@@ -228,7 +235,8 @@ impl Scene {
     pub fn spawn(self) -> AnimationHandle {
         let width = crate::terminal::terminal_width();
         let height = self.height();
-        super::framebuffer::spawn_effect(self, width.max(1), height.max(1), 1.0, None)
+        let quit_key = self.quit_key;
+        super::framebuffer::spawn_effect(self, width.max(1), height.max(1), 1.0, quit_key)
     }
 
     /// Render a single frame to an ANSI string. For inline use.
@@ -246,7 +254,8 @@ impl Scene {
         use std::time::Duration;
         let width = crate::terminal::terminal_width().max(1);
         let height = self.height().max(1);
-        super::framebuffer::run_effect(self, width, height, Duration::from_secs_f64(seconds), 1.0, None).await;
+        let quit_key = self.quit_key;
+        super::framebuffer::run_effect(self, width, height, Duration::from_secs_f64(seconds), 1.0, quit_key).await;
     }
 }
 
@@ -413,6 +422,13 @@ mod tests {
         scene.render(&mut buf, 0);
         assert_eq!(buf.get(0, 0).ch, 'a');
         assert_eq!(buf.get(0, 1).ch, 'c');
+    }
+
+    #[test]
+    fn quit_key_builder_stores_key() {
+        let scene = Scene::new().quit_key('q');
+        assert_eq!(scene.quit_key, Some('q'));
+        assert_eq!(Scene::new().quit_key, None);
     }
 
     #[test]

@@ -271,6 +271,7 @@ pub struct On<E> {
     w: usize,
     h: usize,
     pub(crate) effect: E,
+    pub(crate) quit_key: Option<char>,
 }
 
 impl<E: Effect> On<E> {
@@ -281,11 +282,18 @@ impl<E: Effect> On<E> {
         buf.to_string_auto()
     }
 
+    /// Stop the animation early when `key` is pressed (case-insensitive).
+    pub fn quit_key(mut self, key: char) -> Self {
+        self.quit_key = Some(key);
+        self
+    }
+
     /// Spawn in a terminal area sized to the text. Runs until `.stop()`.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn spawn(self) -> AnimationHandle {
         let (w, h) = self.size();
-        spawn_effect(self, w.max(1), h.max(1), 1.0, None)
+        let quit_key = self.quit_key;
+        spawn_effect(self, w.max(1), h.max(1), 1.0, quit_key)
     }
 
     /// Run in a terminal area sized to the text for `seconds`, then stop.
@@ -293,13 +301,14 @@ impl<E: Effect> On<E> {
     pub async fn run(self, seconds: f64) {
         use std::time::Duration;
         let (w, h) = self.size();
+        let quit_key = self.quit_key;
         run_effect(
             self,
             w.max(1),
             h.max(1),
             Duration::from_secs_f64(seconds),
             1.0,
-            None,
+            quit_key,
         )
         .await;
     }
@@ -322,6 +331,41 @@ impl<E: Effect> Effect for On<E> {
     }
 }
 
+/// A bare effect paired with a quit key — created by `.quit_key()` on
+/// effects that carry their own text (Glitch, Flap, Scroll, Spread, Dycp).
+#[cfg(not(target_arch = "wasm32"))]
+pub struct QuitKey<E> {
+    effect: E,
+    key: char,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<E: Effect> QuitKey<E> {
+    pub fn new(effect: E, key: char) -> Self {
+        Self { effect, key }
+    }
+
+    /// Spawn in a terminal area sized to the effect. Runs until `.stop()` or the key.
+    pub fn spawn(self) -> AnimationHandle {
+        let (w, h) = self.effect.size();
+        spawn_effect(self.effect, w.max(1), h.max(1), 1.0, Some(self.key))
+    }
+
+    /// Run for `seconds`, or until the key is pressed.
+    pub async fn run(self, seconds: f64) {
+        let (w, h) = self.effect.size();
+        run_effect(
+            self.effect,
+            w.max(1),
+            h.max(1),
+            Duration::from_secs_f64(seconds),
+            1.0,
+            Some(self.key),
+        )
+        .await;
+    }
+}
+
 /// Extension trait: `.on(text)` wraps any effect with text.
 pub trait EffectExt: Effect + Sized {
     fn on(self, text: &str) -> On<Self> {
@@ -333,6 +377,7 @@ pub trait EffectExt: Effect + Sized {
             w,
             h,
             effect: self,
+            quit_key: None,
         }
     }
 }
@@ -971,6 +1016,17 @@ mod tests {
         assert_eq!(buf.height, 2);
         assert_eq!(buf.get(0, 0).ch, 'a');
         assert_eq!(buf.get(1, 1).ch, 'd');
+    }
+
+    #[test]
+    fn on_quit_key_builder_stores_key() {
+        struct Noop;
+        impl Effect for Noop {
+            fn render(&self, _buf: &mut FrameBuffer, _frame: usize) {}
+        }
+        let on = Noop.on("hi").quit_key('x');
+        assert_eq!(on.quit_key, Some('x'));
+        assert_eq!(Noop.on("hi").quit_key, None);
     }
 
     #[test]
