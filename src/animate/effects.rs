@@ -1402,6 +1402,64 @@ impl Effect for Marquee {
     }
 }
 
+// ── VSineWave ──
+
+/// Vertical sine-wave displacement wrapper: each column of the inner
+/// effect shifts up/down by `sin(x * frequency + frame * speed) *
+/// amplitude` cells, so content ripples as it passes fixed columns.
+/// Pairs well with `Marquee` — a ribbon that scrolls and undulates.
+///
+/// Space cells are transparent; displaced cells write only into empty
+/// target cells and are dropped when pushed outside the buffer.
+pub struct VSineWave {
+    inner: Box<dyn Effect>,
+    /// Peak vertical displacement in cells.
+    amplitude: f64,
+    /// Radians per column.
+    frequency: f64,
+    /// Radians per frame.
+    speed: f64,
+}
+
+impl VSineWave {
+    pub fn wrap(inner: impl Effect) -> Self {
+        Self {
+            inner: Box::new(inner),
+            amplitude: 4.0,
+            frequency: 0.15,
+            speed: 0.05,
+        }
+    }
+    pub fn amplitude(mut self, v: f64) -> Self { self.amplitude = v; self }
+    pub fn frequency(mut self, v: f64) -> Self { self.frequency = v; self }
+    pub fn speed(mut self, v: f64) -> Self { self.speed = v; self }
+}
+
+impl Effect for VSineWave {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        let mut scratch = FrameBuffer::new(buf.width, buf.height);
+        self.inner.render(&mut scratch, frame);
+        let t = frame as f64 * self.speed;
+        for x in 0..scratch.width {
+            let wave = (x as f64 * self.frequency + t).sin();
+            let dy = (wave * self.amplitude).round() as i32;
+            for y in 0..scratch.height {
+                let cell = scratch.get(x, y);
+                if cell.ch == ' ' { continue; }
+                let dest_y = y as i32 + dy;
+                if dest_y < 0 || dest_y as usize >= buf.height { continue; }
+                if buf.get(x, dest_y as usize).ch == ' ' {
+                    buf.set(x, dest_y as usize, cell);
+                }
+            }
+        }
+    }
+
+    fn size(&self) -> (usize, usize) {
+        self.inner.size()
+    }
+}
+
 // ── Fade ──
 
 /// Opacity envelope that wraps another effect.
@@ -2908,6 +2966,44 @@ mod tests {
 
     fn phase_buf() -> FrameBuffer {
         FrameBuffer::from_text("ab", Color::new(9, 9, 9))
+    }
+
+    #[test]
+    fn vsinewave_zero_amplitude_is_passthrough() {
+        let inner = text("@", Color::new(200, 0, 0));
+        let wave = VSineWave::wrap(inner).amplitude(0.0);
+        let mut buf = FrameBuffer::new(1, 5);
+        wave.render(&mut buf, 30);
+        assert_eq!(buf.get(0, 0).ch, '@');
+    }
+
+    #[test]
+    fn vsinewave_displaces_by_sine() {
+        // frequency 0 → wave depends only on time. speed = π/2 at frame 1
+        // → sin(π/2) = 1.0 → dy = round(1.0 * 2.0) = 2 rows down.
+        let inner = text("@", Color::new(200, 0, 0));
+        let wave = VSineWave::wrap(inner)
+            .amplitude(2.0)
+            .frequency(0.0)
+            .speed(std::f64::consts::FRAC_PI_2);
+        let mut buf = FrameBuffer::new(1, 5);
+        wave.render(&mut buf, 1);
+        assert_eq!(buf.get(0, 2).ch, '@', "char should land 2 rows down");
+        assert_eq!(buf.get(0, 0).ch, ' ', "source row should be empty");
+    }
+
+    #[test]
+    fn vsinewave_drops_cells_displaced_outside() {
+        // dy = +2 in a 1-row buffer → the char falls off; nothing rendered,
+        // no panic.
+        let inner = text("@", Color::new(200, 0, 0));
+        let wave = VSineWave::wrap(inner)
+            .amplitude(2.0)
+            .frequency(0.0)
+            .speed(std::f64::consts::FRAC_PI_2);
+        let mut buf = FrameBuffer::new(1, 1);
+        wave.render(&mut buf, 1);
+        assert_eq!(buf.get(0, 0).ch, ' ');
     }
 
     #[test]

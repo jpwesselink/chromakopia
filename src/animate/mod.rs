@@ -88,7 +88,7 @@ pub mod framebuffer;
 mod scene;
 
 pub use easing::Easing;
-pub use effects::{Rainbow, Glow, Plasma, VectorField, HeightMap, Pulse, Glitch, Radar, Neon, Karaoke, Flap, Scroll, ScrollDirection, Marquee, Spread, SpreadOrigin, Dycp, Fld, Wind, Fade, FadeEnvelope, Chain, Phases, Composite, DelayedStart, Blend, BlendMode, Transition, Solid, text, Timeline, AlphaIn, AlphaOut};
+pub use effects::{Rainbow, Glow, Plasma, VectorField, HeightMap, Pulse, Glitch, Radar, Neon, Karaoke, Flap, Scroll, ScrollDirection, Marquee, VSineWave, Spread, SpreadOrigin, Dycp, Fld, Wind, Fade, FadeEnvelope, Chain, Phases, Composite, DelayedStart, Blend, BlendMode, Transition, Solid, text, Timeline, AlphaIn, AlphaOut};
 pub use framebuffer::{Cell, Effect, EffectExt, On, FrameBuffer};
 pub use scene::{Scene, Line};
 

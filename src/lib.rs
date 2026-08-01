@@ -73,9 +73,9 @@ pub mod prelude {
     pub use crate::{Color, ProgressBar, color_enabled, set_color_enabled};
     pub use crate::animate::{
         Scene, Line, FrameBuffer, Effect, EffectExt, On,
-        Rainbow, Plasma, Glow, Pulse, Radar, Neon, Karaoke, Glitch, Flap,
-        Scroll, ScrollDirection, Spread, SpreadOrigin, Dycp, Fld, Wind,
-        Fade, FadeEnvelope, Chain, Blend, BlendMode, Transition, Composite, DelayedStart,
+        Rainbow, Plasma, VectorField, HeightMap, Glow, Pulse, Radar, Neon, Karaoke, Glitch, Flap,
+        Scroll, ScrollDirection, Marquee, VSineWave, Spread, SpreadOrigin, Dycp, Fld, Wind,
+        Fade, FadeEnvelope, Chain, Phases, Blend, BlendMode, Transition, Composite, DelayedStart,
         Solid, text, Easing, Timeline, AlphaIn, AlphaOut,
     };
     pub use crate::presets;
