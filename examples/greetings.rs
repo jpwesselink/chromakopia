@@ -140,33 +140,38 @@ fn parse_cues(msg: &str) -> (String, Vec<(u32, usize)>) {
 
 // ── Outline ─────────────────────────────────────────────────────────
 
-/// Draws a `▒` stroke on every empty cell touching a glyph cell, in one
-/// fixed neutral color (terminal foreground blended 50% toward the
-/// background) — the plasma stays on the glyphs, never on the stroke.
-/// The half-shade block lights 50% of the cell's pixels, so the stroke
-/// reads as a 50%-alpha outline on any background.
-struct Outline {
-    inner: Box<dyn Effect>,
+// ── Layering ────────────────────────────────────────────────────────
+
+/// Z-composite with a translucent outline. The names render first (back
+/// layer); the message block composites over them. Its glyphs are
+/// opaque; every empty message cell touching a glyph becomes a
+/// 50%-alpha veil in a neutral stroke color:
+///
+/// - over a name showing through, the name's glyph is kept and its
+///   color pulled halfway toward the stroke — dimmed, not blocked;
+/// - over bare background, a `▒` half-shade block (50% of the cell's
+///   pixels lit) in the stroke color.
+struct Layered {
+    back: NamesSequence,
+    front: Box<dyn Effect>,
+    front_h: usize,
+    height: usize,
+    /// Neutral outline color: terminal fg blended 50% toward bg.
     stroke: Color,
 }
 
-impl Outline {
-    fn wrap(inner: impl Effect) -> Self {
-        Self {
-            inner: Box::new(inner),
-            stroke: Color::lerp_rgb(bg_color(), fg_color(), 0.5),
-        }
-    }
-}
-
-impl Effect for Outline {
+impl Effect for Layered {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        self.inner.render(buf, frame);
-        // Two-phase so strokes don't cascade off each other.
-        let mut strokes: Vec<(usize, usize)> = Vec::new();
-        for y in 0..buf.height {
+        self.back.render(buf, frame);
+
+        let mut front = FrameBuffer::new(buf.width, self.front_h);
+        self.front.render(&mut front, frame);
+
+        // Outline mask: empty front cells with a glyph in the 8-neighborhood.
+        let mut outline = vec![false; buf.width * self.front_h];
+        for y in 0..self.front_h {
             for x in 0..buf.width {
-                if buf.get(x, y).ch != ' ' {
+                if front.get(x, y).ch != ' ' {
                     continue;
                 }
                 'scan: for dy in -1i32..=1 {
@@ -175,50 +180,36 @@ impl Effect for Outline {
                             continue;
                         }
                         let (nx, ny) = (x as i32 + dx, y as i32 + dy);
-                        if nx < 0 || ny < 0 || nx as usize >= buf.width || ny as usize >= buf.height
+                        if nx < 0
+                            || ny < 0
+                            || nx as usize >= buf.width
+                            || ny as usize >= self.front_h
                         {
                             continue;
                         }
-                        if buf.get(nx as usize, ny as usize).ch != ' ' {
-                            strokes.push((x, y));
+                        if front.get(nx as usize, ny as usize).ch != ' ' {
+                            outline[y * buf.width + x] = true;
                             break 'scan;
                         }
                     }
                 }
             }
         }
-        for (x, y) in strokes {
-            buf.set(x, y, Cell::new('▒', self.stroke));
-        }
-    }
 
-    fn size(&self) -> (usize, usize) {
-        self.inner.size()
-    }
-}
-
-// ── Layering ────────────────────────────────────────────────────────
-
-/// Z-composite: the names render first (back layer), then the message
-/// block composites over them — its glyphs and outline occlude, its
-/// gaps let the names show through.
-struct Layered {
-    back: NamesSequence,
-    front: Box<dyn Effect>,
-    front_h: usize,
-    height: usize,
-}
-
-impl Effect for Layered {
-    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        self.back.render(buf, frame);
-        let mut front = FrameBuffer::new(buf.width, self.front_h);
-        self.front.render(&mut front, frame);
         for y in 0..self.front_h.min(buf.height) {
             for x in 0..buf.width {
                 let cell = front.get(x, y);
                 if cell.ch != ' ' {
-                    buf.set(x, y, cell);
+                    buf.set(x, y, cell); // opaque glyph
+                } else if outline[y * buf.width + x] {
+                    let behind = buf.get(x, y);
+                    if behind.ch != ' ' {
+                        // Name under the veil: dim it, don't block it.
+                        buf.set_color(x, y, Color::lerp_rgb(behind.color, self.stroke, 0.5));
+                    } else {
+                        // Veil over bare background.
+                        buf.set(x, y, Cell::new('▒', self.stroke));
+                    }
                 }
             }
         }
@@ -347,7 +338,6 @@ async fn main() {
     .speed(0.2) // crests at 50 cells/s — funky, well under the 90 ceiling
     .delay(8.0) // flat horizontal scroll first...
     .ramp(2.0); // ...then the wave fades in
-    let message = Outline::wrap(message); // 50%-alpha stroke, rides the wave
 
     // Names: basic font, cycling accent colors.
     let palette = [
@@ -384,6 +374,7 @@ async fn main() {
         front: Box::new(message),
         front_h: 19,
         height: 23,
+        stroke: Color::lerp_rgb(bg_color(), fg_color(), 0.5),
     };
 
     Scene::new()
