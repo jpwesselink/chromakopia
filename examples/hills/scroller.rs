@@ -6,7 +6,9 @@ use chromakopia::animate::Cell;
 use chromakopia::prelude::*;
 use std::f64::consts::TAU;
 
-use super::glyphs::{c64, has_c64, has_mario, mario, stamp, LETTER_LOWER, LETTER_OUTLINE, LETTER_UPPER};
+use super::glyphs::{c64, has_c64, has_mario, mario, stamp, LETTER_HIGHLIGHT, LETTER_UPPER};
+#[cfg(test)]
+use super::glyphs::LETTER_LOWER;
 use super::script::Glyph;
 use super::tiny;
 
@@ -50,7 +52,8 @@ impl Font {
 pub enum Style {
     /// Pink-to-lavender face, dark outline, violet extrusion.
     Candy,
-    /// One flat dark colour — no gradient, outline or extrusion.
+    /// One flat cream colour — no gradient, outline, extrusion or wave.
+    /// Cream reads on a bare dark terminal as well as on the landscape.
     Flat,
 }
 
@@ -115,7 +118,11 @@ impl Scroller {
         if x < -(advance(g.font, g.ch) + 4) || x > width as i64 {
             return None;
         }
-        let wave = (TAU * t / SCROLL_WAVE_PERIOD + x as f64 * 0.05).sin();
+        // Flat letters (like terminal ones) ride a straight line.
+        let wave = match g.style {
+            Style::Flat => 0.0,
+            Style::Candy => (TAU * t / SCROLL_WAVE_PERIOD + x as f64 * 0.05).sin(),
+        };
         Some((x, self.y0 + BASE + (SCROLL_WAVE * wave).round() as i64))
     }
 
@@ -154,7 +161,7 @@ impl Scroller {
             }
             let color = match g.style {
                 Style::Candy => LETTER_UPPER,
-                Style::Flat => LETTER_OUTLINE,
+                Style::Flat => LETTER_HIGHLIGHT,
             };
             let (x, row) = (x as usize, row as usize);
             buf.set(x, row, BlendMode::Normal.composite(buf.get(x, row), Cell::new(g.ch, color), 1.0));
@@ -162,7 +169,7 @@ impl Scroller {
     }
 }
 
-/// A glyph's lit pixels in one flat colour, `scale`× — no outline or
+/// A glyph's lit pixels in flat cream, `scale`× — no outline or
 /// extrusion.
 fn flat(c: &mut Canvas, rows: &[u8], (x, y): (i64, i64), scale: i64) {
     for (gy, row) in rows.iter().enumerate() {
@@ -170,7 +177,7 @@ fn flat(c: &mut Canvas, rows: &[u8], (x, y): (i64, i64), scale: i64) {
             if row & (0x80 >> gx) != 0 {
                 for dy in 0..scale {
                     for dx in 0..scale {
-                        c.set(x + gx * scale + dx, y + gy as i64 * scale + dy, LETTER_OUTLINE);
+                        c.set(x + gx * scale + dx, y + gy as i64 * scale + dy, LETTER_HIGHLIGHT);
                     }
                 }
             }
@@ -180,7 +187,7 @@ fn flat(c: &mut Canvas, rows: &[u8], (x, y): (i64, i64), scale: i64) {
 
 /// The scroll text, cracktro style: brag about what's on screen, never
 /// explain how.
-pub const PITCH: &str = "{font term}Welly welly welly well...{pause 3}{hills}{pause 4}   what do we have here?{gap}{logo}{pause 3}{gap}{font c64}\
+pub const PITCH: &str = "{font big}{style flat}Welly...{gap}{font term}{style candy}welly welly well...   {pause 3}{hills}{pause 4}what do we have here?{gap}{logo}{pause 3}{gap}{font c64}\
 ...and yes, before you ask: this is a TERMINAL. No browser, no video, no tricks you can see, just the good old terminal you have known and loved...   which you will now love a little bit more.   {font tiny}(psst... the small print: no pixels were harmed in the making of this demo - because there are no pixels, just text and ANSI escape codes!){font c64}   \
 Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 Clouds that drift and throw shadows on the land.   \
@@ -242,9 +249,23 @@ mod tests {
     #[test]
     fn flat_has_one_colour_candy_has_its_gradient() {
         let (_, flat) = ink(one(Font::C64, Style::Flat, 'A'));
-        assert!(flat.iter().all(|&c| c == LETTER_OUTLINE));
+        assert!(flat.iter().all(|&c| c == LETTER_HIGHLIGHT));
         let (_, candy) = ink(one(Font::C64, Style::Candy, 'A'));
         assert!(candy.iter().any(|&c| c == LETTER_UPPER || c == LETTER_LOWER));
+    }
+
+    #[test]
+    fn flat_letters_ride_a_straight_line() {
+        let tops: Vec<i64> = (0..48)
+            .map(|frame| {
+                let s = one(Font::Big, Style::Flat, 'M');
+                let layers = Layers::new(40).layer(Layer::paint(move |c| s.paint(c, (c.width - 10) as f64)));
+                let mut buf = FrameBuffer::new(60, 40);
+                layers.render(&mut buf, frame);
+                (0..40).find(|&y| (0..60).any(|x| buf.get(x, y).ch != ' ')).unwrap() as i64
+            })
+            .collect();
+        assert!(tops.iter().all(|&t| t == tops[0]), "{tops:?}");
     }
 
     #[test]

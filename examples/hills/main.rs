@@ -546,6 +546,7 @@ mod tests {
         let cue = stage.timeline.since(script::Code::Logo, f64::MAX).unwrap();
         let hills = stage.timeline.since(script::Code::Hills, f64::MAX).unwrap();
         for (name, t) in [
+            ("big word", 1.6),
             ("opening", hills - 0.3),
             ("hills 0.1", hills + 0.1),
             ("hills 0.4", hills + 0.4),
@@ -668,8 +669,14 @@ mod tests {
             let pause = stage.timeline.cues.iter().find(|c| matches!(c.code, script::Code::Pause(_))).unwrap();
             let script::Code::Pause(secs) = pause.code else { unreachable!() };
             assert!(secs >= 2.5, "long enough to wonder what this is");
-            // The opening line: the terminal-font letters before the logo.
-            let line: Vec<_> = stage.glyphs.iter().take_while(|g| g.font == scroller::Font::Term).collect();
+            // The opening line: the first run of terminal-font letters
+            // (after the big opening word).
+            let line: Vec<_> = stage
+                .glyphs
+                .iter()
+                .skip_while(|g| g.font != scroller::Font::Term)
+                .take_while(|g| g.font == scroller::Font::Term)
+                .collect();
             let scrolled = stage.timeline.scrolled(pause.t + secs / 2.0);
             let left = w as f64 - scrolled + line.first().unwrap().x;
             let right = w as f64 - scrolled + line.last().unwrap().x + 1.0;
