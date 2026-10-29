@@ -12,6 +12,7 @@
 
 mod figlet;
 mod glyphs;
+mod intro;
 mod landscape;
 mod layout;
 mod panel;
@@ -62,6 +63,8 @@ struct View {
     scroll: f64,
     /// Seconds since the `{hills}` code (None: the landscape isn't in yet).
     hills: Option<f64>,
+    /// Seconds into the cold open, while it plays.
+    intro: Option<f64>,
 }
 
 /// What is on screen at script time `t`: the scroller, plus the landscape
@@ -69,7 +72,8 @@ struct View {
 fn script_view(tl: &script::Timeline, t: f64) -> View {
     let logo = tl.since(script::Code::Logo, t).map_or(LogoPhase::Hidden, |at| LogoPhase::Enter(t - at));
     let hills = tl.since(script::Code::Hills, t).map(|at| t - at);
-    View { logo, heading: None, panel: None, pushed: None, scroll: tl.scrolled(t), hills }
+    let intro = (t < intro::SECS).then_some(t);
+    View { logo, heading: None, panel: None, pushed: None, scroll: tl.scrolled(t), hills, intro }
 }
 
 /// What is on screen `local` seconds into storyboard step `i`. The
@@ -96,7 +100,7 @@ fn view_for(steps: &[Step], i: usize, local: f64) -> View {
     let pushed = panel
         .filter(|pv| !pv.slide.first && local < panel::ENTER_SECS)
         .map(|_| PanelView { step: i - 1, local: steps[i - 1].secs + local, slide: slide_of(steps, i - 1) });
-    View { logo, heading, panel, pushed, scroll: 0.0, hills: Some(f64::INFINITY) }
+    View { logo, heading, panel, pushed, scroll: 0.0, hills: Some(f64::INFINITY), intro: None }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -143,6 +147,8 @@ struct Stage {
     glyphs: Vec<script::Glyph>,
     /// Shared with its paint layer; also puts terminal-font letters on.
     scroller: Arc<scroller::Scroller>,
+    /// The cold open, played before the scroller starts.
+    intro: Timeline,
     timeline: script::Timeline,
     /// Wall time at which script time was 0.
     origin: Mutex<f64>,
@@ -168,7 +174,7 @@ impl Stage {
         let placed = script::parse(scroller::PITCH)
             .and_then(|s| s.place(screen_w))
             .unwrap_or_else(|e| panic!("scroll text: {e}"));
-        let timeline = script::Timeline::new(&placed, screen_w);
+        let timeline = script::Timeline::new(&placed, screen_w).with_lead(intro::SECS, &intro::MARKS);
         let view = Arc::new(Mutex::new(script_view(&timeline, 0.0)));
         let scroller = Arc::new(scroller::Scroller::new(placed.glyphs.clone(), SCROLLER_Y));
         let layers = build_layers(screen_w, view.clone(), steps.clone(), scroller.clone());
@@ -183,6 +189,7 @@ impl Stage {
             #[cfg(test)]
             glyphs: placed.glyphs,
             scroller,
+            intro: intro::cold_open(screen_w, ROWS),
             timeline,
             origin: Mutex::new(0.0),
             seek: Arc::new(Mutex::new(None)),
@@ -239,6 +246,18 @@ impl Effect for Stage {
 
         self.layers.render(buf, frame);
         self.scroller.paint_cells(buf, view.scroll, frame);
+        if let Some(t) = view.intro {
+            let mut open = FrameBuffer::new(buf.width, buf.height);
+            self.intro.render(&mut open, (t * FPS).round() as usize);
+            for y in 0..buf.height {
+                for x in 0..buf.width {
+                    let cell = open.get(x, y);
+                    if cell.ch != ' ' {
+                        buf.set(x, y, cell);
+                    }
+                }
+            }
+        }
 
         for (s, geo, local) in on_screen(&self.steps, &view, self.screen_w) {
             if let Some(effect) = &self.effects[s] {
@@ -546,7 +565,10 @@ mod tests {
         let cue = stage.timeline.since(script::Code::Logo, f64::MAX).unwrap();
         let hills = stage.timeline.since(script::Code::Hills, f64::MAX).unwrap();
         for (name, t) in [
-            ("big word", 1.6),
+            ("step1", 1.0),
+            ("step2", 4.5),
+            ("step3", 9.0),
+            ("line", intro::SECS + 2.0),
             ("opening", hills - 0.3),
             ("hills 0.1", hills + 0.1),
             ("hills 0.4", hills + 0.4),
@@ -641,8 +663,8 @@ mod tests {
         stage.seek_to(cue + 1.0);
         let LogoPhase::Enter(t) = stage.view_at(0).logo else { panic!("logo not entering") };
         assert!((t - 1.0).abs() < 1e-9);
-        // Before the code: landscape and scroller only.
-        stage.seek_to(0.5);
+        // Before the code (scroller running): no landscape, no logo.
+        stage.seek_to(intro::SECS + 0.5);
         let v = stage.view_at(0);
         assert_eq!((v.logo, v.heading, v.panel, v.hills), (LogoPhase::Hidden, None, None, None));
         assert!(v.scroll > 0.0);
@@ -663,29 +685,30 @@ mod tests {
     }
 
     #[test]
-    fn opening_line_holds_still_in_the_middle() {
+    fn cold_open_plays_before_the_scroller() {
+        let stage = Stage::new(112);
+        for t in [0.1, 5.0, intro::SECS - 0.1] {
+            stage.seek_to(t);
+            let v = stage.view_at(0);
+            assert_eq!((v.intro, v.hills, v.logo), (Some(t), None, LogoPhase::Hidden));
+            // No scroll text on screen yet.
+            assert!(stage.glyphs.iter().all(|g| 112.0 - v.scroll + g.x >= 112.0), "t={t}");
+        }
+        stage.seek_to(intro::SECS + 0.1);
+        assert_eq!(stage.view_at(0).intro, None);
+    }
+
+    #[test]
+    fn opening_line_has_left_when_the_hills_come() {
         for w in [80, 112, 200] {
             let stage = Stage::new(w);
-            let pause = stage.timeline.cues.iter().find(|c| matches!(c.code, script::Code::Pause(_))).unwrap();
-            let script::Code::Pause(secs) = pause.code else { unreachable!() };
-            assert!(secs >= 2.5, "long enough to wonder what this is");
-            // The opening line: the first run of terminal-font letters
-            // (after the big opening word).
-            let line: Vec<_> = stage
-                .glyphs
-                .iter()
-                .skip_while(|g| g.font != scroller::Font::Term)
-                .take_while(|g| g.font == scroller::Font::Term)
-                .collect();
-            let scrolled = stage.timeline.scrolled(pause.t + secs / 2.0);
-            let left = w as f64 - scrolled + line.first().unwrap().x;
-            let right = w as f64 - scrolled + line.last().unwrap().x + 1.0;
-            let centre = (left + right) / 2.0;
-            assert!((centre - w as f64 / 2.0).abs() <= 2.0, "{w}: line centred at {centre}");
-            // It stands there alone first — no landscape yet — and the
-            // hills only start once that first pause is over.
-            assert_eq!(stage.timeline.since(script::Code::Hills, pause.t + secs - 0.01), None);
-            assert_eq!(stage.timeline.since(script::Code::Hills, pause.t + secs), Some(pause.t + secs));
+            let cue = stage.timeline.since(script::Code::Hills, f64::MAX).unwrap();
+            let scrolled = stage.timeline.scrolled(cue);
+            for g in &stage.glyphs {
+                let x = w as f64 - scrolled + g.x;
+                let wide = scroller::advance(g.font, g.ch) as f64;
+                assert!(x <= -wide || x >= w as f64, "{w}: {:?} on screen at x={x}", g.ch);
+            }
         }
     }
 
@@ -716,15 +739,17 @@ mod tests {
             *stage.seek.lock().unwrap() = Some(Seek::Next);
             stage.view_at(frame)
         };
-        // First stop: the opening line pauses mid-screen, nothing else yet.
+        // The cold open's steps 2 and 3, then the scroller starting.
+        assert_eq!(next(0).intro, Some(2.8));
+        assert_eq!(next(0).intro, Some(7.0));
         let v = next(0);
-        assert_eq!((v.hills, v.logo), (None, LogoPhase::Hidden));
+        assert_eq!((v.intro, v.hills), (None, None));
         // Then the hills come in.
-        let v = next(60);
+        let v = next(0);
         assert_eq!((v.hills, v.logo), (Some(0.0), LogoPhase::Hidden));
         // Then the logo drops — and the jump sticks: a second later it's a second in.
-        assert_eq!(next(120).logo, LogoPhase::Enter(0.0));
-        assert_eq!(stage.view_at(180).logo, LogoPhase::Enter(1.0));
+        assert_eq!(next(60).logo, LogoPhase::Enter(0.0));
+        assert_eq!(stage.view_at(120).logo, LogoPhase::Enter(1.0));
     }
 
     #[test]
@@ -732,8 +757,7 @@ mod tests {
         let stage = Stage::new(120);
         stage.seek_to(stage.timeline.total + 0.5);
         let v = stage.view_at(0);
-        assert_eq!(v.logo, LogoPhase::Hidden);
-        assert!((v.scroll - 30.0).abs() < 1e-6, "scroll {}", v.scroll);
+        assert_eq!((v.intro, v.hills, v.logo), (Some(0.5), None, LogoPhase::Hidden));
     }
 
     #[test]

@@ -32,6 +32,8 @@ pub enum Code {
     Font(Font),
     /// Everything after is drawn in this style.
     Style(Style),
+    /// A skip stop with nothing attached (set by `with_lead`, not typed).
+    Mark,
 }
 
 /// The scroll text without its codes, and where each code sits.
@@ -148,6 +150,8 @@ pub struct Timeline {
     pub total: f64,
     /// Pauses as (scrolled px, start time, seconds), in order.
     pauses: Vec<(f64, f64, f64)>,
+    /// Seconds before the text starts scrolling in.
+    lead: f64,
 }
 
 impl Timeline {
@@ -167,7 +171,24 @@ impl Timeline {
             }
         }
         let run = placed.length + width as f64;
-        Self { cues, total: run / SPEED + paused, pauses }
+        Self { cues, total: run / SPEED + paused, pauses, lead: 0.0 }
+    }
+
+    /// The same timeline starting `lead` seconds later — something else
+    /// plays first — with extra skip stops at `marks` and at the moment the
+    /// text starts.
+    pub fn with_lead(mut self, lead: f64, marks: &[f64]) -> Self {
+        for c in &mut self.cues {
+            c.t += lead;
+        }
+        for p in &mut self.pauses {
+            p.1 += lead;
+        }
+        let stops = marks.iter().copied().chain([lead]).map(|t| Cue { t, code: Code::Mark });
+        self.cues.splice(0..0, stops);
+        self.total += lead;
+        self.lead = lead;
+        self
     }
 
     /// Pixels the text has scrolled at time `t` (0 = just off the right edge).
@@ -182,7 +203,7 @@ impl Timeline {
             }
             paused += secs;
         }
-        (t - paused) * SPEED
+        (t - self.lead - paused) * SPEED
     }
 
     /// When the latest `code` at or before `t` fired.
@@ -282,6 +303,22 @@ mod tests {
         assert!((tl.scrolled(at + 2.5) - (114.0 + 30.0)).abs() < 1e-9);
         // Whole run: 80 px of text + 100 px of screen, plus the pause.
         assert!((tl.total - (180.0 / 60.0 + 2.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_lead_in_shifts_everything_and_adds_skip_stops() {
+        let plain = timeline();
+        let led = timeline().with_lead(5.0, &[1.0, 2.5]);
+        assert!(led.scrolled(4.0) < 0.0, "text still off the right edge");
+        assert!((led.scrolled(5.0 + 1.7) - plain.scrolled(1.7)).abs() < 1e-9);
+        assert!((led.scrolled(5.0 + 3.0) - plain.scrolled(3.0)).abs() < 1e-9, "pause shifted too");
+        assert!((led.total - (plain.total + 5.0)).abs() < 1e-9);
+        assert_eq!(led.since(Code::Logo, 5.0 + 2.0), Some(5.0 + 82.0 / 60.0));
+        // Skip stops: the marks, the end of the lead-in, then the codes.
+        assert_eq!(led.next_after(0.0), 1.0);
+        assert_eq!(led.next_after(1.0), 2.5);
+        assert_eq!(led.next_after(2.5), 5.0);
+        assert_eq!(led.next_after(5.0), 5.0 + 82.0 / 60.0);
     }
 
     #[test]
