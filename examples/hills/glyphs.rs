@@ -3,10 +3,10 @@
 use chromakopia::prelude::*;
 
 // Letter style: the docs site's title gradient (#99ffdd glow edge,
-// #00ffcc → #00bbff), black outline, plum extrusion.
-pub const LETTER_HIGHLIGHT: Color = Color { r: 0x99, g: 0xFF, b: 0xDD };
-pub const LETTER_UPPER: Color = Color { r: 0x00, g: 0xFF, b: 0xCC };
-pub const LETTER_LOWER: Color = Color { r: 0x00, g: 0xBB, b: 0xFF };
+// #00ffcc → #00bbff) washed 35% toward grey, black outline, plum extrusion.
+pub const LETTER_HIGHLIGHT: Color = Color { r: 0x99, g: 0xDC, b: 0xC6 };
+pub const LETTER_UPPER: Color = Color { r: 0x36, g: 0xDC, b: 0xBA };
+pub const LETTER_LOWER: Color = Color { r: 0x36, g: 0xAF, b: 0xDC };
 pub const LETTER_OUTLINE: Color = Color { r: 0x0A, g: 0x0A, b: 0x0A };
 pub const LETTER_EXTRUDE: Color = Color { r: 0x4E, g: 0x2A, b: 0x4E };
 

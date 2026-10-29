@@ -23,8 +23,9 @@ const SAGE_DARK: Color = Color { r: 0x2A, g: 0x3A, b: 0x2A };
 const SAGE_DIM: Color = Color { r: 0x48, g: 0x60, b: 0x44 };
 const SAGE: Color = Color { r: 0x6C, g: 0x90, b: 0x66 };
 const SAGE_LIGHT: Color = Color { r: 0x88, g: 0xBB, b: 0x88 };
-const BRAND: Color = Color { r: 0x00, g: 0xCC, b: 0x66 };
-const BRAND_LIGHT: Color = Color { r: 0x00, g: 0xFF, b: 0x88 };
+// Brand green #00cc66 / #00ff88, washed 35% toward grey.
+const BRAND: Color = Color { r: 0x36, g: 0xBA, b: 0x78 };
+const BRAND_LIGHT: Color = Color { r: 0x36, g: 0xDC, b: 0x8E };
 const GRAPE: Color = Color { r: 0x5A, g: 0x2A, b: 0x54 };
 const GRAPE_DEEP: Color = Color { r: 0x2A, g: 0x14, b: 0x28 };
 /// Seconds for one full left→right→left swing.
