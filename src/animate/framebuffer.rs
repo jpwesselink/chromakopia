@@ -388,6 +388,26 @@ pub trait EffectExt: Effect + Sized {
             quit_key: None,
         }
     }
+
+    /// Repaint this effect's glyphs through `palette`, by brightness.
+    fn recolor(self, palette: Vec<Color>) -> super::wrappers::Recolor {
+        super::wrappers::Recolor::new(self, palette)
+    }
+
+    /// Repaint this effect's glyphs through a cyclic `palette`, by hue.
+    fn recolor_hue(self, palette: Vec<Color>) -> super::wrappers::Recolor {
+        super::wrappers::Recolor::hue(self, palette)
+    }
+
+    /// Give this effect empty room: top, right, bottom, left (CSS order).
+    fn pad(self, top: usize, right: usize, bottom: usize, left: usize) -> super::wrappers::Padded {
+        super::wrappers::Padded::new(self, top, right, bottom, left)
+    }
+
+    /// Play this effect `k` times as fast (0.5 = half speed).
+    fn time_scale(self, k: f64) -> super::wrappers::TimeScale {
+        super::wrappers::TimeScale::new(self, k)
+    }
 }
 
 impl<E: Effect> EffectExt for E {}

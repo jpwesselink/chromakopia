@@ -118,59 +118,15 @@ pub fn name_art(name: &str, max_w: usize) -> Vec<String> {
 const WAVE_PAD: usize = 3;
 const FLD_PAD: usize = 2;
 
-/// `inner` with `top` and `bottom` empty rows around it, so effects that
-/// move rows or columns have room to do it without being cut off.
-struct Pad {
-    inner: Box<dyn Effect>,
-    top: usize,
-    bottom: usize,
-}
-
-impl Effect for Pad {
-    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        let mut sub = FrameBuffer::new(buf.width, buf.height.saturating_sub(self.top));
-        self.inner.render(&mut sub, frame);
-        for y in 0..sub.height {
-            for x in 0..sub.width {
-                let cell = sub.get(x, y);
-                if cell.ch != ' ' {
-                    buf.set(x, y + self.top, cell);
-                }
-            }
-        }
-    }
-
-    fn size(&self) -> (usize, usize) {
-        let (w, h) = self.inner.size();
-        (w, h + self.top + self.bottom)
-    }
-}
-
 /// DYCP over `text`: columns only dip downward, so the room goes below.
-fn dycp(text: &str, pad: usize) -> Pad {
-    Pad { inner: Box::new(Dycp::new(text).palette(hero())), top: 0, bottom: pad }
+fn dycp(text: &str, pad: usize) -> Padded {
+    Dycp::new(text).palette(hero()).pad(0, 0, pad, 0)
 }
 
 /// FLD over plasma `text`: rows bounce both ways by up to `pad`, with
 /// that much room above and below.
 fn fld(text: &str, pad: usize) -> Fld {
-    Fld::new(Pad { inner: Box::new(hero_plasma(text)), top: pad, bottom: pad }).amplitude(pad as f64)
-}
-
-/// Plays `inner` `k` times faster.
-struct Faster {
-    inner: Box<dyn Effect>,
-    k: usize,
-}
-
-impl Effect for Faster {
-    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        self.inner.render(buf, frame * self.k);
-    }
-
-    fn size(&self) -> (usize, usize) {
-        self.inner.size()
-    }
+    Fld::new(hero_plasma(text).pad(pad, 0, pad, 0)).amplitude(pad as f64)
 }
 
 /// Hot pink → violet → bright blue → mint and back. Cyclic, for plasma.
@@ -200,74 +156,27 @@ fn hue_loop() -> Vec<Color> {
     gradient(&["#ff5fa2", "#c45fff", "#3fb6ff", "#3fe0a0", "#ff5fa2"]).palette(360)
 }
 
-/// How `Remap` reads a cell's colour.
-#[derive(Clone, Copy)]
-enum By {
-    /// Dark → start of the palette, bright → end.
-    Luma,
-    /// Hue angle → position around a cyclic palette.
-    Hue,
-}
-
-/// Runs an effect that has fixed colours, then recolours its glyphs
-/// through `palette` — keeping its motion and light, in the pastel palette.
-struct Remap {
-    inner: Box<dyn Effect>,
-    palette: Vec<Color>,
-    by: By,
-}
-
-impl Remap {
-    fn new(inner: impl Effect, palette: Vec<Color>, by: By) -> Self {
-        Self { inner: Box::new(inner), palette, by }
-    }
-}
-
-impl Effect for Remap {
-    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        self.inner.render(buf, frame);
-        let last = (self.palette.len() - 1) as f64;
-        for y in 0..buf.height {
-            for x in 0..buf.width {
-                let cell = buf.get(x, y);
-                if cell.ch == ' ' {
-                    continue;
-                }
-                let t = match self.by {
-                    By::Luma => cell.color.luma(),
-                    By::Hue => cell.color.to_hsv().0 / 360.0,
-                };
-                buf.set_color(x, y, self.palette[(t.clamp(0.0, 1.0) * last).round() as usize]);
-            }
-        }
-    }
-
-    fn size(&self) -> (usize, usize) {
-        self.inner.size()
-    }
-}
-
 fn hero_plasma(text: &str) -> On<Plasma> {
     Plasma::new().palette(hero()).on(text)
 }
 
 /// The effect a panel shows, driven over `text` (the figlet-rendered name).
 /// Everything speaks the pastel palette: effects that take one get
-/// it directly, fixed-colour effects are recoloured through `Remap`.
+/// it directly, fixed-colour effects are recoloured with `.recolor`.
 pub fn effect_for(kind: PanelKind, text: &str) -> Box<dyn Effect> {
     use PanelKind as K;
     match kind {
         K::Plasma => Box::new(hero_plasma(text)),
-        K::Rainbow => Box::new(Remap::new(Rainbow::on(text), hue_loop(), By::Hue)),
+        K::Rainbow => Box::new(Rainbow::on(text).recolor_hue(hue_loop())),
         K::Glow => Box::new(Glow::new().palette(brand()).on(text)),
-        K::Pulse => Box::new(Remap::new(Pulse::on(text), glow_ramp(), By::Luma)),
-        K::Neon => Box::new(Remap::new(Neon::on(text), glow_ramp(), By::Luma)),
-        K::Radar => Box::new(Remap::new(Radar::on(text), glow_ramp(), By::Luma)),
-        K::Karaoke => Box::new(Remap::new(Karaoke::on(text), glow_ramp(), By::Luma)),
-        K::Glitch => Box::new(Remap::new(Glitch::new(text), glow_ramp(), By::Luma)),
+        K::Pulse => Box::new(Pulse::on(text).recolor(glow_ramp())),
+        K::Neon => Box::new(Neon::on(text).recolor(glow_ramp())),
+        K::Radar => Box::new(Radar::on(text).recolor(glow_ramp())),
+        K::Karaoke => Box::new(Karaoke::on(text).recolor(glow_ramp())),
+        K::Glitch => Box::new(Glitch::new(text).recolor(glow_ramp())),
         // Flap settles one cell every 2 frames, spaces included — far too
         // slow for a figlet block in a 5 s panel, so run it 6× faster.
-        K::Flap => Box::new(Remap::new(Faster { inner: Box::new(Flap::new(text)), k: 6 }, glow_ramp(), By::Luma)),
+        K::Flap => Box::new(Flap::new(text).time_scale(6.0).recolor(glow_ramp())),
         K::Scroll => Box::new(Scroll::new(text).palette(brand())),
         K::Spread => Box::new(Spread::new(text).palette(dusk())),
         // Whole cells only: a speed that divides the frame rate keeps every
@@ -279,7 +188,7 @@ pub fn effect_for(kind: PanelKind, text: &str) -> Box<dyn Effect> {
         K::Wind => Box::new(Wind::wrap(hero_plasma(text))),
         K::VectorField => Box::new(VectorField::new().palette(hero())),
         K::HeightMap => Box::new(HeightMap::new().palette(brand())),
-        K::Screen => Box::new(Blend::new(hero_plasma(text), Remap::new(Radar::on(text), dusk(), By::Luma), BlendMode::Screen)),
+        K::Screen => Box::new(Blend::new(hero_plasma(text), Radar::on(text).recolor(dusk()), BlendMode::Screen)),
         K::Multiply => Box::new(Blend::new(hero_plasma(text), Glow::new().palette(dusk()).on(text), BlendMode::Multiply)),
         K::Transition => Box::new(Transition::new(
             hero_plasma(text),

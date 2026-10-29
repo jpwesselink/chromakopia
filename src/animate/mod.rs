@@ -89,6 +89,7 @@ pub mod framebuffer;
 mod keys;
 mod layers;
 mod scene;
+mod wrappers;
 
 pub use easing::Easing;
 pub use effects::{Rainbow, Glow, Plasma, VectorField, HeightMap, Pulse, Glitch, Radar, Neon, Karaoke, Flap, Scroll, ScrollDirection, Marquee, VSineWave, Spread, SpreadOrigin, Dycp, Fld, Wind, Fade, FadeEnvelope, Chain, Phases, Composite, DelayedStart, Blend, BlendMode, Transition, Solid, text, Timeline, AlphaIn, AlphaOut};
@@ -96,6 +97,7 @@ pub use framebuffer::{Cell, Effect, EffectExt, On, FrameBuffer};
 pub use layers::{dither, Canvas, Layer, Layers, Px};
 pub use keys::{parse_keys, Key};
 pub use scene::{Scene, Line};
+pub use wrappers::{Padded, Recolor, TimeScale};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use framebuffer::{AnimationHandle, QuitKey, run_effect, spawn_effect};

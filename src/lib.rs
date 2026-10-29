@@ -77,6 +77,7 @@ pub mod prelude {
         Scroll, ScrollDirection, Marquee, VSineWave, Spread, SpreadOrigin, Dycp, Fld, Wind,
         Fade, FadeEnvelope, Chain, Phases, Blend, BlendMode, Transition, Composite, DelayedStart,
         Solid, text, Easing, Timeline, AlphaIn, AlphaOut, Layer, Layers, Px, Canvas, Key,
+        Padded, Recolor, TimeScale,
     };
     pub use crate::presets;
 
