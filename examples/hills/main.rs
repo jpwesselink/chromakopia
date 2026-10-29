@@ -2,7 +2,7 @@
 //! pastel landscape of swaying dithered hills (half-block pixel `Layers`).
 //!
 //! The show: CHROMAKOPIA drops in letter by letter and rides a DYCP wave,
-//! the MIT licence starts scrolling along the bottom (and keeps going),
+//! the sales pitch starts scrolling along the bottom (and keeps going),
 //! the letters jump away, and then block by block — COLOR EFFECTS, SHAPE &
 //! LAYOUT, FIELDS, MIXING — each effect gets its own panel: aubergine box
 //! with the letters' outline and 3D extrusion, bouncing in with the
@@ -35,7 +35,7 @@ use wordmark::LogoPhase;
 pub const ROWS: usize = 50;
 /// Rows of open sky above the landscape, so the wordmark has headroom.
 pub const TOP_PAD: usize = 6;
-/// Top pixel row of the licence scroller at rest (it waves around this).
+/// Top pixel row of the pitch scroller at rest (it waves around this).
 pub const SCROLLER_Y: i64 = (ROWS * 2) as i64 - 26;
 
 /// A panel step in progress.
@@ -249,7 +249,7 @@ fn put_band(buf: &mut FrameBuffer, row: usize, text: &str) {
 fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>) -> Layers {
     let word = wordmark::Wordmark::placed(screen_w);
     // Baseline high enough that the scroller's wave plus extrusion stays on screen.
-    let scroller = scroller::Scroller::new(scroller::LICENSE_TEXT, SCROLLER_Y);
+    let scroller = scroller::Scroller::new(scroller::PITCH, SCROLLER_Y);
 
     let logo_view = view.clone();
     let frame_view = view;
@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn scroller_wave_clears_the_bottom_border_with_room_to_spare() {
-        let scroller = scroller::Scroller::new(scroller::LICENSE_TEXT, SCROLLER_Y);
+        let scroller = scroller::Scroller::new(scroller::PITCH, SCROLLER_Y);
         let layers = Layers::new(ROWS).layer(Layer::paint(move |c| scroller.paint(c)));
         let mut lowest = 0;
         for frame in 0..120 {

@@ -1,6 +1,6 @@
 //! Where everything sits once the wordmark is at the top, top to bottom:
 //! wordmark (with as much DYCP swing as the screen leaves room for),
-//! tagline, panel, block heading, licence scroller. All in pixel rows
+//! tagline, panel, block heading, pitch scroller. All in pixel rows
 //! unless noted.
 
 use super::panel::PANEL_H;
@@ -58,7 +58,7 @@ impl Layout {
     }
 }
 
-/// Highest pixel the licence scroller reaches: wave peak, outline.
+/// Highest pixel the pitch scroller reaches: wave peak, outline.
 fn scroller_top() -> i64 {
     SCROLLER_Y - 4 - 1
 }

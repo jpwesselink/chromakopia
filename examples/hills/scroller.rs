@@ -1,4 +1,4 @@
-//! The licence scroller along the bottom.
+//! The sales pitch scroller along the bottom.
 
 use chromakopia::animate::framebuffer::FPS;
 use chromakopia::prelude::*;
@@ -12,7 +12,7 @@ const SCROLL_SPEED: f64 = FPS;
 const SCROLL_WAVE: f64 = 4.0;
 const SCROLL_WAVE_PERIOD: f64 = 0.8;
 
-/// The licence, in C64 glyphs, scrolling right to left along the bottom.
+/// Text in C64 glyphs, scrolling right to left along the bottom.
 pub struct Scroller {
     glyphs: Vec<[u8; 8]>,
     y0: i64,
@@ -49,24 +49,29 @@ impl Scroller {
     }
 }
 
-pub const LICENSE_TEXT: &str = r#"MIT License
+/// The pitch, cracktro style: why an engineer would want this crate.
+pub const PITCH: &str = "Hey engineers!   Yes, you, staring at that grey spinner while your build crawls...   \
+Your CLI deserves better.   CHROMAKOPIA turns your terminal into a demo scene, in Rust.   \
+Plasma, rainbow, glow, neon, glitch, flap, marquee, DYCP, FLD, vector fields, height maps:   \
+each one a single line of code.   \
+Under the hood a real framebuffer at 60 fps with diff rendering, so only the cells that change get redrawn.   \
+Half-block pixels for twice the vertical resolution.   \
+Stack layers, sway them, blend them: normal, multiply, screen and friends, on any cell, glyph or pixel.   \
+This whole show renders in under a millisecond a frame. The other 15 ms are yours.   \
+The same code runs in the browser through WASM.   MIT licensed, so ship it tomorrow.   \
+cargo add chromakopia   ...and make your users smile.   \
+Greetings to everyone who still believes a terminal can be beautiful!   \
+Keys: space for the next effect, arrows to skip around, q to quit.   ...wrapping around...          ";
 
-Copyright (c) 2026 JP Wesselink
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE."#;
+    #[test]
+    fn pitch_is_all_c64_glyphs() {
+        for ch in PITCH.chars().filter(|&c| c != '\n') {
+            assert!(super::super::glyphs::has_c64(ch), "no C64 glyph for {ch:?}");
+        }
+        assert!(PITCH.contains("cargo add chromakopia"));
+    }
+}
