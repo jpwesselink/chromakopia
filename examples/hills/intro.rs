@@ -4,7 +4,7 @@
 //!
 //! 1. "welly", hard on, hard off.
 //! 2. "welly", fading in and out (`AlphaIn` / `AlphaOut`).
-//! 3. "WELLY", big block letters in a wild plasma, sliding in from the
+//! 3. "welly", big block letters in a wild plasma, sliding in from the
 //!    right, holding in the middle, sliding out to the left.
 
 use chromakopia::animate::framebuffer::FPS;
@@ -33,7 +33,7 @@ pub fn cold_open(width: usize, height: usize) -> Timeline {
     // "welly" in the terminal's own font, dead centre.
     let welly = || text("welly", glyphs::LETTER_HIGHLIGHT).pad(height / 2, 0, 0, width.saturating_sub(5) / 2);
     // Each ROM pixel 2×2 cells: big, and square-ish on tall terminal cells.
-    let rows: Vec<String> = glyphs::block_text("WELLY")
+    let rows: Vec<String> = glyphs::block_text("welly")
         .iter()
         .map(|r| r.chars().flat_map(|c| [c, c]).collect::<String>())
         .flat_map(|r| [r.clone(), r])
@@ -169,7 +169,7 @@ mod tests {
             .map(|c| (c.r, c.g, c.b))
             .collect();
         assert!(colours.len() > 5);
-        // Big: each ROM pixel is 2×2 cells — "WELLY" is 80 columns wide.
+        // Big: each ROM pixel is 2×2 cells.
         assert!(hi - lo + 1 >= 70, "only {} columns wide", hi - lo + 1);
         assert_eq!(text_of(&frame_at(SECS - 0.1)), "");
     }
