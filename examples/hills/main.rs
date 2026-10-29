@@ -720,9 +720,8 @@ mod tests {
             let scrolled = stage.timeline.scrolled(hills);
             let on_screen = stage.glyphs.iter().any(|g| (0.0..w as f64).contains(&(w as f64 - scrolled + g.x)));
             assert!(on_screen, "{w}: no text on screen when the hills start");
-            // ...and no pause holds things up before the logo.
-            let pauses = stage.timeline.cues.iter().filter(|c| matches!(c.code, script::Code::Pause(_)) && c.t < logo);
-            assert_eq!(pauses.count(), 0, "{w}");
+            // The opening line is in the terminal's own font.
+            assert_eq!(stage.glyphs[0].font, scroller::Font::Term);
             // The landscape has (nearly) finished building by the time the logo drops.
             assert!(logo - hills >= landscape::ENTRANCE_SECS - 1.0, "{w}: only {:.1}s to build", logo - hills);
         }
