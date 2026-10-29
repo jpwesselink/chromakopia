@@ -111,6 +111,48 @@ pub fn name_art(name: &str, max_w: usize) -> Vec<String> {
     }
 }
 
+/// Rows of room DYCP and FLD get beyond their text: both move it up to
+/// their amplitude (3) away.
+const WAVE_PAD: usize = 3;
+
+/// `inner` with `top` and `bottom` empty rows around it, so effects that
+/// move rows or columns have room to do it without being cut off.
+struct Pad {
+    inner: Box<dyn Effect>,
+    top: usize,
+    bottom: usize,
+}
+
+impl Effect for Pad {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        let mut sub = FrameBuffer::new(buf.width, buf.height.saturating_sub(self.top));
+        self.inner.render(&mut sub, frame);
+        for y in 0..sub.height {
+            for x in 0..sub.width {
+                let cell = sub.get(x, y);
+                if cell.ch != ' ' {
+                    buf.set(x, y + self.top, cell);
+                }
+            }
+        }
+    }
+
+    fn size(&self) -> (usize, usize) {
+        let (w, h) = self.inner.size();
+        (w, h + self.top + self.bottom)
+    }
+}
+
+/// DYCP over `text`: columns only dip downward, so the room goes below.
+fn dycp(text: &str, pad: usize) -> Pad {
+    Pad { inner: Box::new(Dycp::new(text).palette(hero())), top: 0, bottom: pad }
+}
+
+/// FLD over plasma `text`: rows bounce both ways, so room above and below.
+fn fld(text: &str, pad: usize) -> Fld {
+    Fld::new(Pad { inner: Box::new(hero_plasma(text)), top: pad, bottom: pad })
+}
+
 /// Plays `inner` `k` times faster.
 struct Faster {
     inner: Box<dyn Effect>,
@@ -228,8 +270,8 @@ pub fn effect_for(kind: PanelKind, text: &str) -> Box<dyn Effect> {
         // step the same length (30 cells/s = one cell every 2 frames).
         K::Marquee => Box::new(Marquee::wrap(hero_plasma(text)).speed(30.0)),
         K::VSineWave => Box::new(VSineWave::wrap(hero_plasma(text))),
-        K::Dycp => Box::new(Dycp::new(text).palette(hero())),
-        K::Fld => Box::new(Fld::new(hero_plasma(text))),
+        K::Dycp => Box::new(dycp(text, WAVE_PAD)),
+        K::Fld => Box::new(fld(text, WAVE_PAD)),
         K::Wind => Box::new(Wind::wrap(hero_plasma(text))),
         K::VectorField => Box::new(VectorField::new().palette(hero())),
         K::HeightMap => Box::new(HeightMap::new().palette(brand())),
@@ -318,6 +360,31 @@ mod tests {
         assert_eq!(name_art("VECTORFIELD", 102), super::super::glyphs::block_text("VECTORFIELD"));
         let narrow = name_art("VECTORFIELD", 60);
         assert!(narrow.iter().all(|r| r.chars().count() <= 60), "{narrow:?}");
+    }
+
+    #[test]
+    fn dycp_and_fld_keep_all_their_ink_inside_their_size() {
+        // The waves move rows and columns beyond the text. Rendered into a
+        // far taller buffer, nothing more may show up than within their
+        // own size — i.e. nothing hangs off the bottom. (Off the top can't
+        // happen: FLD's text starts WAVE_PAD rows down, its amplitude is 3,
+        // and DYCP only dips downward.)
+        let text = name_art("DYCP", 100).join("\n");
+        let ink = |fx: &dyn Effect, extra: usize, frame| {
+            let (w, h) = fx.size();
+            let mut buf = FrameBuffer::new(w, h + extra);
+            fx.render(&mut buf, frame);
+            (0..h + extra).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| buf.get(x, y).ch != ' ').count()
+        };
+        let (dycp, fld) = (dycp(&text, WAVE_PAD), fld(&text, WAVE_PAD));
+        for frame in (0..600).step_by(7) {
+            assert_eq!(ink(&dycp, 0, frame), ink(&dycp, 20, frame), "dycp frame {frame}");
+            assert_eq!(ink(&fld, 0, frame), ink(&fld, 20, frame), "fld frame {frame}");
+        }
+        // Unpadded, they do lose ink — the bug this guards.
+        let bare = Dycp::new(&text).palette(hero());
+        assert!((0..600).step_by(7).any(|f| ink(&bare, 0, f) < ink(&bare, 20, f)));
+        assert!(dycp.size().1 <= 13 && fld.size().1 <= 13, "fits the panel");
     }
 
     #[test]

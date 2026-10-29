@@ -1,11 +1,11 @@
 //! The show's running order and the clock that walks it.
 
-pub const INTRO_SECS: f64 = 7.0;
+pub const INTRO_SECS: f64 = 11.0;
 pub const LOGO_EXIT_SECS: f64 = 1.5;
 pub const HEADING_SECS: f64 = 1.2;
 pub const PANEL_SECS: f64 = 8.0;
 pub const FIELD_SECS: f64 = 9.0;
-pub const FINALE_SECS: f64 = 6.0;
+pub const FINALE_SECS: f64 = 9.0;
 pub const LAST_BLOCK: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
