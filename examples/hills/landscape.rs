@@ -44,7 +44,8 @@ const RISE_SECS: f64 = 0.8;
 const SHADOW_START: f64 = RISE_START + 7.0 * RISE_STAGGER + RISE_SECS;
 const SHADOW_SECS: f64 = 0.5;
 /// When everything has landed.
-pub const ENTRANCE_SECS: f64 = SHADOW_START + SHADOW_SECS;
+#[cfg(test)]
+const ENTRANCE_SECS: f64 = SHADOW_START + SHADOW_SECS;
 
 /// How much of the sky is down `t` seconds into the entrance (0..=1).
 fn sky_reveal(t: f64) -> f64 {

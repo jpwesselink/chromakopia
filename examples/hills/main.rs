@@ -139,6 +139,7 @@ struct Stage {
     heading: Layers,
     view: Arc<Mutex<View>>,
     /// The scroll text as shown on this screen (gaps filled in).
+    #[cfg(test)]
     text: String,
     timeline: script::Timeline,
     /// Wall time at which script time was 0.
@@ -174,6 +175,7 @@ impl Stage {
             layers,
             heading,
             view,
+            #[cfg(test)]
             text: script.text,
             timeline,
             origin: Mutex::new(0.0),
