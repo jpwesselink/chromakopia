@@ -711,16 +711,20 @@ mod tests {
     }
 
     #[test]
-    fn opening_line_has_left_when_the_hills_come() {
+    fn hills_build_while_the_opening_line_scrolls_by() {
         for w in [80, 112, 200] {
             let stage = Stage::new(w);
-            let cue = stage.timeline.since(script::Code::Hills, f64::MAX).unwrap();
-            let scrolled = stage.timeline.scrolled(cue);
-            for g in &stage.glyphs {
-                let x = w as f64 - scrolled + g.x;
-                let wide = scroller::advance(g.font, g.ch) as f64;
-                assert!(x <= -wide || x >= w as f64, "{w}: {:?} on screen at x={x}", g.ch);
-            }
+            let hills = stage.timeline.since(script::Code::Hills, f64::MAX).unwrap();
+            let logo = stage.timeline.since(script::Code::Logo, f64::MAX).unwrap();
+            // The opening line is on screen when the landscape starts...
+            let scrolled = stage.timeline.scrolled(hills);
+            let on_screen = stage.glyphs.iter().any(|g| (0.0..w as f64).contains(&(w as f64 - scrolled + g.x)));
+            assert!(on_screen, "{w}: no text on screen when the hills start");
+            // ...and no pause holds things up before the logo.
+            let pauses = stage.timeline.cues.iter().filter(|c| matches!(c.code, script::Code::Pause(_)) && c.t < logo);
+            assert_eq!(pauses.count(), 0, "{w}");
+            // The landscape has (nearly) finished building by the time the logo drops.
+            assert!(logo - hills >= landscape::ENTRANCE_SECS - 1.0, "{w}: only {:.1}s to build", logo - hills);
         }
     }
 
