@@ -142,18 +142,18 @@ impl Scroller {
     }
 
     /// Put the terminal-font letters on as real characters over whatever
-    /// is beneath them. Run after the pixel layers have rendered.
+    /// is beneath them, on one straight row — no wave. Run after the pixel
+    /// layers have rendered.
     pub fn paint_cells(&self, buf: &mut FrameBuffer, scrolled: f64, frame: usize) {
         let t = frame as f64 / FPS;
+        let row = (self.y0 + BASE - 4) / 2;
         for g in self.glyphs.iter().filter(|g| g.font == Font::Term) {
-            let Some((x, base)) = self.spot(g, buf.width, scrolled, t) else { continue };
-            let row = (base - 4) / 2;
+            let Some((x, _)) = self.spot(g, buf.width, scrolled, t) else { continue };
             if x < 0 || x as usize >= buf.width || row < 0 || row as usize >= buf.height {
                 continue;
             }
             let color = match g.style {
-                // Pink on the crests, lavender in the troughs.
-                Style::Candy => Color::lerp_rgb(LETTER_UPPER, LETTER_LOWER, ((base - self.y0 - BASE) as f64 / SCROLL_WAVE + 1.0) / 2.0),
+                Style::Candy => LETTER_UPPER,
                 Style::Flat => LETTER_OUTLINE,
             };
             let (x, row) = (x as usize, row as usize);
@@ -180,7 +180,7 @@ fn flat(c: &mut Canvas, rows: &[u8], (x, y): (i64, i64), scale: i64) {
 
 /// The scroll text, cracktro style: brag about what's on screen, never
 /// explain how.
-pub const PITCH: &str = "Welly welly welly well...   {hills}what do we have here?{gap}{logo}{pause 3}{gap}\
+pub const PITCH: &str = "{font term}Welly welly welly well...   {hills}what do we have here?{gap}{logo}{pause 3}{gap}{font c64}\
 ...and yes, before you ask: this is a TERMINAL. No browser, no video, no tricks you can see, just the good old terminal you have known and loved...   which you will now love a little bit more.   {font tiny}(psst... the small print: no pixels were harmed in the making of this demo){font c64}   \
 Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 Clouds that drift and throw shadows on the land.   \
@@ -245,6 +245,19 @@ mod tests {
         assert!(flat.iter().all(|&c| c == LETTER_OUTLINE));
         let (_, candy) = ink(one(Font::C64, Style::Candy, 'A'));
         assert!(candy.iter().any(|&c| c == LETTER_UPPER || c == LETTER_LOWER));
+    }
+
+    #[test]
+    fn term_letters_ride_a_straight_line() {
+        let s = one(Font::Term, Style::Candy, 'Q');
+        let rows: Vec<usize> = (0..48)
+            .map(|frame| {
+                let mut buf = FrameBuffer::new(60, 40);
+                s.paint_cells(&mut buf, 50.0, frame);
+                (0..40).find(|&y| (0..60).any(|x| buf.get(x, y).ch == 'Q')).unwrap()
+            })
+            .collect();
+        assert!(rows.iter().all(|&r| r == rows[0]), "{rows:?}");
     }
 
     #[test]

@@ -546,6 +546,7 @@ mod tests {
         let cue = stage.timeline.since(script::Code::Logo, f64::MAX).unwrap();
         let hills = stage.timeline.since(script::Code::Hills, f64::MAX).unwrap();
         for (name, t) in [
+            ("opening", hills - 0.3),
             ("hills 0.4", hills + 0.4),
             ("hills 1.3", hills + 1.3),
             ("hills 2.2", hills + 2.2),
