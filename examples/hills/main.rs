@@ -30,9 +30,11 @@ use stage::{locate, storyboard, Clock, Seek, Step, StepKind};
 use wordmark::LogoPhase;
 
 /// Scene height in terminal rows (two pixels each).
-pub const ROWS: usize = 40;
+pub const ROWS: usize = 44;
 /// Rows of open sky above the landscape, so the wordmark has headroom.
 pub const TOP_PAD: usize = 6;
+/// Top pixel row of the licence scroller at rest (it waves around this).
+const SCROLLER_Y: i64 = (ROWS * 2) as i64 - 21;
 
 /// A panel step in progress.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -248,7 +250,7 @@ fn put_band(buf: &mut FrameBuffer, row: usize, text: &str) {
 fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>) -> Layers {
     let (word, x0, y0) = wordmark::Wordmark::placed(screen_w);
     // Baseline high enough that the scroller's wave plus extrusion stays on screen.
-    let scroller = scroller::Scroller::new(scroller::LICENSE_TEXT, (ROWS * 2) as i64 - 15);
+    let scroller = scroller::Scroller::new(scroller::LICENSE_TEXT, SCROLLER_Y);
 
     let logo_view = view.clone();
     let frame_view = view;
@@ -489,8 +491,26 @@ mod tests {
     }
 
     #[test]
+    fn scroller_wave_clears_the_bottom_border_with_room_to_spare() {
+        let scroller = scroller::Scroller::new(scroller::LICENSE_TEXT, SCROLLER_Y);
+        let layers = Layers::new(ROWS).layer(Layer::paint(move |c| scroller.paint(c)));
+        let mut lowest = 0;
+        for frame in 0..120 {
+            let mut b = FrameBuffer::new(120, ROWS);
+            layers.render(&mut b, frame);
+            for y in 0..ROWS {
+                if (0..120).any(|x| b.get(x, y).ch != ' ') {
+                    lowest = lowest.max(y);
+                }
+            }
+        }
+        // At least one free row between the wave's lowest point and the border.
+        assert!(lowest + 2 < ROWS - 1, "scroller reaches row {lowest} of {ROWS}");
+    }
+
+    #[test]
     fn size_check_needs_the_scene_height() {
-        assert!(size_problem(24).unwrap().contains("40"));
+        assert!(size_problem(24).unwrap().contains("44"));
         assert_eq!(size_problem(ROWS), None);
         assert_eq!(size_problem(60), None);
     }
