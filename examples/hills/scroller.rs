@@ -181,7 +181,7 @@ fn flat(c: &mut Canvas, rows: &[u8], (x, y): (i64, i64), scale: i64) {
 /// The scroll text, cracktro style: brag about what's on screen, never
 /// explain how.
 pub const PITCH: &str = "{font term}Welly welly welly well...{pause 3}{hills}{pause 4}   what do we have here?{gap}{logo}{pause 3}{gap}{font c64}\
-...and yes, before you ask: this is a TERMINAL. No browser, no video, no tricks you can see, just the good old terminal you have known and loved...   which you will now love a little bit more.   {font tiny}(psst... the small print: no pixels were harmed in the making of this demo){font c64}   \
+...and yes, before you ask: this is a TERMINAL. No browser, no video, no tricks you can see, just the good old terminal you have known and loved...   which you will now love a little bit more.   {font tiny}(psst... the small print: no pixels were harmed in the making of this demo - because there are no pixels!){font c64}   \
 Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 Clouds that drift and throw shadows on the land.   \
 A logo that will not sit still, bouncing every letter on its own little wave.   \
