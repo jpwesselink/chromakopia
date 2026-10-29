@@ -100,6 +100,17 @@ pub fn paint_frame(c: &mut Canvas, geo: &Geometry) {
     fill(c, inner, PANEL_FILL);
 }
 
+/// An effect's name as panel text: the C64 font when it fits in `max_w`
+/// columns, else figlet (Basic, then plain text).
+pub fn name_art(name: &str, max_w: usize) -> Vec<String> {
+    let rows = super::glyphs::block_text(name);
+    if rows[0].chars().count() <= max_w {
+        rows
+    } else {
+        super::figlet::fit(name, max_w)
+    }
+}
+
 /// Plays `inner` `k` times faster.
 struct Faster {
     inner: Box<dyn Effect>,
@@ -116,32 +127,31 @@ impl Effect for Faster {
     }
 }
 
-/// Pink → lavender → sky → mint and back. Cyclic, for plasma.
+/// Hot pink → violet → bright blue → mint and back. Cyclic, for plasma.
 fn hero() -> Vec<Color> {
-    gradient(&["#ffb3c7", "#b9a2f0", "#a8d8ff", "#a6e3a6", "#ffb3c7"]).palette(256)
+    gradient(&["#ff5fa2", "#9b6bff", "#3fb6ff", "#3fe0a0", "#ff5fa2"]).palette(256)
 }
 
-/// Violet → lavender → pink → cream: spotlights and height.
+/// Deep violet → violet → hot pink → cream: spotlights and height.
 fn brand() -> Vec<Color> {
-    gradient(&["#4e306e", "#b9a2f0", "#ffb3c7", "#fff8e7"]).palette(64)
+    gradient(&["#5a3a8a", "#9b6bff", "#ff5fa2", "#fff8e7"]).palette(64)
 }
 
-/// Violet → lilac → blush: the softer second voice in mixes.
+/// Deep violet → purple → orchid → blush: the second voice in mixes.
 fn dusk() -> Vec<Color> {
-    gradient(&["#4e306e", "#8c6bb8", "#c8b4ff", "#ffe0ee"]).palette(64)
+    gradient(&["#5a3a8a", "#7a4fd0", "#c58bff", "#ffc2e0"]).palette(64)
 }
 
-/// Brightness ramp for effects with fixed colours: violet → lavender →
-/// pink → cream. Starts above the panel fill so even dim cells stay
+/// Brightness ramp for effects with fixed colours: deep violet → violet
+/// → hot pink → candy pink → cream. Starts above the panel fill so even dim cells stay
 /// visible.
 fn glow_ramp() -> Vec<Color> {
-    gradient(&["#4e306e", "#8c6bb8", "#b9a2f0", "#ffb3c7", "#fff8e7"]).palette(64)
+    gradient(&["#5a3a8a", "#9b6bff", "#ff5fa2", "#ff9fc8", "#fff8e7"]).palette(64)
 }
 
-/// A pastel rainbow for Rainbow: pink → peach → pistachio → mint → sky →
-/// lilac → back.
+/// Rainbow in candy colours: hot pink → purple → blue → mint → back.
 fn hue_loop() -> Vec<Color> {
-    gradient(&["#ffb3c7", "#ffd4b8", "#d8f0a8", "#a6e3a6", "#a8d8ff", "#c8b4ff", "#ffb3c7"]).palette(360)
+    gradient(&["#ff5fa2", "#c45fff", "#3fb6ff", "#3fe0a0", "#ff5fa2"]).palette(360)
 }
 
 /// How `Remap` reads a cell's colour.
@@ -265,7 +275,7 @@ mod tests {
     #[test]
     fn flap_spells_its_name_before_it_falls_out() {
         use super::super::stage::PANEL_SECS;
-        let text = super::super::figlet::fit("FLAP", geometry(200, 3).w - 2).join("\n");
+        let text = name_art("FLAP", geometry(200, 3).w - 2).join("\n");
         let fx = effect_for(PanelKind::Flap, &text);
         let (w, h) = fx.size();
         let mut buf = FrameBuffer::new(w, h);
@@ -278,12 +288,12 @@ mod tests {
     }
 
     #[test]
-    fn every_panel_has_no_warm_rainbow_hues() {
+    fn every_panel_skips_red_orange_and_yellow() {
         use super::super::stage::{storyboard, StepKind};
         // Every panel — fixed-colour effects included — speaks the palette.
         for st in storyboard() {
             let StepKind::Panel { kind, name, .. } = st.kind else { continue };
-            let fx = effect_for(kind, &super::super::figlet::fit(name, 100).join("\n"));
+            let fx = effect_for(kind, &name_art(name, 100).join("\n"));
             for frame in [0, 40, 90, 150] {
                 let mut buf = FrameBuffer::new(100, 13);
                 fx.render(&mut buf, frame);
@@ -294,12 +304,20 @@ mod tests {
                             continue;
                         }
                         let (h, sat, v) = cell.color.to_hsv();
-                        let warm = (h < 70.0 || h > 330.0) && sat > 0.45 && v > 0.35;
+                        // Pinks and magentas (> 330°) are the palette; red to yellow are not.
+                        let warm = (h < 60.0 || h > 345.0) && sat > 0.45 && v > 0.35;
                         assert!(!warm, "{name} frame {frame}: warm colour {:?} at ({x},{y})", cell.color);
                     }
                 }
             }
         }
+    }
+
+    #[test]
+    fn names_use_the_c64_font_and_fall_back_when_too_wide() {
+        assert_eq!(name_art("VECTORFIELD", 102), super::super::glyphs::block_text("VECTORFIELD"));
+        let narrow = name_art("VECTORFIELD", 60);
+        assert!(narrow.iter().all(|r| r.chars().count() <= 60), "{narrow:?}");
     }
 
     #[test]

@@ -127,7 +127,7 @@ impl Stage {
             .map(|st| match st.kind {
                 StepKind::Panel { kind, name, .. } => {
                     let geo = panel::geometry(screen_w, st.block);
-                    Some(panel::effect_for(kind, &figlet::fit(name, geo.w - 2).join("\n")))
+                    Some(panel::effect_for(kind, &panel::name_art(name, geo.w - 2).join("\n")))
                 }
                 _ => None,
             })

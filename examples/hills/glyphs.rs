@@ -189,6 +189,27 @@ pub fn text_width(text: &str) -> i64 {
     text.chars().count() as i64 * 8
 }
 
+/// `text` in the C64 ROM font as terminal text: every lit pixel one `█`
+/// cell, so a letter is 8 columns by 8 rows — tall and narrow on screen,
+/// like a double-height intro charset. Blank rows above and below are
+/// trimmed so the ink centres.
+pub fn block_text(text: &str) -> Vec<String> {
+    let glyphs: Vec<[u8; 8]> = text.chars().map(c64).collect();
+    let mut rows: Vec<String> = (0..8)
+        .map(|y| {
+            glyphs
+                .iter()
+                .flat_map(|g| (0..8).map(move |x| if g[y] & (0x80 >> x) != 0 { '█' } else { ' ' }))
+                .collect()
+        })
+        .collect();
+    while rows.last().is_some_and(|r| r.trim().is_empty()) {
+        rows.pop();
+    }
+    let top = rows.iter().take_while(|r| r.trim().is_empty()).count();
+    rows.split_off(top)
+}
+
 /// Set `text` in the C64 caption font with its top-left at `at`, in the
 /// letter style (one extrusion step).
 pub fn stamp_text(c: &mut Canvas, text: &str, at: (i64, i64), face: &mut Vec<(i64, i64, Color)>) {
@@ -213,6 +234,16 @@ mod tests {
             assert!(has_c64(ch), "missing {ch:?}");
         }
         assert!(!has_c64('×'));
+    }
+
+    #[test]
+    fn block_text_draws_rom_pixels_as_full_blocks() {
+        let rows = block_text("A");
+        // ROM row 7 is blank and gets trimmed.
+        assert_eq!(rows.len(), 7);
+        assert_eq!(rows[0], "   ██   ");
+        assert_eq!(rows[3], " ██████ ");
+        assert!(block_text("AB").iter().all(|r| r.chars().count() == 16));
     }
 
     #[test]
