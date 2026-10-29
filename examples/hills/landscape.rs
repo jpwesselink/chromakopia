@@ -1,4 +1,5 @@
-//! The spooky landscape: night sky, purple slime fog, toxic hills, slime ground.
+//! The landscape in the docs site's colours: near-black night, plum and
+//! dusty-violet fog, sage hills rising to brand green, plum ground.
 
 use chromakopia::animate::dither;
 use chromakopia::prelude::*;
@@ -6,26 +7,26 @@ use std::f64::consts::PI;
 
 use super::{ROWS, TOP_PAD};
 
-// Cloud shadows multiply with a cold violet.
-const SHADOW: Color = Color { r: 0x6A, g: 0x4C, b: 0x93 };
+// Cloud shadows multiply with plum.
+const SHADOW: Color = Color { r: 0x4E, g: 0x2A, b: 0x4E };
 
-// Halloween night, darkest at the back; the front hills glow the docs
-// site's toxic green (#00ff88 → #00ffcc).
-pub const SKY: Color = Color { r: 0x0E, g: 0x07, b: 0x16 };
-const SKY_HAZE: Color = Color { r: 0x2A, g: 0x10, b: 0x3E };
-const FOG_DEEP: Color = Color { r: 0x3A, g: 0x14, b: 0x58 };
-const FOG: Color = Color { r: 0x5B, g: 0x1E, b: 0x86 };
-const FOG_GLOW: Color = Color { r: 0x8E, g: 0x3C, b: 0xC8 };
-const MOSS_DARK: Color = Color { r: 0x0F, g: 0x2E, b: 0x1C };
-const MOSS: Color = Color { r: 0x17, g: 0x4A, b: 0x2A };
-const SWAMP: Color = Color { r: 0x1E, g: 0x6B, b: 0x3A };
-const SWAMP_LIGHT: Color = Color { r: 0x2E, g: 0x8B, b: 0x4A };
-const SLIME: Color = Color { r: 0x39, g: 0xB5, b: 0x4A };
-const TOXIC: Color = Color { r: 0x00, g: 0xFF, b: 0x88 };
-const TOXIC_CYAN: Color = Color { r: 0x00, g: 0xFF, b: 0xCC };
-const SLIME_PURPLE: Color = Color { r: 0x8A, g: 0x2B, b: 0xE2 };
-const SLIME_GRAPE: Color = Color { r: 0x5B, g: 0x1E, b: 0x86 };
-const SLIME_DEEP: Color = Color { r: 0x2A, g: 0x0E, b: 0x3F };
+// Palette sampled from the docs site (web/docs/styles/index.css and the
+// hero ASCII): #0a0a0a background, plum and dusty-violet ASCII, sage
+// greens, brand green #00cc66 / #00ff88. Darkest at the back.
+pub const SKY: Color = Color { r: 0x0A, g: 0x0A, b: 0x0A };
+const SKY_HAZE: Color = Color { r: 0x1A, g: 0x14, b: 0x20 };
+const PLUM: Color = Color { r: 0x4E, g: 0x2A, b: 0x4E };
+const PLUM_DEEP: Color = Color { r: 0x2E, g: 0x18, b: 0x2E };
+const DUSK: Color = Color { r: 0x54, g: 0x4E, b: 0x6C };
+const DUSK_LIGHT: Color = Color { r: 0x6A, g: 0x64, b: 0x86 };
+const SAGE_DARK: Color = Color { r: 0x2A, g: 0x3A, b: 0x2A };
+const SAGE_DIM: Color = Color { r: 0x48, g: 0x60, b: 0x44 };
+const SAGE: Color = Color { r: 0x6C, g: 0x90, b: 0x66 };
+const SAGE_LIGHT: Color = Color { r: 0x88, g: 0xBB, b: 0x88 };
+const BRAND: Color = Color { r: 0x00, g: 0xCC, b: 0x66 };
+const BRAND_LIGHT: Color = Color { r: 0x00, g: 0xFF, b: 0x88 };
+const GRAPE: Color = Color { r: 0x5A, g: 0x2A, b: 0x54 };
+const GRAPE_DEEP: Color = Color { r: 0x2A, g: 0x14, b: 0x28 };
 /// Seconds for one full left→right→left swing.
 const PERIOD: f64 = 4.5;
 /// Peak horizontal displacement of the back layer, in pixels (= cells)
@@ -83,17 +84,17 @@ pub fn landscape() -> Layers {
     let h = ((ROWS - TOP_PAD) * 2) as f64;
     // Back to front: clouds, greens, then ground.
     let ridges = [
-        ridge(top + h * 0.28, 8.0, (23.0, 41.0), 0.3, (FOG_DEEP, FOG, 2)),
-        ridge_lifted(top + h * 0.38, 8.0, (19.0, 37.0), 1.9, (FOG, FOG_GLOW, 1), cumulus),
-        ridge(top + h * 0.49, 8.0, (21.0, 33.0), 4.1, (MOSS_DARK, MOSS, 2)),
-        ridge(top + h * 0.59, 7.0, (25.0, 43.0), 2.6, (SWAMP, SWAMP_LIGHT, 1)),
-        ridge(top + h * 0.69, 7.0, (18.0, 31.0), 5.2, (SLIME, SWAMP_LIGHT, 1)),
-        ridge(top + h * 0.79, 6.0, (22.0, 39.0), 0.9, (TOXIC, TOXIC_CYAN, 1)),
-        ridge(top + h * 0.91, 6.0, (20.0, 35.0), 3.3, (SLIME_GRAPE, SLIME_PURPLE, 1)),
-        ridge(top + h * 1.03, 5.0, (24.0, 45.0), 6.0, (SLIME_DEEP, SLIME_GRAPE, 2)),
+        ridge(top + h * 0.28, 8.0, (23.0, 41.0), 0.3, (PLUM_DEEP, PLUM, 2)),
+        ridge_lifted(top + h * 0.38, 8.0, (19.0, 37.0), 1.9, (DUSK, DUSK_LIGHT, 1), cumulus),
+        ridge(top + h * 0.49, 8.0, (21.0, 33.0), 4.1, (SAGE_DARK, SAGE_DIM, 2)),
+        ridge(top + h * 0.59, 7.0, (25.0, 43.0), 2.6, (SAGE_DIM, SAGE, 1)),
+        ridge(top + h * 0.69, 7.0, (18.0, 31.0), 5.2, (SAGE, SAGE_LIGHT, 1)),
+        ridge(top + h * 0.79, 6.0, (22.0, 39.0), 0.9, (BRAND, BRAND_LIGHT, 1)),
+        ridge(top + h * 0.91, 6.0, (20.0, 35.0), 3.3, (PLUM, GRAPE, 1)),
+        ridge(top + h * 1.03, 5.0, (24.0, 45.0), 6.0, (GRAPE_DEEP, PLUM, 2)),
     ];
 
-    // Sky: night black-purple, dithered toward a violet haze in the top rows.
+    // Sky: the site's #0a0a0a, dithered toward a faint plum haze up top.
     let sky = Layer::new(|p| {
         let level = match p.y {
             0..=1 => 2,
@@ -104,8 +105,8 @@ pub fn landscape() -> Layers {
     });
 
     // Cloud shadows: ovals over the land, one every 64 pixels, each a
-    // bit different in size and height — multiplied with cold violet so
-    // they darken whatever they pass over. Slower and wider than the ridges, on
+    // bit different in size and height — multiplied with plum so they
+    // darken whatever they pass over. Slower and wider than the ridges, on
     // their own swing.
     let shadows = Layer::new(move |p| {
         let slot = (p.x / 64.0).floor();

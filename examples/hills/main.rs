@@ -1,6 +1,6 @@
 //! Hills showcase — every chromakopia effect, cracktro style, over a
-//! spooky Halloween landscape of toxic green and purple slime hills
-//! (half-block pixel `Layers`).
+//! landscape in the docs site's colours — plum fog, sage hills, brand
+//! green (half-block pixel `Layers`).
 //!
 //! The show: CHROMAKOPIA drops in letter by letter and rides a DYCP wave,
 //! the MIT licence starts scrolling along the bottom (and keeps going),

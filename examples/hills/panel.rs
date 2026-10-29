@@ -4,14 +4,13 @@ use chromakopia::animate::framebuffer::FPS;
 use chromakopia::animate::Cell;
 use chromakopia::prelude::*;
 
-use super::glyphs::{LETTER_EXTRUDE, LETTER_OUTLINE};
+use super::glyphs::LETTER_EXTRUDE;
 use super::stage::PanelKind;
 use super::ROWS;
 
-/// Panel fill — the letter outline's near-black purple.
-pub const PANEL_FILL: Color = LETTER_OUTLINE;
-/// One-pixel edge around the fill, a shade darker.
-pub const PANEL_EDGE: Color = Color { r: 0x12, g: 0x0A, b: 0x18 };
+/// Panel fill and edge — the docs site's feature cards.
+pub const PANEL_FILL: Color = Color { r: 0x0F, g: 0x1F, b: 0x0F };
+pub const PANEL_EDGE: Color = Color { r: 0x2A, g: 0x4A, b: 0x2A };
 
 pub const ENTER_SECS: f64 = 0.7;
 pub const EXIT_SECS: f64 = 0.5;
@@ -103,34 +102,35 @@ impl Effect for Faster {
     }
 }
 
-/// Purple slime → toxic green → cyan and back: the cyclic plasma palette.
-fn slime() -> Vec<Color> {
-    gradient(&["#12001F", "#6A1B9A", "#8A2BE2", "#00FF88", "#7CFF4F", "#00FFCC", "#6A1B9A", "#12001F"]).palette(256)
+/// The docs site hero's banner palette (chromakopia-wasm letters_drop):
+/// deep green → brand green → cyan → blue and back. Cyclic, for plasma.
+fn hero() -> Vec<Color> {
+    gradient(&["#003322", "#00ff88", "#00ffcc", "#00bbff", "#003322"]).palette(256)
 }
 
-/// Dark moss → toxic green → glow: spotlights and height.
-fn toxic() -> Vec<Color> {
-    gradient(&["#0F2E1C", "#1E6B3A", "#00FF88", "#E8FFE8"]).palette(64)
+/// Card green → brand green → brand-lighter: spotlights and height.
+fn brand() -> Vec<Color> {
+    gradient(&["#0f1f0f", "#009944", "#00cc66", "#99ffdd"]).palette(64)
 }
 
-/// Deep purple → ghostly lilac.
-fn ghost() -> Vec<Color> {
-    gradient(&["#2A0E3F", "#6A1B9A", "#8E3CC8", "#E8D8FF"]).palette(64)
+/// The hero's muted ASCII: plum → dusty violet → pale lilac.
+fn dusk() -> Vec<Color> {
+    gradient(&["#2a1428", "#4e2a4e", "#5a5472", "#c8c0d8"]).palette(64)
 }
 
-fn slime_plasma(text: &str) -> On<Plasma> {
-    Plasma::new().palette(slime()).on(text)
+fn hero_plasma(text: &str) -> On<Plasma> {
+    Plasma::new().palette(hero()).on(text)
 }
 
 /// The effect a panel shows, driven over `text` (the figlet-rendered name).
-/// Everything that takes a palette gets the Halloween ones; only the
+/// Everything that takes a palette gets the docs site's; only the
 /// RAINBOW panel shows a rainbow.
 pub fn effect_for(kind: PanelKind, text: &str) -> Box<dyn Effect> {
     use PanelKind as K;
     match kind {
-        K::Plasma => Box::new(slime_plasma(text)),
+        K::Plasma => Box::new(hero_plasma(text)),
         K::Rainbow => Box::new(Rainbow::on(text)),
-        K::Glow => Box::new(Glow::new().palette(toxic()).on(text)),
+        K::Glow => Box::new(Glow::new().palette(brand()).on(text)),
         K::Pulse => Box::new(Pulse::on(text)),
         K::Neon => Box::new(Neon::on(text)),
         K::Radar => Box::new(Radar::on(text)),
@@ -139,20 +139,20 @@ pub fn effect_for(kind: PanelKind, text: &str) -> Box<dyn Effect> {
         // Flap settles one cell every 2 frames, spaces included — far too
         // slow for a figlet block in a 5 s panel, so run it 6× faster.
         K::Flap => Box::new(Faster { inner: Box::new(Flap::new(text)), k: 6 }),
-        K::Scroll => Box::new(Scroll::new(text).palette(toxic())),
-        K::Spread => Box::new(Spread::new(text).palette(ghost())),
-        K::Marquee => Box::new(Marquee::wrap(slime_plasma(text)).speed(20.0)),
-        K::VSineWave => Box::new(VSineWave::wrap(slime_plasma(text))),
-        K::Dycp => Box::new(Dycp::new(text).palette(slime())),
-        K::Fld => Box::new(Fld::new(slime_plasma(text))),
-        K::Wind => Box::new(Wind::wrap(slime_plasma(text))),
-        K::VectorField => Box::new(VectorField::new().palette(slime())),
-        K::HeightMap => Box::new(HeightMap::new().palette(toxic())),
-        K::Screen => Box::new(Blend::new(slime_plasma(text), Radar::on(text), BlendMode::Screen)),
-        K::Multiply => Box::new(Blend::new(slime_plasma(text), Glow::new().palette(ghost()).on(text), BlendMode::Multiply)),
+        K::Scroll => Box::new(Scroll::new(text).palette(brand())),
+        K::Spread => Box::new(Spread::new(text).palette(dusk())),
+        K::Marquee => Box::new(Marquee::wrap(hero_plasma(text)).speed(20.0)),
+        K::VSineWave => Box::new(VSineWave::wrap(hero_plasma(text))),
+        K::Dycp => Box::new(Dycp::new(text).palette(hero())),
+        K::Fld => Box::new(Fld::new(hero_plasma(text))),
+        K::Wind => Box::new(Wind::wrap(hero_plasma(text))),
+        K::VectorField => Box::new(VectorField::new().palette(hero())),
+        K::HeightMap => Box::new(HeightMap::new().palette(brand())),
+        K::Screen => Box::new(Blend::new(hero_plasma(text), Radar::on(text), BlendMode::Screen)),
+        K::Multiply => Box::new(Blend::new(hero_plasma(text), Glow::new().palette(dusk()).on(text), BlendMode::Multiply)),
         K::Transition => Box::new(Transition::new(
-            slime_plasma(text),
-            Glow::new().palette(ghost()).on(text),
+            hero_plasma(text),
+            Glow::new().palette(dusk()).on(text),
             2.5,
             Easing::EaseInOut,
         )),
@@ -204,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn spooky_panels_have_no_warm_rainbow_hues() {
+    fn palette_panels_have_no_warm_rainbow_hues() {
         use super::super::stage::{storyboard, StepKind};
         use PanelKind as K;
         // Effects with their own fixed library colours keep them.
