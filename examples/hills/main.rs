@@ -686,14 +686,19 @@ mod tests {
     fn space_jumps_to_the_next_code() {
         let stage = Stage::new(120);
         stage.seek_to(0.0);
-        // First code: the hills come in.
-        *stage.seek.lock().unwrap() = Some(Seek::Next);
-        let v = stage.view_at(0);
+        let next = |frame| {
+            *stage.seek.lock().unwrap() = Some(Seek::Next);
+            stage.view_at(frame)
+        };
+        // First stop: the opening line pauses mid-screen, nothing else yet.
+        let v = next(0);
+        assert_eq!((v.hills, v.logo), (None, LogoPhase::Hidden));
+        // Then the hills come in.
+        let v = next(60);
         assert_eq!((v.hills, v.logo), (Some(0.0), LogoPhase::Hidden));
-        // Next: the logo drops — and the jump sticks: a second later it's a second in.
-        *stage.seek.lock().unwrap() = Some(Seek::Next);
-        assert_eq!(stage.view_at(60).logo, LogoPhase::Enter(0.0));
-        assert_eq!(stage.view_at(120).logo, LogoPhase::Enter(1.0));
+        // Then the logo drops — and the jump sticks: a second later it's a second in.
+        assert_eq!(next(120).logo, LogoPhase::Enter(0.0));
+        assert_eq!(stage.view_at(180).logo, LogoPhase::Enter(1.0));
     }
 
     #[test]
