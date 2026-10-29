@@ -2,13 +2,13 @@
 
 use chromakopia::prelude::*;
 
-// Letter style: the docs site's title gradient (#99ffdd glow edge,
-// #00ffcc → #00bbff) washed 35% toward grey, black outline, plum extrusion.
-pub const LETTER_HIGHLIGHT: Color = Color { r: 0x99, g: 0xDC, b: 0xC6 };
-pub const LETTER_UPPER: Color = Color { r: 0x36, g: 0xDC, b: 0xBA };
-pub const LETTER_LOWER: Color = Color { r: 0x36, g: 0xAF, b: 0xDC };
-pub const LETTER_OUTLINE: Color = Color { r: 0x0A, g: 0x0A, b: 0x0A };
-pub const LETTER_EXTRUDE: Color = Color { r: 0x4E, g: 0x2A, b: 0x4E };
+// Letter style: cream edge on top, pink upper half, lavender lower,
+// aubergine outline, violet extrusion.
+pub const LETTER_HIGHLIGHT: Color = Color { r: 0xFF, g: 0xF8, b: 0xE7 };
+pub const LETTER_UPPER: Color = Color { r: 0xFF, g: 0xB3, b: 0xC7 };
+pub const LETTER_LOWER: Color = Color { r: 0xB9, g: 0xA2, b: 0xF0 };
+pub const LETTER_OUTLINE: Color = Color { r: 0x2A, g: 0x16, b: 0x38 };
+pub const LETTER_EXTRUDE: Color = Color { r: 0x4E, g: 0x30, b: 0x6E };
 
 
 /// Chunky Mario-title-style capitals, drawn for this demo: 7×8, three-
@@ -121,8 +121,8 @@ const C64_GLYPHS: [(char, [u8; 8]); 87] = [
 
 /// Stamp one 8×8 glyph (MSB = leftmost pixel) at `scale`× with its top-
 /// left at (ox, oy): `extrude` steps of extrusion down-right, a one-pixel
-/// outline, then the face — highlight along each top edge, cyan upper half,
-/// blue lower. `face` is scratch space, reused between calls.
+/// outline, then the face — cream along each top edge, pink upper half,
+/// lavender lower. `face` is scratch space, reused between calls.
 pub fn stamp(
     c: &mut Canvas,
     glyph: &[u8; 8],

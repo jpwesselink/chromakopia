@@ -1,11 +1,10 @@
 //! Hills showcase — every chromakopia effect, cracktro style, over a
-//! landscape in the docs site's colours — plum fog, sage hills, brand
-//! green (half-block pixel `Layers`).
+//! pastel landscape of swaying dithered hills (half-block pixel `Layers`).
 //!
 //! The show: CHROMAKOPIA drops in letter by letter and rides a DYCP wave,
 //! the MIT licence starts scrolling along the bottom (and keeps going),
 //! the letters jump away, and then block by block — COLOR EFFECTS, SHAPE &
-//! LAYOUT, FIELDS, MIXING — each effect gets its own panel: near-black box
+//! LAYOUT, FIELDS, MIXING — each effect gets its own panel: aubergine box
 //! with the letters' outline and 3D extrusion, bouncing in with the
 //! effect's name in figlet, a heading above and a subtitle below. A finale
 //! drops the wordmark in again, and the show loops.
@@ -227,7 +226,7 @@ fn pixel_caption_fits(text: &str, width: usize) -> bool {
     glyphs::text_width(text) + 2 <= width as i64
 }
 
-/// Write `text` centred on `row` as plain terminal text — glow on a panel-
+/// Write `text` centred on `row` as plain terminal text — cream on a panel-
 /// coloured band one space wider each side — so any length fits. Clipped
 /// to the buffer.
 fn put_band(buf: &mut FrameBuffer, row: usize, text: &str) {

@@ -4,12 +4,12 @@ use chromakopia::animate::framebuffer::FPS;
 use chromakopia::animate::Cell;
 use chromakopia::prelude::*;
 
-use super::glyphs::LETTER_EXTRUDE;
+use super::glyphs::{LETTER_EXTRUDE, LETTER_OUTLINE};
 use super::stage::PanelKind;
 
-/// Panel fill and edge — the docs site's feature cards.
-pub const PANEL_FILL: Color = Color { r: 0x0F, g: 0x1F, b: 0x0F };
-pub const PANEL_EDGE: Color = Color { r: 0x2A, g: 0x4A, b: 0x2A };
+/// Panel fill (the letter-outline aubergine) and its darker edge.
+pub const PANEL_FILL: Color = LETTER_OUTLINE;
+pub const PANEL_EDGE: Color = Color { r: 0x12, g: 0x0A, b: 0x18 };
 
 pub const ENTER_SECS: f64 = 0.7;
 pub const EXIT_SECS: f64 = 0.5;
@@ -116,33 +116,32 @@ impl Effect for Faster {
     }
 }
 
-/// The docs site hero's banner palette (chromakopia-wasm letters_drop):
-/// deep green → brand green → cyan → blue and back. Cyclic, for plasma.
+/// Pink → lavender → sky → mint and back. Cyclic, for plasma.
 fn hero() -> Vec<Color> {
-    gradient(&["#003322", "#00ff88", "#00ffcc", "#00bbff", "#003322"]).palette(256)
+    gradient(&["#ffb3c7", "#b9a2f0", "#a8d8ff", "#a6e3a6", "#ffb3c7"]).palette(256)
 }
 
-/// Card green → brand green → brand-lighter: spotlights and height.
+/// Violet → lavender → pink → cream: spotlights and height.
 fn brand() -> Vec<Color> {
-    gradient(&["#0f1f0f", "#009944", "#00cc66", "#99ffdd"]).palette(64)
+    gradient(&["#4e306e", "#b9a2f0", "#ffb3c7", "#fff8e7"]).palette(64)
 }
 
-/// The hero's muted ASCII: plum → dusty violet → pale lilac.
+/// Violet → lilac → blush: the softer second voice in mixes.
 fn dusk() -> Vec<Color> {
-    gradient(&["#2a1428", "#4e2a4e", "#5a5472", "#c8c0d8"]).palette(64)
+    gradient(&["#4e306e", "#8c6bb8", "#c8b4ff", "#ffe0ee"]).palette(64)
 }
 
-/// Brightness ramp for effects with fixed colours: card-border green →
-/// brand green → brand-lighter. Starts above the panel fill so even dim
-/// cells stay visible.
+/// Brightness ramp for effects with fixed colours: violet → lavender →
+/// pink → cream. Starts above the panel fill so even dim cells stay
+/// visible.
 fn glow_ramp() -> Vec<Color> {
-    gradient(&["#2a4a2a", "#009944", "#00cc66", "#00ff88", "#99ffdd"]).palette(64)
+    gradient(&["#4e306e", "#8c6bb8", "#b9a2f0", "#ffb3c7", "#fff8e7"]).palette(64)
 }
 
-/// A cyclic loop through the site's hues for Rainbow: brand green → cyan
-/// → blue → dusty violet → back.
+/// A pastel rainbow for Rainbow: pink → peach → pistachio → mint → sky →
+/// lilac → back.
 fn hue_loop() -> Vec<Color> {
-    gradient(&["#00ff88", "#00ffcc", "#00bbff", "#6a6486", "#00ff88"]).palette(360)
+    gradient(&["#ffb3c7", "#ffd4b8", "#d8f0a8", "#a6e3a6", "#a8d8ff", "#c8b4ff", "#ffb3c7"]).palette(360)
 }
 
 /// How `Remap` reads a cell's colour.
@@ -155,7 +154,7 @@ enum By {
 }
 
 /// Runs an effect that has fixed colours, then recolours its glyphs
-/// through `palette` — keeping its motion and light, in the site's colours.
+/// through `palette` — keeping its motion and light, in the pastel palette.
 struct Remap {
     inner: Box<dyn Effect>,
     palette: Vec<Color>,
@@ -197,7 +196,7 @@ fn hero_plasma(text: &str) -> On<Plasma> {
 }
 
 /// The effect a panel shows, driven over `text` (the figlet-rendered name).
-/// Everything speaks the docs site's palette: effects that take one get
+/// Everything speaks the pastel palette: effects that take one get
 /// it directly, fixed-colour effects are recoloured through `Remap`.
 pub fn effect_for(kind: PanelKind, text: &str) -> Box<dyn Effect> {
     use PanelKind as K;
