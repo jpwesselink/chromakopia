@@ -118,27 +118,87 @@ fn dusk() -> Vec<Color> {
     gradient(&["#2a1428", "#4e2a4e", "#5a5472", "#c8c0d8"]).palette(64)
 }
 
+/// Brightness ramp for effects with fixed colours: card-border green →
+/// brand green → brand-lighter. Starts above the panel fill so even dim
+/// cells stay visible.
+fn glow_ramp() -> Vec<Color> {
+    gradient(&["#2a4a2a", "#009944", "#00cc66", "#00ff88", "#99ffdd"]).palette(64)
+}
+
+/// A cyclic loop through the site's hues for Rainbow: brand green → cyan
+/// → blue → dusty violet → back.
+fn hue_loop() -> Vec<Color> {
+    gradient(&["#00ff88", "#00ffcc", "#00bbff", "#6a6486", "#00ff88"]).palette(360)
+}
+
+/// How `Remap` reads a cell's colour.
+#[derive(Clone, Copy)]
+enum By {
+    /// Dark → start of the palette, bright → end.
+    Luma,
+    /// Hue angle → position around a cyclic palette.
+    Hue,
+}
+
+/// Runs an effect that has fixed colours, then recolours its glyphs
+/// through `palette` — keeping its motion and light, in the site's colours.
+struct Remap {
+    inner: Box<dyn Effect>,
+    palette: Vec<Color>,
+    by: By,
+}
+
+impl Remap {
+    fn new(inner: impl Effect, palette: Vec<Color>, by: By) -> Self {
+        Self { inner: Box::new(inner), palette, by }
+    }
+}
+
+impl Effect for Remap {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        self.inner.render(buf, frame);
+        let last = (self.palette.len() - 1) as f64;
+        for y in 0..buf.height {
+            for x in 0..buf.width {
+                let cell = buf.get(x, y);
+                if cell.ch == ' ' {
+                    continue;
+                }
+                let t = match self.by {
+                    By::Luma => cell.color.luma(),
+                    By::Hue => cell.color.to_hsv().0 / 360.0,
+                };
+                buf.set_color(x, y, self.palette[(t.clamp(0.0, 1.0) * last).round() as usize]);
+            }
+        }
+    }
+
+    fn size(&self) -> (usize, usize) {
+        self.inner.size()
+    }
+}
+
 fn hero_plasma(text: &str) -> On<Plasma> {
     Plasma::new().palette(hero()).on(text)
 }
 
 /// The effect a panel shows, driven over `text` (the figlet-rendered name).
-/// Everything that takes a palette gets the docs site's; only the
-/// RAINBOW panel shows a rainbow.
+/// Everything speaks the docs site's palette: effects that take one get
+/// it directly, fixed-colour effects are recoloured through `Remap`.
 pub fn effect_for(kind: PanelKind, text: &str) -> Box<dyn Effect> {
     use PanelKind as K;
     match kind {
         K::Plasma => Box::new(hero_plasma(text)),
-        K::Rainbow => Box::new(Rainbow::on(text)),
+        K::Rainbow => Box::new(Remap::new(Rainbow::on(text), hue_loop(), By::Hue)),
         K::Glow => Box::new(Glow::new().palette(brand()).on(text)),
-        K::Pulse => Box::new(Pulse::on(text)),
-        K::Neon => Box::new(Neon::on(text)),
-        K::Radar => Box::new(Radar::on(text)),
-        K::Karaoke => Box::new(Karaoke::on(text)),
-        K::Glitch => Box::new(Glitch::new(text)),
+        K::Pulse => Box::new(Remap::new(Pulse::on(text), glow_ramp(), By::Luma)),
+        K::Neon => Box::new(Remap::new(Neon::on(text), glow_ramp(), By::Luma)),
+        K::Radar => Box::new(Remap::new(Radar::on(text), glow_ramp(), By::Luma)),
+        K::Karaoke => Box::new(Remap::new(Karaoke::on(text), glow_ramp(), By::Luma)),
+        K::Glitch => Box::new(Remap::new(Glitch::new(text), glow_ramp(), By::Luma)),
         // Flap settles one cell every 2 frames, spaces included — far too
         // slow for a figlet block in a 5 s panel, so run it 6× faster.
-        K::Flap => Box::new(Faster { inner: Box::new(Flap::new(text)), k: 6 }),
+        K::Flap => Box::new(Remap::new(Faster { inner: Box::new(Flap::new(text)), k: 6 }, glow_ramp(), By::Luma)),
         K::Scroll => Box::new(Scroll::new(text).palette(brand())),
         K::Spread => Box::new(Spread::new(text).palette(dusk())),
         K::Marquee => Box::new(Marquee::wrap(hero_plasma(text)).speed(20.0)),
@@ -148,7 +208,7 @@ pub fn effect_for(kind: PanelKind, text: &str) -> Box<dyn Effect> {
         K::Wind => Box::new(Wind::wrap(hero_plasma(text))),
         K::VectorField => Box::new(VectorField::new().palette(hero())),
         K::HeightMap => Box::new(HeightMap::new().palette(brand())),
-        K::Screen => Box::new(Blend::new(hero_plasma(text), Radar::on(text), BlendMode::Screen)),
+        K::Screen => Box::new(Blend::new(hero_plasma(text), Remap::new(Radar::on(text), dusk(), By::Luma), BlendMode::Screen)),
         K::Multiply => Box::new(Blend::new(hero_plasma(text), Glow::new().palette(dusk()).on(text), BlendMode::Multiply)),
         K::Transition => Box::new(Transition::new(
             hero_plasma(text),
@@ -204,16 +264,11 @@ mod tests {
     }
 
     #[test]
-    fn palette_panels_have_no_warm_rainbow_hues() {
+    fn every_panel_has_no_warm_rainbow_hues() {
         use super::super::stage::{storyboard, StepKind};
-        use PanelKind as K;
-        // Effects with their own fixed library colours keep them.
-        let fixed = [K::Rainbow, K::Pulse, K::Neon, K::Radar, K::Karaoke, K::Glitch, K::Flap, K::Screen];
+        // Every panel — fixed-colour effects included — speaks the palette.
         for st in storyboard() {
             let StepKind::Panel { kind, name, .. } = st.kind else { continue };
-            if fixed.contains(&kind) {
-                continue;
-            }
             let fx = effect_for(kind, &super::super::figlet::fit(name, 100).join("\n"));
             for frame in [0, 40, 90, 150] {
                 let mut buf = FrameBuffer::new(100, 13);
