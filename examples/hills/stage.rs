@@ -1,7 +1,7 @@
 //! The show's running order and the clock that walks it.
 
 pub const INTRO_SECS: f64 = 11.0;
-pub const LOGO_EXIT_SECS: f64 = 1.5;
+pub const LOGO_RISE_SECS: f64 = 1.2;
 pub const HEADING_SECS: f64 = 1.2;
 pub const PANEL_SECS: f64 = 8.0;
 pub const FIELD_SECS: f64 = 9.0;
@@ -19,7 +19,7 @@ pub enum PanelKind {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StepKind {
     Intro,
-    LogoExit,
+    LogoRise,
     Heading { title: &'static str },
     Panel { kind: PanelKind, name: &'static str, subtitle: &'static str },
     Finale,
@@ -40,9 +40,9 @@ pub fn storyboard() -> Vec<Step> {
     let heading = |title, block| step(StepKind::Heading { title }, block, HEADING_SECS);
     let panel = |kind, name, subtitle, block, secs| step(StepKind::Panel { kind, name, subtitle }, block, secs);
 
-    let mut s = vec![step(StepKind::Intro, 1, INTRO_SECS), step(StepKind::LogoExit, 1, LOGO_EXIT_SECS)];
+    let mut s = vec![step(StepKind::Intro, 1, INTRO_SECS), step(StepKind::LogoRise, 1, LOGO_RISE_SECS)];
 
-    s.push(heading("COLOR EFFECTS", 2));
+    s.push(heading("color effects", 2));
     for (kind, name, sub) in [
         (Plasma, "PLASMA", "smooth as butter"),
         (Rainbow, "RAINBOW", "every hue, all the time"),
@@ -55,7 +55,7 @@ pub fn storyboard() -> Vec<Step> {
         s.push(panel(kind, name, sub, 2, PANEL_SECS));
     }
 
-    s.push(heading("SHAPE & LAYOUT", 3));
+    s.push(heading("shape & layout", 3));
     for (kind, name, sub) in [
         (Glitch, "GLITCH", "signal lost"),
         (Flap, "FLAP", "departures, now boarding"),
@@ -71,11 +71,11 @@ pub fn storyboard() -> Vec<Step> {
     }
 
     // Fields fill the panel, so their name rides in the subtitle.
-    s.push(heading("FIELDS", 4));
+    s.push(heading("fields", 4));
     s.push(panel(VectorField, "VECTORFIELD", "VectorField: follow the flow", 4, FIELD_SECS));
     s.push(panel(HeightMap, "HEIGHTMAP", "HeightMap: hills you can read", 4, FIELD_SECS));
 
-    s.push(heading("MIXING", 5));
+    s.push(heading("mixing", 5));
     for (kind, name, sub) in [
         (Screen, "SCREEN", "light on light"),
         (Multiply, "MULTIPLY", "shadows with colour"),
@@ -109,9 +109,9 @@ pub fn locate(steps: &[Step], t: f64) -> (usize, f64) {
     unreachable!("storyboard is never empty")
 }
 
-/// Where the show continues after the finale: the logo exit.
+/// Where the show continues after the finale: the logo rising to the top.
 pub fn loop_target(steps: &[Step]) -> usize {
-    steps.iter().position(|s| s.kind == StepKind::LogoExit).expect("storyboard has a logo exit")
+    steps.iter().position(|s| s.kind == StepKind::LogoRise).expect("storyboard has a logo rise")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -184,7 +184,7 @@ mod tests {
     fn storyboard_shape() {
         let s = storyboard();
         assert_eq!(s[0].kind, StepKind::Intro);
-        assert_eq!(s[1].kind, StepKind::LogoExit);
+        assert_eq!(s[1].kind, StepKind::LogoRise);
         assert_eq!(s.last().unwrap().kind, StepKind::Finale);
         let panels = |b| s.iter().filter(|st| st.block == b && matches!(st.kind, StepKind::Panel { .. })).count();
         assert_eq!((panels(2), panels(3), panels(4), panels(5)), (7, 9, 2, 3));
@@ -232,7 +232,7 @@ mod tests {
     fn next_on_finale_loops() {
         let s = storyboard();
         assert_eq!(seek_target(&s, s.len() - 1, Seek::Next), loop_target(&s));
-        assert_eq!(s[loop_target(&s)].kind, StepKind::LogoExit);
+        assert_eq!(s[loop_target(&s)].kind, StepKind::LogoRise);
     }
 
     #[test]

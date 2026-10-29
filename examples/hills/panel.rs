@@ -20,8 +20,8 @@ pub const EFFECT_DELAY: f64 = ENTER_SECS + 0.2;
 const MAX_W: usize = 104;
 const MIN_W: usize = 20;
 const MARGIN: usize = 10;
-/// Resting top row: leaves room for the heading above.
-const REST_Y: i64 = 11;
+/// Resting top row: just below the wordmark at the top (2× letters).
+const REST_Y: i64 = 15;
 
 /// Panel interior in cells. `y` is the resting row.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -34,7 +34,8 @@ pub struct Geometry {
 
 pub fn geometry(screen_w: usize, block: usize) -> Geometry {
     let w = screen_w.saturating_sub(MARGIN).clamp(MIN_W, MAX_W);
-    let h = if block == 4 { 15 } else { 13 };
+    let _ = block;
+    let h = 11;
     Geometry { x: (screen_w as i64 - w as i64) / 2, y: REST_Y, w, h }
 }
 
@@ -111,9 +112,11 @@ pub fn name_art(name: &str, max_w: usize) -> Vec<String> {
     }
 }
 
-/// Rows of room DYCP and FLD get beyond their text: both move it up to
-/// their amplitude (3) away.
+/// Rows of room DYCP gets below its text (its amplitude is 3), and FLD
+/// above and below (its amplitude is set to match) — both within the
+/// panel's 11 rows around 7-row names.
 const WAVE_PAD: usize = 3;
+const FLD_PAD: usize = 2;
 
 /// `inner` with `top` and `bottom` empty rows around it, so effects that
 /// move rows or columns have room to do it without being cut off.
@@ -148,9 +151,10 @@ fn dycp(text: &str, pad: usize) -> Pad {
     Pad { inner: Box::new(Dycp::new(text).palette(hero())), top: 0, bottom: pad }
 }
 
-/// FLD over plasma `text`: rows bounce both ways, so room above and below.
+/// FLD over plasma `text`: rows bounce both ways by up to `pad`, with
+/// that much room above and below.
 fn fld(text: &str, pad: usize) -> Fld {
-    Fld::new(Pad { inner: Box::new(hero_plasma(text)), top: pad, bottom: pad })
+    Fld::new(Pad { inner: Box::new(hero_plasma(text)), top: pad, bottom: pad }).amplitude(pad as f64)
 }
 
 /// Plays `inner` `k` times faster.
@@ -271,7 +275,7 @@ pub fn effect_for(kind: PanelKind, text: &str) -> Box<dyn Effect> {
         K::Marquee => Box::new(Marquee::wrap(hero_plasma(text)).speed(30.0)),
         K::VSineWave => Box::new(VSineWave::wrap(hero_plasma(text))),
         K::Dycp => Box::new(dycp(text, WAVE_PAD)),
-        K::Fld => Box::new(fld(text, WAVE_PAD)),
+        K::Fld => Box::new(fld(text, FLD_PAD)),
         K::Wind => Box::new(Wind::wrap(hero_plasma(text))),
         K::VectorField => Box::new(VectorField::new().palette(hero())),
         K::HeightMap => Box::new(HeightMap::new().palette(brand())),
@@ -367,7 +371,7 @@ mod tests {
         // The waves move rows and columns beyond the text. Rendered into a
         // far taller buffer, nothing more may show up than within their
         // own size — i.e. nothing hangs off the bottom. (Off the top can't
-        // happen: FLD's text starts WAVE_PAD rows down, its amplitude is 3,
+        // happen: FLD's text starts FLD_PAD rows down, its amplitude is FLD_PAD,
         // and DYCP only dips downward.)
         let text = name_art("DYCP", 100).join("\n");
         let ink = |fx: &dyn Effect, extra: usize, frame| {
@@ -376,7 +380,7 @@ mod tests {
             fx.render(&mut buf, frame);
             (0..h + extra).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| buf.get(x, y).ch != ' ').count()
         };
-        let (dycp, fld) = (dycp(&text, WAVE_PAD), fld(&text, WAVE_PAD));
+        let (dycp, fld) = (dycp(&text, WAVE_PAD), fld(&text, FLD_PAD));
         for frame in (0..600).step_by(7) {
             assert_eq!(ink(&dycp, 0, frame), ink(&dycp, 20, frame), "dycp frame {frame}");
             assert_eq!(ink(&fld, 0, frame), ink(&fld, 20, frame), "fld frame {frame}");
@@ -384,7 +388,7 @@ mod tests {
         // Unpadded, they do lose ink — the bug this guards.
         let bare = Dycp::new(&text).palette(hero());
         assert!((0..600).step_by(7).any(|f| ink(&bare, 0, f) < ink(&bare, 20, f)));
-        assert!(dycp.size().1 <= 13 && fld.size().1 <= 13, "fits the panel");
+        assert!(dycp.size().1 <= 11 && fld.size().1 <= 11, "fits the panel");
     }
 
     #[test]
@@ -398,9 +402,9 @@ mod tests {
     #[test]
     fn geometry_is_centred() {
         let g = geometry(200, 2);
-        assert_eq!((g.w, g.h, g.y), (104, 13, 11));
+        assert_eq!((g.w, g.h, g.y), (104, 11, 15));
         assert_eq!(g.x, (200 - 104) / 2);
-        assert_eq!(geometry(200, 4).h, 15);
+        assert_eq!(geometry(200, 4).h, 11);
     }
 
     #[test]

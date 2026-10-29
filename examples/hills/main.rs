@@ -34,7 +34,7 @@ pub const ROWS: usize = 48;
 /// Rows of open sky above the landscape, so the wordmark has headroom.
 pub const TOP_PAD: usize = 6;
 /// Top pixel row of the licence scroller at rest (it waves around this).
-const SCROLLER_Y: i64 = (ROWS * 2) as i64 - 27;
+const SCROLLER_Y: i64 = (ROWS * 2) as i64 - 26;
 
 /// A panel step in progress.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -59,9 +59,10 @@ struct View {
 fn view_for(steps: &[Step], i: usize, local: f64) -> View {
     let step = steps[i];
     let logo = match step.kind {
-        StepKind::Intro | StepKind::Finale => LogoPhase::Enter(local),
-        StepKind::LogoExit => LogoPhase::Exit(local),
-        _ => LogoPhase::Hidden,
+        StepKind::Intro => LogoPhase::Enter(local),
+        StepKind::LogoRise => LogoPhase::Rise(local),
+        StepKind::Finale => LogoPhase::Fall(local),
+        _ => LogoPhase::Top,
     };
     let heading = steps[..=i]
         .iter()
@@ -216,13 +217,13 @@ fn frame_edges(buf: &mut FrameBuffer) {
 }
 
 /// Terminal row a plain-text heading sits on: where the pixel one would.
-const HEADING_ROW: usize = 4;
+const HEADING_ROW: usize = 28;
 /// Top pixel row of the resting pixel-font heading.
 const HEADING_Y: i64 = HEADING_ROW as i64 * 2;
 
-/// Terminal row the subtitle sits on: just below the panel's extrusion.
+/// Terminal row the subtitle sits on: the panel's bottom interior row.
 fn subtitle_row(geo: &panel::Geometry) -> usize {
-    (geo.y + geo.h as i64 + 2) as usize
+    (geo.y + geo.h as i64 - 1) as usize
 }
 
 /// Whether a caption fits on screen in the 8-column pixel font.
@@ -248,7 +249,7 @@ fn put_band(buf: &mut FrameBuffer, row: usize, text: &str) {
 }
 
 fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>) -> Layers {
-    let (word, x0, y0) = wordmark::Wordmark::placed(screen_w);
+    let word = wordmark::Wordmark::placed(screen_w);
     // Baseline high enough that the scroller's wave plus extrusion stays on screen.
     let scroller = scroller::Scroller::new(scroller::LICENSE_TEXT, SCROLLER_Y);
 
@@ -259,7 +260,7 @@ fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>) -> La
     landscape::landscape()
         .layer(Layer::paint(move |c| {
             let phase = logo_view.lock().unwrap().logo;
-            word.paint(c, x0, y0, phase)
+            word.paint(c, phase)
         }))
         // Panel boxes (fill, edge, extrusion).
         .layer(Layer::paint(move |c| {
@@ -271,13 +272,13 @@ fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>) -> La
         .layer(Layer::paint(move |c| scroller.paint(c)))
 }
 
-/// The block heading, dropping in with a bounce (plain text when it is
+/// The block heading under the panel, popping up with a bounce (plain text when it is
 /// too wide — see Stage::render).
 fn build_heading(view: Arc<Mutex<View>>) -> Layers {
     Layers::new(ROWS).layer(Layer::paint(move |c| {
         let Some((title, progress)) = view.lock().unwrap().heading else { return };
         let x = (c.width as i64 - glyphs::text_width(title)) / 2;
-        let y = HEADING_Y - ((1.0 - Easing::BounceOut.apply(progress)) * 20.0).round() as i64;
+        let y = HEADING_Y + ((1.0 - Easing::BounceOut.apply(progress)) * 20.0).round() as i64;
         glyphs::stamp_text(c, title, (x, y), &mut Vec::new());
     }))
 }
@@ -325,7 +326,7 @@ mod tests {
     fn intro_and_exit_drive_the_logo() {
         let s = storyboard();
         assert_eq!(view_for(&s, 0, 2.0).logo, wordmark::LogoPhase::Enter(2.0));
-        assert_eq!(view_for(&s, 1, 0.5).logo, wordmark::LogoPhase::Exit(0.5));
+        assert_eq!(view_for(&s, 1, 0.5).logo, wordmark::LogoPhase::Rise(0.5));
         assert!(view_for(&s, 0, 2.0).heading.is_none());
     }
 
@@ -334,9 +335,9 @@ mod tests {
         let s = storyboard();
         let h = s.iter().position(|st| matches!(st.kind, StepKind::Heading { .. })).unwrap();
         let (title, p) = view_for(&s, h, stage::HEADING_SECS / 2.0).heading.unwrap();
-        assert_eq!((title, p), ("COLOR EFFECTS", 0.5));
-        assert_eq!(view_for(&s, h + 3, 1.0).heading, Some(("COLOR EFFECTS", 1.0)));
-        assert_eq!(view_for(&s, h + 3, 1.0).logo, wordmark::LogoPhase::Hidden);
+        assert_eq!((title, p), ("color effects", 0.5));
+        assert_eq!(view_for(&s, h + 3, 1.0).heading, Some(("color effects", 1.0)));
+        assert_eq!(view_for(&s, h + 3, 1.0).logo, wordmark::LogoPhase::Top);
     }
 
     #[test]
@@ -352,7 +353,7 @@ mod tests {
     fn finale_shows_logo_only() {
         let s = storyboard();
         let v = view_for(&s, s.len() - 1, 1.0);
-        assert_eq!((v.logo, v.heading, v.panel), (wordmark::LogoPhase::Enter(1.0), None, None));
+        assert_eq!((v.logo, v.heading, v.panel), (wordmark::LogoPhase::Fall(1.0), None, None));
     }
 
     #[test]
@@ -438,21 +439,21 @@ mod tests {
     #[ignore]
     fn dump_blocks() {
         let s = storyboard();
-        let stage = Stage::new(120);
+        let stage = Stage::new(200);
         let mut out = String::new();
         for block in 1..=6 {
             let i = s.iter().position(|st| st.block == block).unwrap();
             let target = if block == 1 { 0 } else { i + 1 }; // first panel of the block
             let target = target.min(s.len() - 1);
             stage.seek_to(start_of(&s, target) + 2.0);
-            let mut b = FrameBuffer::new(120, ROWS);
+            let mut b = FrameBuffer::new(200, ROWS);
             stage.render(&mut b, 0);
             out += &format!("\n=== block {block} ===\n{}\n", b.to_ansi_string());
         }
         // Mid-push: the second colour panel shoving the first one out.
         let p = s.iter().position(is_panel).unwrap() + 1;
         stage.seek_to(start_of(&s, p) + 0.3);
-        let mut b = FrameBuffer::new(120, ROWS);
+        let mut b = FrameBuffer::new(200, ROWS);
         stage.render(&mut b, 0);
         out += &format!("\n=== push ===\n{}\n", b.to_ansi_string());
         std::fs::write("target/hills-blocks.ansi", out).unwrap();
@@ -485,7 +486,7 @@ mod tests {
         stage.render(&mut b, 0);
         let found = (0..ROWS).any(|y| {
             let line: String = (0..80).map(|x| b.get(x, y).ch).collect();
-            line.contains("SHAPE & LAYOUT")
+            line.contains("shape & layout")
         });
         assert!(found, "plain heading not found");
     }
@@ -506,6 +507,19 @@ mod tests {
         }
         // At least three free rows between the wave's lowest point and the border.
         assert!(lowest + 4 < ROWS - 1, "scroller reaches row {lowest} of {ROWS}");
+    }
+
+    #[test]
+    fn logo_panel_heading_and_scroller_stack_without_touching() {
+        // Pixel rows, top to bottom, at the widest (2×) wordmark.
+        let geo = panel::geometry(200, 2);
+        let panel_top = geo.y * 2 - 1; // outline
+        let panel_bottom = (geo.y + geo.h as i64) * 2 + 2; // outline + extrusion
+        let heading = (HEADING_Y - 1, HEADING_Y + 8); // outline .. extrusion
+        let scroller_top = SCROLLER_Y - 4 - 1; // wave peak, outline
+        assert!(wordmark::Wordmark::placed(200).bottom_at_top() < panel_top);
+        assert!(panel_bottom < heading.0, "panel {panel_bottom} vs heading {}", heading.0);
+        assert!(heading.1 < scroller_top, "heading {} vs scroller {scroller_top}", heading.1);
     }
 
     #[test]
