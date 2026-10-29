@@ -138,10 +138,28 @@ impl Effect for Stage {
                 }
             }
         }
+
+        if buf.width > 0 && buf.height > 0 {
+            frame_edges(buf);
+        }
     }
 
     fn size(&self) -> (usize, usize) {
         (0, ROWS)
+    }
+}
+
+/// Paint the outermost columns and the top row one flat night-sky colour.
+/// Terminals like iTerm stretch edge cells' backgrounds into the window
+/// margin; with half-block dithering that shows as stripes.
+fn frame_edges(buf: &mut FrameBuffer) {
+    let edge = Cell::with_bg(' ', landscape::SKY, landscape::SKY);
+    for y in 0..buf.height {
+        buf.set(0, y, edge);
+        buf.set(buf.width - 1, y, edge);
+    }
+    for x in 0..buf.width {
+        buf.set(x, 0, edge);
     }
 }
 
@@ -360,6 +378,24 @@ mod tests {
         assert!(size_problem(24).unwrap().contains("40"));
         assert_eq!(size_problem(ROWS), None);
         assert_eq!(size_problem(60), None);
+    }
+
+    #[test]
+    fn edge_cells_are_one_flat_colour() {
+        // Terminals like iTerm stretch the edge cells' background into the
+        // window margin; anything but one flat colour there shows as stripes.
+        let s = storyboard();
+        let stage = Stage::new(120);
+        for t in [2.0, start_of(&s, 3) + 2.0] {
+            stage.seek_to(t);
+            let mut b = FrameBuffer::new(120, ROWS);
+            stage.render(&mut b, 0);
+            let edges = (0..ROWS).flat_map(|y| [(0, y), (119, y)]).chain((0..120).map(|x| (x, 0)));
+            for (x, y) in edges {
+                let cell = b.get(x, y);
+                assert_eq!((cell.ch, cell.bg), (' ', Some(landscape::SKY)), "({x},{y}) at t={t}");
+            }
+        }
     }
 
     #[test]

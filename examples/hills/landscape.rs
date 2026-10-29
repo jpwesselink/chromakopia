@@ -11,7 +11,7 @@ const SHADOW: Color = Color { r: 0x6A, g: 0x4C, b: 0x93 };
 
 // Halloween night, darkest at the back; the front hills glow the docs
 // site's toxic green (#00ff88 → #00ffcc).
-const SKY: Color = Color { r: 0x0E, g: 0x07, b: 0x16 };
+pub const SKY: Color = Color { r: 0x0E, g: 0x07, b: 0x16 };
 const SKY_HAZE: Color = Color { r: 0x2A, g: 0x10, b: 0x3E };
 const FOG_DEEP: Color = Color { r: 0x3A, g: 0x14, b: 0x58 };
 const FOG: Color = Color { r: 0x5B, g: 0x1E, b: 0x86 };
