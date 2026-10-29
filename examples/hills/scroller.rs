@@ -52,8 +52,8 @@ impl Font {
 pub enum Style {
     /// Pink-to-lavender face, dark outline, violet extrusion.
     Candy,
-    /// One flat cream colour — no gradient, outline, extrusion or wave.
-    /// Cream reads on a bare dark terminal as well as on the landscape.
+    /// One flat cream colour — no gradient, outline or extrusion. Cream
+    /// reads on a bare dark terminal as well as on the landscape.
     Flat,
 }
 
@@ -126,11 +126,7 @@ impl Scroller {
         if x < -(advance(g.font, g.ch) + 4) || x > width as i64 {
             return None;
         }
-        // Flat letters (like terminal ones) ride a straight line.
-        let wave = match g.style {
-            Style::Flat => 0.0,
-            Style::Candy => (TAU * t / SCROLL_WAVE_PERIOD + x as f64 * 0.05).sin(),
-        };
+        let wave = if g.wave { (TAU * t / SCROLL_WAVE_PERIOD + x as f64 * 0.05).sin() } else { 0.0 };
         Some((x, self.y0 + BASE + (SCROLL_WAVE * wave).round() as i64))
     }
 
@@ -195,7 +191,7 @@ fn flat(c: &mut Canvas, rows: &[u8], (x, y): (i64, i64), scale: i64) {
 
 /// The scroll text, cracktro style: brag about what's on screen, never
 /// explain how.
-pub const PITCH: &str = "Welly well, what do we have here?{gap}{hills}{pause 4}{gap}{logo}{pause 3}{gap}\
+pub const PITCH: &str = "{style flat}Welly well, what do we have here?{style candy}{gap}{hills}{pause 4}{gap}{logo}{pause 3}{gap}\
 ...and yes, before you ask: this is a TERMINAL. No browser, no video, no tricks you can see, just the good old terminal you have known and loved...   which you will now love a little bit more.   {font tiny}(psst... the small print: no pixels were harmed in the making of this demo - because there are no pixels, just text and ANSI escape codes!){font c64}   \
 Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 Clouds that drift and throw shadows on the land.   \
@@ -205,7 +201,7 @@ Up in the box: plasma, rainbows, neon, glitches, flaps, sines, rows that float, 
 fields that flow, and colours mixed like a DJ at 3 am.   {font big}BOOM!{font c64}   \
 Hit space and they push each other off the stage, one after the other.   \
 How is it done?   Ha!   A magician never tells...   {font term}(this is your terminal's own font, by the way - blink and you miss it){font c64}   \
-...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}...or type it the way we did in 1986, no colours, no shadows...{style candy}   \
+...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}{wave off}...or type it the way we did in 1986, no colours, no shadows...{wave on}{style candy}   \
 Greetings fly out to everyone who still believes a terminal can be beautiful, \
 to all the coders, pixel pushers and scrollers of the past, and to YOU for reading this far!   {font mario}CHROMAKOPIA{font c64}   \
 Keys: space or arrows to skip, q to quit.   {bye}Text wraps... now!          ";
@@ -224,7 +220,7 @@ mod tests {
     }
 
     fn one(font: Font, style: Style, ch: char) -> Scroller {
-        Scroller::new(vec![Glyph { ch, x: 0.0, font, style }], 40)
+        Scroller::new(vec![Glyph { ch, x: 0.0, font, style, wave: true }], 40)
     }
 
     /// Ink rows (pixel) and colours of `s` painted with its glyph at x = 10.
@@ -263,17 +259,22 @@ mod tests {
     }
 
     #[test]
-    fn flat_letters_ride_a_straight_line() {
-        let tops: Vec<i64> = (0..48)
-            .map(|frame| {
-                let s = one(Font::Big, Style::Flat, 'M');
-                let layers = Layers::new(40).layer(Layer::paint(move |c| s.paint(c, (c.width - 10) as f64)));
-                let mut buf = FrameBuffer::new(60, 40);
-                layers.render(&mut buf, frame);
-                (0..40).find(|&y| (0..60).any(|x| buf.get(x, y).ch != ' ')).unwrap() as i64
-            })
-            .collect();
-        assert!(tops.iter().all(|&t| t == tops[0]), "{tops:?}");
+    fn wave_off_rides_a_straight_line_flat_still_waves() {
+        let tops = |wave: bool| -> Vec<i64> {
+            (0..48)
+                .map(|frame| {
+                    let s = Scroller::new(vec![Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave }], 40);
+                    let layers = Layers::new(40).layer(Layer::paint(move |c| s.paint(c, (c.width - 10) as f64)));
+                    let mut buf = FrameBuffer::new(60, 40);
+                    layers.render(&mut buf, frame);
+                    (0..40).find(|&y| (0..60).any(|x| buf.get(x, y).ch != ' ')).unwrap() as i64
+                })
+                .collect()
+        };
+        let straight = tops(false);
+        assert!(straight.iter().all(|&t| t == straight[0]), "{straight:?}");
+        let waving = tops(true);
+        assert!(waving.iter().any(|&t| t != waving[0]), "flat letters should still wave");
     }
 
     #[test]

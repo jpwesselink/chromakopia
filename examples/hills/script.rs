@@ -32,6 +32,8 @@ pub enum Code {
     Font(Font),
     /// Everything after is drawn in this style.
     Style(Style),
+    /// Everything after rides the wave (true) or a straight line (false).
+    Wave(bool),
     /// Everything leaves: the logo jumps away, the landscape takes
     /// itself down — before the text wraps and the show starts over.
     Bye,
@@ -66,6 +68,8 @@ pub fn parse(src: &str) -> Result<Script, String> {
             (Some("font"), Some(name), None) => {
                 Code::Font(Font::named(name).ok_or_else(|| format!("unknown font {{{body}}}"))?)
             }
+            (Some("wave"), Some("on"), None) => Code::Wave(true),
+            (Some("wave"), Some("off"), None) => Code::Wave(false),
             (Some("style"), Some(name), None) => {
                 Code::Style(Style::named(name).ok_or_else(|| format!("unknown style {{{body}}}"))?)
             }
@@ -89,6 +93,8 @@ pub struct Glyph {
     pub x: f64,
     pub font: Font,
     pub style: Style,
+    /// Rides the wave (terminal letters never do).
+    pub wave: bool,
 }
 
 /// The script laid out for one screen width: every visible letter with its
@@ -108,7 +114,7 @@ impl Script {
     /// as wide as its font makes it, `{gap}` as half a screen of space.
     /// A letter its font doesn't have is an error.
     pub fn place(&self, width: usize) -> Result<Placed, String> {
-        let (mut font, mut style) = (Font::C64, Style::Candy);
+        let (mut font, mut style, mut wave) = (Font::C64, Style::Candy, true);
         let (mut glyphs, mut events, mut x) = (Vec::new(), Vec::new(), 0.0);
         let mut codes = self.events.iter().peekable();
         let chars: Vec<char> = self.text.chars().collect();
@@ -122,6 +128,7 @@ impl Script {
                     Code::Gap => x += width as f64 / 2.0,
                     Code::Font(f) => font = f,
                     Code::Style(st) => style = st,
+                    Code::Wave(on) => wave = on,
                     _ => events.push((x, code)),
                 }
             }
@@ -130,7 +137,7 @@ impl Script {
                 return Err(format!("font {font:?} has no {ch:?} (in {:?})", chars[i.saturating_sub(10)..(i + 10).min(chars.len())].iter().collect::<String>()));
             }
             if ch != ' ' {
-                glyphs.push(Glyph { ch, x, font, style });
+                glyphs.push(Glyph { ch, x, font, style, wave });
             }
             x += scroller::advance(font, ch) as f64;
         }
@@ -249,11 +256,20 @@ mod tests {
 
     #[test]
     fn parse_font_and_style_codes() {
-        let s = parse("{font tiny}a{style flat}b{font term}").unwrap();
+        let s = parse("{font tiny}a{style flat}b{font term}{wave off}c{wave on}").unwrap();
         assert_eq!(
             s.events,
-            vec![(0, Code::Font(Font::Tiny)), (1, Code::Style(Style::Flat)), (2, Code::Font(Font::Term))]
+            vec![
+                (0, Code::Font(Font::Tiny)),
+                (1, Code::Style(Style::Flat)),
+                (2, Code::Font(Font::Term)),
+                (2, Code::Wave(false)),
+                (3, Code::Wave(true)),
+            ]
         );
+        assert!(parse("{wave sideways}").is_err());
+        let p = s.place(100).unwrap();
+        assert_eq!(p.glyphs.iter().map(|g| g.wave).collect::<Vec<_>>(), vec![true, true, false]);
         assert!(parse("{font comic-sans}").unwrap_err().contains("comic-sans"));
         assert!(parse("{style}").is_err());
     }
