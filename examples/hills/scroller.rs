@@ -198,7 +198,7 @@ Clouds that drift and throw shadows on the land.   \
 A logo that will not sit still, bouncing every letter on its own little wave.   \
 And all of it at a silky 60 frames per second.   \
 How is it done?   Ha!   A magician never tells...   {font term}(this is your terminal's own font, by the way - blink and you miss it){font c64}   \
-...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}{wave off}...or type it the way we did in 1986, no colours, no shadows...{wave on}{style candy}   \
+...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}{wave off}...ofc you should type it without the colours, just like we did in 1986...{wave on}{style candy}   \
 Greetings fly out to everyone who still believes a terminal can be beautiful, \
 to all the coders, pixel pushers and scrollers of the past, and to YOU for reading this far!   {font mario}CHROMAKOPIA{font c64}   \
 Keys: space or arrows to skip, q to quit.   {bye}Text wraps... now!          ";
