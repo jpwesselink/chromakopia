@@ -10,8 +10,8 @@
 
 use chromakopia::animate::framebuffer::FPS;
 
-/// Pixels per character in the scroller font.
-const CHAR_PX: f64 = 8.0;
+use super::scroller::{self, Font, Style};
+
 /// Scroll speed, pixels per second (one pixel per frame).
 const SPEED: f64 = FPS;
 
@@ -26,8 +26,12 @@ pub enum Code {
     Pause(f64),
     /// Half a screen of empty space — so what comes before has scrolled
     /// off (or what comes after is still waiting off the right edge) when
-    /// a code next to it reaches the middle. Becomes spaces in `fit`.
+    /// a code next to it reaches the middle.
     Gap,
+    /// Everything after is set in this font.
+    Font(Font),
+    /// Everything after is drawn in this style.
+    Style(Style),
 }
 
 /// The scroll text without its codes, and where each code sits.
@@ -53,6 +57,12 @@ pub fn parse(src: &str) -> Result<Script, String> {
             (Some("logo"), None, _) => Code::Logo,
             (Some("hills"), None, _) => Code::Hills,
             (Some("gap"), None, _) => Code::Gap,
+            (Some("font"), Some(name), None) => {
+                Code::Font(Font::named(name).ok_or_else(|| format!("unknown font {{{body}}}"))?)
+            }
+            (Some("style"), Some(name), None) => {
+                Code::Style(Style::named(name).ok_or_else(|| format!("unknown style {{{body}}}"))?)
+            }
             (Some("pause"), Some(secs), None) => {
                 Code::Pause(secs.parse().map_err(|_| format!("bad seconds in {{{body}}}"))?)
             }
@@ -65,23 +75,60 @@ pub fn parse(src: &str) -> Result<Script, String> {
     Ok(Script { text, events })
 }
 
+/// One letter of the scroll text, placed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Glyph {
+    pub ch: char,
+    /// Left edge in text pixels (0 = start of the text).
+    pub x: f64,
+    pub font: Font,
+    pub style: Style,
+}
+
+/// The script laid out for one screen width: every visible letter with its
+/// position, font and style, and where each remaining code sits.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Placed {
+    /// Visible letters only; spaces just advance.
+    pub glyphs: Vec<Glyph>,
+    /// (text pixel, code) for the codes that fire: logo, hills, pause.
+    pub events: Vec<(f64, Code)>,
+    /// Width of the whole text in pixels.
+    pub length: f64,
+}
+
 impl Script {
-    /// The script for a screen `width` columns wide: every `{gap}` turned
-    /// into half a screen of spaces (whole characters, rounded up).
-    pub fn fit(&self, width: usize) -> Script {
-        let gap = " ".repeat((width as f64 / 2.0 / CHAR_PX).ceil() as usize);
+    /// Lay the text out for a screen `width` columns wide: each letter
+    /// as wide as its font makes it, `{gap}` as half a screen of space.
+    /// A letter its font doesn't have is an error.
+    pub fn place(&self, width: usize) -> Result<Placed, String> {
+        let (mut font, mut style) = (Font::C64, Style::Candy);
+        let (mut glyphs, mut events, mut x) = (Vec::new(), Vec::new(), 0.0);
+        let mut codes = self.events.iter().peekable();
         let chars: Vec<char> = self.text.chars().collect();
-        let (mut text, mut events, mut from) = (String::new(), Vec::new(), 0);
-        for &(i, code) in &self.events {
-            text.extend(&chars[from..i]);
-            from = i;
-            match code {
-                Code::Gap => text.push_str(&gap),
-                _ => events.push((text.chars().count(), code)),
+        for i in 0..=chars.len() {
+            while let Some(&&(at, code)) = codes.peek() {
+                if at != i {
+                    break;
+                }
+                codes.next();
+                match code {
+                    Code::Gap => x += width as f64 / 2.0,
+                    Code::Font(f) => font = f,
+                    Code::Style(st) => style = st,
+                    _ => events.push((x, code)),
+                }
             }
+            let Some(&ch) = chars.get(i) else { break };
+            if !scroller::has(font, ch) {
+                return Err(format!("font {font:?} has no {ch:?} (in {:?})", chars[i.saturating_sub(10)..(i + 10).min(chars.len())].iter().collect::<String>()));
+            }
+            if ch != ' ' {
+                glyphs.push(Glyph { ch, x, font, style });
+            }
+            x += scroller::advance(font, ch) as f64;
         }
-        text.extend(&chars[from..]);
-        Script { text, events }
+        Ok(Placed { glyphs, events, length: x })
     }
 }
 
@@ -104,14 +151,14 @@ pub struct Timeline {
 }
 
 impl Timeline {
-    pub fn new(script: &Script, width: usize) -> Self {
+    pub fn new(placed: &Placed, width: usize) -> Self {
         let mut cues = Vec::new();
         let mut pauses = Vec::new();
         let mut paused = 0.0;
-        for &(i, code) in &script.events {
+        for &(x, code) in &placed.events {
             // A glyph at text pixel p is at screen x = width - scrolled + p,
             // so it reaches the middle once scrolled = p + width / 2.
-            let px = i as f64 * CHAR_PX + width as f64 / 2.0;
+            let px = x + width as f64 / 2.0;
             let t = px / SPEED + paused;
             cues.push(Cue { t, code });
             if let Code::Pause(secs) = code {
@@ -119,7 +166,7 @@ impl Timeline {
                 paused += secs;
             }
         }
-        let run = script.text.chars().count() as f64 * CHAR_PX + width as f64;
+        let run = placed.length + width as f64;
         Self { cues, total: run / SPEED + paused, pauses }
     }
 
@@ -176,18 +223,44 @@ mod tests {
     }
 
     #[test]
-    fn gap_becomes_half_a_screen_of_spaces() {
-        let s = parse("ab{gap}{logo}c").unwrap().fit(32);
-        assert_eq!(s.text, "ab  c");
-        assert_eq!(s.events, vec![(4, Code::Logo)]);
-        // Rounds up to whole characters.
-        assert_eq!(parse("{gap}x").unwrap().fit(20).text, "  x");
+    fn parse_font_and_style_codes() {
+        let s = parse("{font tiny}a{style flat}b{font term}").unwrap();
+        assert_eq!(
+            s.events,
+            vec![(0, Code::Font(Font::Tiny)), (1, Code::Style(Style::Flat)), (2, Code::Font(Font::Term))]
+        );
+        assert!(parse("{font comic-sans}").unwrap_err().contains("comic-sans"));
+        assert!(parse("{style}").is_err());
+    }
+
+    #[test]
+    fn place_gives_every_letter_its_own_width() {
+        let p = parse("ab{font big}cd{font tiny}e{font term}fg").unwrap().place(100).unwrap();
+        let xs: Vec<(char, f64)> = p.glyphs.iter().map(|g| (g.ch, g.x)).collect();
+        let e = scroller::advance(Font::Tiny, 'e') as f64;
+        assert_eq!(xs, vec![('a', 0.0), ('b', 8.0), ('c', 16.0), ('d', 32.0), ('e', 48.0), ('f', 48.0 + e), ('g', 49.0 + e)]);
+        assert_eq!(p.glyphs[4].font, Font::Tiny);
+        assert_eq!(p.length, 50.0 + e);
+    }
+
+    #[test]
+    fn place_rejects_letters_a_font_does_not_have() {
+        let err = parse("{font mario}CHROMAhello").unwrap().place(100).unwrap_err();
+        assert!(err.contains('h'), "{err}");
+        assert!(parse("{font mario}CHROMAKOPIA").unwrap().place(100).is_ok());
+    }
+
+    #[test]
+    fn gap_is_half_a_screen_of_space() {
+        let p = parse("ab{gap}{logo}c").unwrap().place(32).unwrap();
+        assert_eq!(p.glyphs.last().map(|g| g.x), Some(16.0 + 16.0));
+        assert_eq!(p.events, vec![(32.0, Code::Logo)]);
     }
 
     // 10 characters (80 px) on a 100-column screen: a glyph at text pixel
     // p reaches the middle when the text has scrolled p + 50.
     fn timeline() -> Timeline {
-        Timeline::new(&parse("abcd{logo}efgh{pause 2}ij").unwrap(), 100)
+        Timeline::new(&parse("abcd{logo}efgh{pause 2}ij").unwrap().place(100).unwrap(), 100)
     }
 
     #[test]

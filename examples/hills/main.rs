@@ -138,9 +138,11 @@ struct Stage {
     /// The block heading, drawn last so it sits in front of the panels.
     heading: Layers,
     view: Arc<Mutex<View>>,
-    /// The scroll text as shown on this screen (gaps filled in).
+    /// The scroll text laid out for this screen.
     #[cfg(test)]
-    text: String,
+    glyphs: Vec<script::Glyph>,
+    /// Shared with its paint layer; also puts terminal-font letters on.
+    scroller: Arc<scroller::Scroller>,
     timeline: script::Timeline,
     /// Wall time at which script time was 0.
     origin: Mutex<f64>,
@@ -163,10 +165,13 @@ impl Stage {
                 _ => None,
             })
             .collect();
-        let script = script::parse(scroller::PITCH).expect("scroll text parses").fit(screen_w);
-        let timeline = script::Timeline::new(&script, screen_w);
+        let placed = script::parse(scroller::PITCH)
+            .and_then(|s| s.place(screen_w))
+            .unwrap_or_else(|e| panic!("scroll text: {e}"));
+        let timeline = script::Timeline::new(&placed, screen_w);
         let view = Arc::new(Mutex::new(script_view(&timeline, 0.0)));
-        let layers = build_layers(screen_w, view.clone(), steps.clone(), &script.text);
+        let scroller = Arc::new(scroller::Scroller::new(placed.glyphs.clone(), SCROLLER_Y));
+        let layers = build_layers(screen_w, view.clone(), steps.clone(), scroller.clone());
         let heading = build_heading(view.clone());
         Self {
             steps,
@@ -176,7 +181,8 @@ impl Stage {
             heading,
             view,
             #[cfg(test)]
-            text: script.text,
+            glyphs: placed.glyphs,
+            scroller,
             timeline,
             origin: Mutex::new(0.0),
             seek: Arc::new(Mutex::new(None)),
@@ -232,6 +238,7 @@ impl Effect for Stage {
         *self.view.lock().unwrap() = view;
 
         self.layers.render(buf, frame);
+        self.scroller.paint_cells(buf, view.scroll, frame);
 
         for (s, geo, local) in on_screen(&self.steps, &view, self.screen_w) {
             if let Some(effect) = &self.effects[s] {
@@ -320,10 +327,9 @@ fn put_band(buf: &mut FrameBuffer, row: usize, text: &str) {
     }
 }
 
-fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>, text: &str) -> Layers {
+fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>, scroller: Arc<scroller::Scroller>) -> Layers {
     let word = wordmark::Wordmark::placed(screen_w);
     // Baseline high enough that the scroller's wave plus extrusion stays on screen.
-    let scroller = scroller::Scroller::new(text, SCROLLER_Y);
 
     let logo_view = view.clone();
     let scroll_view = view.clone();
@@ -551,6 +557,23 @@ mod tests {
             stage.render(&mut b, 0);
             out += &format!("\n=== {name} ===\n{}\n", b.to_ansi_string());
         }
+        // One frame per scroller font/style, its first letter mid-screen.
+        use scroller::{Font, Style};
+        for (name, font, style) in [
+            ("font tiny", Font::Tiny, Style::Candy),
+            ("font big", Font::Big, Style::Candy),
+            ("font term", Font::Term, Style::Candy),
+            ("style flat", Font::C64, Style::Flat),
+            ("font mario", Font::Mario, Style::Candy),
+        ] {
+            let g = stage.glyphs.iter().find(|g| g.font == font && g.style == style).unwrap();
+            let target = g.x + 112.0 / 2.0 - 30.0;
+            let t = (0..).map(|f| f as f64 / FPS).find(|&t| stage.timeline.scrolled(t) >= target).unwrap();
+            stage.seek_to(t);
+            let mut b = FrameBuffer::new(112, ROWS);
+            stage.render(&mut b, 0);
+            out += &format!("\n=== {name} ===\n{}\n", b.to_ansi_string());
+        }
         std::fs::write("target/hills-blocks.ansi", out).unwrap();
     }
 
@@ -588,8 +611,8 @@ mod tests {
 
     #[test]
     fn scroller_wave_clears_the_bottom_border_with_room_to_spare() {
-        let text = script::parse(scroller::PITCH).unwrap().text;
-        let scroller = scroller::Scroller::new(&text, SCROLLER_Y);
+        let glyphs = script::parse(scroller::PITCH).unwrap().place(120).unwrap().glyphs;
+        let scroller = scroller::Scroller::new(glyphs, SCROLLER_Y);
         let layers = Layers::new(ROWS).layer(Layer::paint(move |c| scroller.paint(c, c.frame as f64)));
         let mut lowest = 0;
         for frame in 0..120 {
@@ -627,9 +650,10 @@ mod tests {
             let stage = Stage::new(w);
             let cue = stage.timeline.since(script::Code::Logo, f64::MAX).unwrap();
             let scrolled = stage.timeline.scrolled(cue);
-            for (i, ch) in stage.text.chars().enumerate() {
-                let x = w as f64 - scrolled + i as f64 * 8.0;
-                assert!(ch == ' ' || x <= -8.0 || x >= w as f64, "{w}: {ch:?} on screen at x={x}");
+            for g in &stage.glyphs {
+                let x = w as f64 - scrolled + g.x;
+                let wide = scroller::advance(g.font, g.ch) as f64;
+                assert!(x <= -wide || x >= w as f64, "{w}: {:?} on screen at x={x}", g.ch);
             }
         }
     }

@@ -178,10 +178,14 @@ pub fn c64(ch: char) -> [u8; 8] {
     C64_GLYPHS.iter().find(|(g, _)| *g == ch).expect("glyph in C64_GLYPHS").1
 }
 
-/// Whether the C64 caption font has `ch`.
-#[cfg(test)]
+/// Whether the C64 font has `ch`.
 pub fn has_c64(ch: char) -> bool {
     C64_GLYPHS.iter().any(|(g, _)| *g == ch)
+}
+
+/// Whether the Mario-style capitals have `ch`.
+pub fn has_mario(ch: char) -> bool {
+    MARIO_GLYPHS.iter().any(|(g, _)| *g == ch)
 }
 
 /// `text` in the C64 ROM font as terminal text: every lit pixel one `█`

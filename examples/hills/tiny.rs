@@ -148,6 +148,21 @@ fn glyph(ch: char) -> &'static (char, i64, [u8; 6]) {
     GLYPHS.iter().find(|(g, ..)| *g == ch).expect("ASCII glyph in Tom Thumb")
 }
 
+/// Whether Tom Thumb has `ch` (printable ASCII).
+pub fn has(ch: char) -> bool {
+    GLYPHS.iter().any(|(g, ..)| *g == ch)
+}
+
+/// `ch`'s advance in pixels.
+pub fn advance(ch: char) -> i64 {
+    glyph(ch).1
+}
+
+/// `ch`'s rows, top first (MSB = leftmost pixel).
+pub fn rows(ch: char) -> [u8; 6] {
+    glyph(ch).2
+}
+
 /// Width of `text` in pixels.
 pub fn width(text: &str) -> i64 {
     text.chars().map(|ch| glyph(ch).1).sum()
@@ -160,19 +175,34 @@ pub fn stamp(c: &mut Canvas, text: &str, at: (i64, i64), shown: usize) {
     let mut face = Vec::new();
     let mut x = at.0;
     for ch in text.chars().take(shown) {
-        let (_, advance, rows) = glyph(ch);
-        for (gy, row) in rows.iter().enumerate() {
-            for gx in 0..8 {
-                if row & (0x80 >> gx) != 0 {
-                    let color = if gy < 3 { LETTER_UPPER } else { LETTER_LOWER };
-                    face.push((x + gx, at.1 + gy as i64, color));
-                }
+        push_face(&mut face, ch, (x, at.1));
+        x += advance(ch);
+    }
+    stamp_face(c, &face);
+}
+
+/// Stamp one character with its glyph top-left at `at`, letter style.
+pub fn stamp_char(c: &mut Canvas, ch: char, at: (i64, i64)) {
+    let mut face = Vec::new();
+    push_face(&mut face, ch, at);
+    stamp_face(c, &face);
+}
+
+fn push_face(face: &mut Vec<(i64, i64, Color)>, ch: char, (x, y): (i64, i64)) {
+    for (gy, row) in rows(ch).iter().enumerate() {
+        for gx in 0..8 {
+            if row & (0x80 >> gx) != 0 {
+                let color = if gy < 3 { LETTER_UPPER } else { LETTER_LOWER };
+                face.push((x + gx, y + gy as i64, color));
             }
         }
-        x += advance;
     }
+}
+
+/// Extrusion, outline, then the face.
+fn stamp_face(c: &mut Canvas, face: &[(i64, i64, Color)]) {
     for (shift, color) in [(1, LETTER_EXTRUDE), (0, LETTER_OUTLINE)] {
-        for &(x, y, _) in &face {
+        for &(x, y, _) in face {
             for ny in -1..=1 {
                 for nx in -1..=1 {
                     c.set(x + nx + shift, y + ny + shift, color);
@@ -180,7 +210,7 @@ pub fn stamp(c: &mut Canvas, text: &str, at: (i64, i64), shown: usize) {
             }
         }
     }
-    for &(x, y, color) in &face {
+    for &(x, y, color) in face {
         c.set(x, y, color);
     }
 }
