@@ -197,34 +197,19 @@ impl Effect for Stage {
     }
 }
 
-/// Flatten the outermost columns and the top row: each cell becomes one
-/// solid colour, the average of its two pixels. Terminals like iTerm
-/// stretch edge cells' backgrounds into the window margin; a dithered or
-/// two-tone cell there shows as stripes, a flat one just continues the
-/// scene.
+/// Clear a one-cell border around the scene to the terminal's own
+/// background. Terminals like iTerm stretch edge cells' backgrounds into
+/// the window margin; this way that margin is a plain frame instead of
+/// stretched scenery.
 fn frame_edges(buf: &mut FrameBuffer) {
-    let flatten = |buf: &mut FrameBuffer, x: usize, y: usize| {
-        let cell = buf.get(x, y);
-        let fg = Some(cell.color);
-        let (top, bottom) = match cell.ch {
-            '▀' => (fg, cell.bg),
-            '▄' => (cell.bg, fg),
-            '█' => (fg, fg),
-            ' ' => (cell.bg, cell.bg),
-            _ => (cell.bg.or(fg), cell.bg.or(fg)),
-        };
-        let c = match (top, bottom) {
-            (Some(t), Some(b)) => Color::lerp_rgb(t, b, 0.5),
-            (t, b) => t.or(b).unwrap_or(landscape::SKY),
-        };
-        buf.set(x, y, Cell::with_bg(' ', c, c));
-    };
-    for y in 0..buf.height {
-        flatten(buf, 0, y);
-        flatten(buf, buf.width - 1, y);
+    let (w, h) = (buf.width, buf.height);
+    for y in 0..h {
+        buf.set(0, y, Cell::space());
+        buf.set(w - 1, y, Cell::space());
     }
-    for x in 0..buf.width {
-        flatten(buf, x, 0);
+    for x in 0..w {
+        buf.set(x, 0, Cell::space());
+        buf.set(x, h - 1, Cell::space());
     }
 }
 
@@ -511,25 +496,23 @@ mod tests {
     }
 
     #[test]
-    fn edge_cells_are_one_flat_colour() {
+    fn scene_has_a_terminal_coloured_border() {
         // Terminals like iTerm stretch the edge cells' background into the
-        // window margin; anything but one flat colour there shows as stripes.
+        // window margin; a border in the terminal's own background makes
+        // that margin one plain frame around the scene.
         let s = storyboard();
         let stage = Stage::new(120);
         for t in [2.0, start_of(&s, 3) + 2.0] {
             stage.seek_to(t);
             let mut b = FrameBuffer::new(120, ROWS);
             stage.render(&mut b, 0);
-            let edges = (0..ROWS).flat_map(|y| [(0, y), (119, y)]).chain((0..120).map(|x| (x, 0)));
+            let edges = (0..ROWS)
+                .flat_map(|y| [(0, y), (119, y)])
+                .chain((0..120).flat_map(|x| [(x, 0), (x, ROWS - 1)]));
             for (x, y) in edges {
-                let cell = b.get(x, y);
-                assert_eq!(cell.ch, ' ', "({x},{y}) at t={t}");
-                assert!(cell.bg.is_some(), "({x},{y}) at t={t}");
+                assert_eq!(b.get(x, y), Cell::space(), "({x},{y}) at t={t}");
             }
-            // ...but each edge cell keeps the colour of what is there, so
-            // the scene runs on into the margin instead of a sky-blue band.
-            let ground = b.get(0, ROWS - 2).bg.unwrap();
-            assert_ne!(ground, landscape::SKY, "edge over the ground is sky at t={t}");
+            assert_ne!(b.get(1, ROWS - 2), Cell::space(), "scene starts inside the border");
         }
     }
 
