@@ -48,6 +48,13 @@ const DROP_SECS: f64 = 0.9;
 const FALL: f64 = (ROWS * 2) as f64;
 const DYCP_RAMP: f64 = 1.0;
 
+// Exit: letter i jumps off the top starting at i × EXIT_STAGGER seconds,
+// taking EXIT_SECS (ease-in).
+const EXIT_STAGGER: f64 = 0.08;
+const EXIT_SECS: f64 = 0.6;
+/// Seconds until the last letter is gone.
+pub const EXIT_DONE: f64 = (WORD.len() - 1) as f64 * EXIT_STAGGER + EXIT_SECS;
+
 /// Seconds to glide between the centre and the top.
 pub const RISE_SECS: f64 = super::stage::LOGO_RISE_SECS;
 /// Peak of the DYCP sine mix, as a multiple of DYCP_AMP.
@@ -82,18 +89,25 @@ pub enum LogoPhase {
     Top,
     /// Gliding from the top back down to the centre.
     Fall(f64),
+    /// Jumping off the top, letter by letter, from the centre.
+    Exit(f64),
 }
 
 impl LogoPhase {
     /// 0 = centre with full swing, 1 = top with calm swing.
     fn lift(self) -> f64 {
         match self {
-            LogoPhase::Hidden | LogoPhase::Enter(_) => 0.0,
+            LogoPhase::Hidden | LogoPhase::Enter(_) | LogoPhase::Exit(_) => 0.0,
             LogoPhase::Rise(t) => Easing::EaseInOut.apply(t / RISE_SECS),
             LogoPhase::Top => 1.0,
             LogoPhase::Fall(t) => 1.0 - Easing::EaseInOut.apply(t / RISE_SECS),
         }
     }
+}
+
+/// Letter `i`'s lift `t` seconds into the exit (0 → −FALL).
+fn exit_offset(i: usize, t: f64) -> f64 {
+    -FALL * Easing::EaseIn.apply(((t - i as f64 * EXIT_STAGGER) / EXIT_SECS).clamp(0.0, 1.0))
 }
 
 /// Letter `i`'s drop-in offset `t` seconds into the entrance (−FALL → 0).
@@ -143,6 +157,8 @@ impl Wordmark {
         }
         let shown = match phase {
             LogoPhase::Enter(t) => ((t - TYPE_START).max(0.0) * TYPE_RATE) as usize,
+            // Backspaced away, three times as fast as it was typed.
+            LogoPhase::Exit(t) => TAGLINE.len().saturating_sub((t * TYPE_RATE * 3.0) as usize),
             _ => TAGLINE.len(),
         };
         let lift = phase.lift();
@@ -168,6 +184,7 @@ impl Wordmark {
                 let landed = t - (DROP_START + i as f64 * DROP_STAGGER) - DROP_SECS;
                 (drop_offset(i, t), Easing::EaseInOut.apply(landed / DYCP_RAMP))
             }
+            LogoPhase::Exit(t) => (exit_offset(i, t), 1.0),
             _ => (0.0, 1.0 + (self.calm - 1.0) * phase.lift()),
         };
         let i = i as f64;
@@ -234,6 +251,15 @@ mod tests {
             }
             assert!(highest >= super::super::layout::TOP_MARGIN, "{screen_w}: reaches row {highest}");
             assert!(lowest <= bottom, "{screen_w}: reaches {lowest} > {bottom}");
+        }
+    }
+
+    #[test]
+    fn exit_jumps_every_letter_off_the_top() {
+        assert_eq!(exit_offset(0, 0.0), 0.0);
+        assert!(exit_offset(0, 0.3) < exit_offset(5, 0.3), "staggered, left first");
+        for i in 0..WORD.len() {
+            assert!((exit_offset(i, EXIT_DONE) + FALL).abs() < 1e-9);
         }
     }
 

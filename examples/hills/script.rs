@@ -32,6 +32,9 @@ pub enum Code {
     Font(Font),
     /// Everything after is drawn in this style.
     Style(Style),
+    /// Everything leaves: the logo jumps away, the landscape takes
+    /// itself down — before the text wraps and the show starts over.
+    Bye,
     /// A skip stop with nothing attached (set by `with_lead`, not typed).
     Mark,
 }
@@ -58,6 +61,7 @@ pub fn parse(src: &str) -> Result<Script, String> {
         let code = match (words.next(), words.next(), words.next()) {
             (Some("logo"), None, _) => Code::Logo,
             (Some("hills"), None, _) => Code::Hills,
+            (Some("bye"), None, _) => Code::Bye,
             (Some("gap"), None, _) => Code::Gap,
             (Some("font"), Some(name), None) => {
                 Code::Font(Font::named(name).ok_or_else(|| format!("unknown font {{{body}}}"))?)
@@ -230,9 +234,9 @@ mod tests {
 
     #[test]
     fn parse_strips_codes_and_records_their_positions() {
-        let s = parse("ab{logo}cd{pause 2}e{hills}").unwrap();
+        let s = parse("ab{logo}cd{pause 2}e{hills}{bye}").unwrap();
         assert_eq!(s.text, "abcde");
-        assert_eq!(s.events, vec![(2, Code::Logo), (4, Code::Pause(2.0)), (5, Code::Hills)]);
+        assert_eq!(s.events, vec![(2, Code::Logo), (4, Code::Pause(2.0)), (5, Code::Hills), (5, Code::Bye)]);
     }
 
     #[test]

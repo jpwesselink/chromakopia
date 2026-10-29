@@ -70,8 +70,19 @@ struct View {
 /// What is on screen at script time `t`: the scroller, plus the landscape
 /// once `{hills}` and the wordmark once `{logo}` has fired.
 fn script_view(tl: &script::Timeline, intro_secs: f64, t: f64) -> View {
-    let logo = tl.since(script::Code::Logo, t).map_or(LogoPhase::Hidden, |at| LogoPhase::Enter(t - at));
-    let hills = tl.since(script::Code::Hills, t).map(|at| t - at);
+    let mut logo = tl.since(script::Code::Logo, t).map_or(LogoPhase::Hidden, |at| LogoPhase::Enter(t - at));
+    let mut hills = tl.since(script::Code::Hills, t).map(|at| t - at);
+    // After `{bye}`: the logo jumps away, the landscape plays its
+    // entrance backwards from wherever it had got to.
+    if let Some(bye) = tl.since(script::Code::Bye, t) {
+        let gone = t - bye;
+        if logo != LogoPhase::Hidden {
+            logo = if gone < wordmark::EXIT_DONE { LogoPhase::Exit(gone) } else { LogoPhase::Hidden };
+        }
+        hills = hills
+            .map(|h| (h - gone).min(landscape::ENTRANCE_SECS) - gone * landscape::EXIT_SPEED)
+            .filter(|&h| h > 0.0);
+    }
     let intro = (t < intro_secs).then_some(t);
     View { logo, heading: None, panel: None, pushed: None, scroll: tl.scrolled(t), hills, intro }
 }
@@ -723,13 +734,39 @@ mod tests {
         for start in starts {
             stage.seek_to(start);
             let px: Vec<i64> = (0..600).map(|f| scroller::pen(stage.view_at(f).scroll)).collect();
+            let mut wraps = 0;
             for (f, w) in px.windows(2).enumerate() {
                 let step = w[1] - w[0];
+                // The one allowed jump: the show looping back to the start.
+                if step < 0 {
+                    wraps += 1;
+                    continue;
+                }
                 assert!(step == 0 || step == 1, "from {start:.3}s, frame {f}: step {step}");
             }
+            assert!(wraps <= 1);
             // Not stuck either: it does move.
-            assert!(px[599] > px[0]);
+            assert!(px[599] != px[0]);
         }
+    }
+
+    #[test]
+    fn bye_clears_the_stage_before_the_show_loops() {
+        let stage = Stage::new(112);
+        let bye = stage.timeline.since(script::Code::Bye, f64::MAX).expect("pitch has a {bye}");
+        stage.seek_to(bye - 0.1);
+        let v = stage.view_at(0);
+        assert!(matches!(v.logo, LogoPhase::Enter(_)) && v.hills.is_some());
+        // Leaving: the logo jumps away, the landscape plays its entrance backwards.
+        stage.seek_to(bye + 0.5);
+        let v = stage.view_at(0);
+        assert_eq!(v.logo, LogoPhase::Exit(0.5));
+        assert!(v.hills.unwrap() < landscape::ENTRANCE_SECS);
+        // All gone before the text wraps and the show starts over.
+        assert!(stage.timeline.total - bye >= wordmark::EXIT_DONE.max(landscape::EXIT_SECS));
+        stage.seek_to(stage.timeline.total - 0.05);
+        let v = stage.view_at(0);
+        assert_eq!((v.logo, v.hills), (LogoPhase::Hidden, None));
     }
 
     #[test]

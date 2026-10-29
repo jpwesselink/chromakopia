@@ -208,7 +208,7 @@ How is it done?   Ha!   A magician never tells...   {font term}(this is your ter
 ...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}...or type it the way we did in 1986, no colours, no shadows...{style candy}   \
 Greetings fly out to everyone who still believes a terminal can be beautiful, \
 to all the coders, pixel pushers and scrollers of the past, and to YOU for reading this far!   {font mario}CHROMAKOPIA{font c64}   \
-Keys: space or arrows to skip, q to quit.   Text wraps... now!          ";
+Keys: space or arrows to skip, q to quit.   {bye}Text wraps... now!          ";
 
 #[cfg(test)]
 mod tests {

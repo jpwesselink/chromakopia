@@ -45,8 +45,13 @@ const RISE_SECS: f64 = 1.0;
 const SHADOW_START: f64 = RISE_START + 7.0 * RISE_STAGGER + RISE_SECS;
 const SHADOW_SECS: f64 = 0.5;
 /// When everything has landed.
+pub const ENTRANCE_SECS: f64 = SHADOW_START + SHADOW_SECS;
+
+/// The exit plays the entrance backwards this many times faster.
+pub const EXIT_SPEED: f64 = 2.0;
+/// Seconds the exit takes.
 #[cfg(test)]
-const ENTRANCE_SECS: f64 = SHADOW_START + SHADOW_SECS;
+pub const EXIT_SECS: f64 = ENTRANCE_SECS / EXIT_SPEED;
 
 /// How much of the sky is down `t` seconds into the entrance (0..=1).
 fn sky_reveal(t: f64) -> f64 {
