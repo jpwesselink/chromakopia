@@ -1,6 +1,7 @@
 //! Declarative scene builder for framebuffer animations.
 
 use crate::color::Color;
+use super::effects::BlendMode;
 use super::framebuffer::{Cell, Effect, FrameBuffer};
 #[cfg(not(target_arch = "wasm32"))]
 use super::framebuffer::AnimationHandle;
@@ -131,6 +132,14 @@ enum SceneItem {
         halo_radius: i32,
         halo_dim: f64,
     },
+    /// An overlay composited with a blend mode and opacity.
+    OverlayBlend {
+        effect: Box<dyn Effect>,
+        height: usize,
+        y_offset: i32,
+        mode: BlendMode,
+        opacity: f64,
+    },
 }
 
 impl SceneItem {
@@ -138,7 +147,7 @@ impl SceneItem {
         match self {
             SceneItem::Effect { height, .. } => *height,
             SceneItem::Blank => 1,
-            SceneItem::Overlay { .. } | SceneItem::OverlayHalo { .. } => 0,
+            SceneItem::Overlay { .. } | SceneItem::OverlayHalo { .. } | SceneItem::OverlayBlend { .. } => 0,
         }
     }
 
@@ -146,7 +155,7 @@ impl SceneItem {
         match self {
             SceneItem::Effect { width, .. } => *width,
             SceneItem::Blank => 0,
-            SceneItem::Overlay { .. } | SceneItem::OverlayHalo { .. } => 0,
+            SceneItem::Overlay { .. } | SceneItem::OverlayHalo { .. } | SceneItem::OverlayBlend { .. } => 0,
         }
     }
 }
@@ -156,11 +165,21 @@ impl SceneItem {
 pub struct Scene {
     items: Vec<SceneItem>,
     quit_key: Option<char>,
+    fullscreen: bool,
 }
 
 impl Scene {
     pub fn new() -> Self {
-        Self { items: Vec::new(), quit_key: None }
+        Self { items: Vec::new(), quit_key: None, fullscreen: false }
+    }
+
+    /// Run on the terminal's alternate screen (like `vim` or `less`): the
+    /// scene draws from the top of a blank screen, and when it ends —
+    /// quit key, Ctrl-C or time up — the terminal is left exactly as it
+    /// was. For full-screen demos; inline animations leave this off.
+    pub fn fullscreen(mut self) -> Self {
+        self.fullscreen = true;
+        self
     }
 
     /// Stop the animation early when `key` is pressed (case-insensitive).
@@ -222,6 +241,27 @@ impl Scene {
         self
     }
 
+    /// Like `overlay`, but composited with `mode` at `opacity` (0..=1).
+    /// Works for any content — glyphs, half-block pixels, background
+    /// fills — over any content; empty cells stay transparent.
+    pub fn overlay_blend(
+        mut self,
+        effect: impl Effect,
+        height: usize,
+        y_offset: i32,
+        mode: BlendMode,
+        opacity: f64,
+    ) -> Self {
+        self.items.push(SceneItem::OverlayBlend {
+            effect: Box::new(effect),
+            height,
+            y_offset,
+            mode,
+            opacity: opacity.clamp(0.0, 1.0),
+        });
+        self
+    }
+
     pub fn width(&self) -> usize {
         self.items.iter().map(|item| item.width()).max().unwrap_or(0)
     }
@@ -254,8 +294,8 @@ impl Scene {
         use std::time::Duration;
         let width = crate::terminal::terminal_width().max(1);
         let height = self.height().max(1);
-        let quit_key = self.quit_key;
-        super::framebuffer::run_effect(self, width, height, Duration::from_secs_f64(seconds), 1.0, quit_key).await;
+        let (quit_key, fullscreen) = (self.quit_key, self.fullscreen);
+        super::framebuffer::run_effect_in(self, width, height, Duration::from_secs_f64(seconds), 1.0, quit_key, fullscreen).await;
     }
 }
 
@@ -263,9 +303,9 @@ impl Effect for Scene {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
         buf.clear();
         let mut y = 0;
-        // (base_y, height, effect, halo_radius, halo_dim) — halo_radius=0
-        // means no halo (regular overlay).
-        let mut overlays: Vec<(usize, usize, &dyn Effect, i32, f64)> = Vec::new();
+        // (base_y, height, effect, halo_radius, halo_dim, blend) —
+        // halo_radius=0 means no halo; blend=None is a regular overlay.
+        let mut overlays: Vec<(usize, usize, &dyn Effect, i32, f64, Option<(BlendMode, f64)>)> = Vec::new();
 
         for item in &self.items {
             match item {
@@ -292,13 +332,19 @@ impl Effect for Scene {
                 SceneItem::Overlay { effect, height, y_offset } => {
                     let base = (y as i32) + y_offset;
                     if base >= 0 {
-                        overlays.push((base as usize, *height, effect.as_ref(), 0, 0.0));
+                        overlays.push((base as usize, *height, effect.as_ref(), 0, 0.0, None));
                     }
                 }
                 SceneItem::OverlayHalo { effect, height, y_offset, halo_radius, halo_dim } => {
                     let base = (y as i32) + y_offset;
                     if base >= 0 {
-                        overlays.push((base as usize, *height, effect.as_ref(), *halo_radius, *halo_dim));
+                        overlays.push((base as usize, *height, effect.as_ref(), *halo_radius, *halo_dim, None));
+                    }
+                }
+                SceneItem::OverlayBlend { effect, height, y_offset, mode, opacity } => {
+                    let base = (y as i32) + y_offset;
+                    if base >= 0 {
+                        overlays.push((base as usize, *height, effect.as_ref(), 0, 0.0, Some((*mode, *opacity))));
                     }
                 }
             }
@@ -311,7 +357,7 @@ impl Effect for Scene {
         // shape there). This is proper compositing — a tree `▲` over a
         // brown ground cell picks up brown as its bg so the triangle reads
         // on the ground instead of leaving a default-bg "halo."
-        for (base_y, height, effect, halo_radius, halo_dim) in overlays {
+        for (base_y, height, effect, halo_radius, halo_dim, blend) in overlays {
             let sub_width = buf.width;
             let mut sub = FrameBuffer::new(sub_width, height);
             effect.render(&mut sub, frame);
@@ -358,6 +404,11 @@ impl Effect for Scene {
                 if target_y >= buf.height { continue; }
                 for sx in 0..sub_width.min(buf.width) {
                     let cell = sub.get(sx, sy);
+                    if let Some((mode, opacity)) = blend {
+                        let under = buf.get(sx, target_y);
+                        buf.set(sx, target_y, mode.composite(under, cell, opacity));
+                        continue;
+                    }
                     if cell.ch == ' ' { continue; }
                     let merged = if cell.bg.is_none() {
                         // Inherit bg only if the destination opted in by
@@ -385,6 +436,26 @@ impl Effect for Scene {
 mod tests {
     use super::*;
     use super::super::framebuffer::EffectExt;
+
+    #[test]
+    fn overlay_blend_composites_half_blocks() {
+        struct Fill(Cell);
+        impl Effect for Fill {
+            fn render(&self, buf: &mut FrameBuffer, _frame: usize) {
+                for x in 0..buf.width { buf.set(x, 0, self.0); }
+            }
+            fn size(&self) -> (usize, usize) { (2, 1) }
+        }
+        let red = Color::new(200, 0, 0);
+        let blue = Color::new(0, 0, 200);
+        let scene = Scene::new()
+            .add(Fill(Cell::with_bg('▀', red, blue)))
+            .overlay_blend(Fill(Cell::new('▄', red)), 1, -1, BlendMode::Screen, 1.0);
+        let mut buf = FrameBuffer::new(2, 1);
+        scene.render(&mut buf, 0);
+        let cell = buf.get(0, 0);
+        assert_eq!((cell.ch, cell.color, cell.bg), ('▀', red, Some(BlendMode::Screen.blend(blue, red))));
+    }
 
     #[test]
     fn scene_dimensions() {

@@ -486,12 +486,15 @@ fn get_cursor_row() -> Option<usize> {
 /// Watch `/dev/tty` for `key` (case-insensitive) and flip `running` to
 /// false when pressed. Clears only ICANON|ECHO — ISIG stays on so Ctrl-C
 /// still works. Restores the original termios when the thread exits.
+/// Returns a flag that turns true once the key was actually pressed.
 #[cfg(unix)]
-fn spawn_quit_listener(key: char, running: Arc<std::sync::atomic::AtomicBool>) {
+fn spawn_quit_listener(key: char, running: Arc<std::sync::atomic::AtomicBool>) -> Arc<std::sync::atomic::AtomicBool> {
     use std::io::Read;
     use std::os::unix::io::AsRawFd;
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
+    let pressed = Arc::new(AtomicBool::new(false));
+    let flag = pressed.clone();
     std::thread::spawn(move || {
         let Ok(mut tty) = std::fs::OpenOptions::new().read(true).open("/dev/tty") else {
             return;
@@ -531,6 +534,7 @@ fn spawn_quit_listener(key: char, running: Arc<std::sync::atomic::AtomicBool>) {
         while running.load(Ordering::Relaxed) {
             match tty.read(&mut byte) {
                 Ok(1) if (byte[0] as char).eq_ignore_ascii_case(&key) => {
+                    flag.store(true, Ordering::Relaxed);
                     running.store(false, Ordering::Relaxed);
                     break;
                 }
@@ -539,10 +543,26 @@ fn spawn_quit_listener(key: char, running: Arc<std::sync::atomic::AtomicBool>) {
             }
         }
     });
+    pressed
 }
 
 #[cfg(all(not(unix), not(target_arch = "wasm32")))]
-fn spawn_quit_listener(_key: char, _running: Arc<std::sync::atomic::AtomicBool>) {}
+fn spawn_quit_listener(_key: char, _running: Arc<std::sync::atomic::AtomicBool>) -> Arc<std::sync::atomic::AtomicBool> {
+    Arc::new(std::sync::atomic::AtomicBool::new(false))
+}
+
+/// Leave the terminal after an animation. Quit by key: wipe the whole
+/// animation area and park the cursor where it began, as if it never
+/// ran. Otherwise the last frame stays and the cursor goes below it.
+#[cfg(not(target_arch = "wasm32"))]
+fn finish(stderr: &mut impl std::io::Write, quit: bool, start_row: usize, height: usize) {
+    if quit {
+        let _ = write!(stderr, "\x1B[0m\x1B[{};1H\x1B[J\x1B[?25h", start_row);
+    } else {
+        let _ = write!(stderr, "\x1B[{};1H\x1B[?25h", start_row + height);
+    }
+    let _ = stderr.flush();
+}
 
 /// Diff two framebuffers and produce minimal ANSI output.
 ///
@@ -612,6 +632,33 @@ pub async fn run_effect(
     speed: f64,
     quit_key: Option<char>,
 ) {
+    run_effect_in(effect, width, height, duration, speed, quit_key, false).await
+}
+
+/// Restores the main screen if the process is killed by Ctrl-C while an
+/// alternate-screen animation runs. Only async-signal-safe calls.
+#[cfg(unix)]
+extern "C" fn leave_alt_screen_and_exit(_sig: libc::c_int) {
+    const RESTORE: &[u8] = b"\x1B[0m\x1B[?25h\x1B[?1049l";
+    unsafe {
+        libc::write(2, RESTORE.as_ptr().cast(), RESTORE.len());
+        libc::_exit(130);
+    }
+}
+
+/// `run_effect`, optionally on the terminal's alternate screen: drawn from
+/// the top-left of a blank screen, and on exit (quit key, Ctrl-C or the
+/// end) the terminal returns to exactly what was there before.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) async fn run_effect_in(
+    effect: impl Effect,
+    width: usize,
+    height: usize,
+    duration: Duration,
+    speed: f64,
+    quit_key: Option<char>,
+    alt_screen: bool,
+) {
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -628,24 +675,34 @@ pub async fn run_effect(
 
     let running = Arc::new(AtomicBool::new(true));
 
-    // Hide cursor and reserve space
-    {
-        let mut stderr = std::io::stderr().lock();
-        let _ = write!(stderr, "\x1B[?25l");
-        for _ in 0..height {
-            let _ = write!(stderr, "\n");
+    let start_row = if alt_screen {
+        #[cfg(unix)]
+        unsafe {
+            libc::signal(libc::SIGINT, leave_alt_screen_and_exit as *const () as libc::sighandler_t);
         }
-        let _ = write!(stderr, "\x1B[{}A", height);
+        let mut stderr = std::io::stderr().lock();
+        let _ = write!(stderr, "\x1B[?1049h\x1B[?25l\x1B[2J");
         let _ = stderr.flush();
-    }
+        1
+    } else {
+        // Hide cursor and reserve space
+        {
+            let mut stderr = std::io::stderr().lock();
+            let _ = write!(stderr, "\x1B[?25l");
+            for _ in 0..height {
+                let _ = write!(stderr, "\n");
+            }
+            let _ = write!(stderr, "\x1B[{}A", height);
+            let _ = stderr.flush();
+        }
+        get_cursor_row().unwrap_or(1)
+    };
 
-    let start_row = get_cursor_row().unwrap_or(1);
-
-    if let Some(key) = quit_key {
+    let quit_pressed = quit_key.map(|key| {
         // Force the OSC color probe now, while we still own the tty.
         crate::terminal::probe_colors();
-        spawn_quit_listener(key, running.clone());
-    }
+        spawn_quit_listener(key, running.clone())
+    });
 
     let frame_duration = Duration::from_secs_f64(1.0 / FPS / speed.max(0.001));
     let term_width = crate::terminal::terminal_width();
@@ -691,12 +748,18 @@ pub async fn run_effect(
     }
     running.store(false, Ordering::Relaxed);
 
-    // Show cursor, move below rendered area
-    {
+    if alt_screen {
         let mut stderr = std::io::stderr().lock();
-        let _ = write!(stderr, "\x1B[{};1H\x1B[?25h", start_row + height);
+        let _ = write!(stderr, "\x1B[0m\x1B[?25h\x1B[?1049l");
         let _ = stderr.flush();
+        #[cfg(unix)]
+        unsafe {
+            libc::signal(libc::SIGINT, libc::SIG_DFL);
+        }
+        return;
     }
+    let quit = quit_pressed.is_some_and(|p| p.load(Ordering::Relaxed));
+    finish(&mut std::io::stderr().lock(), quit, start_row, height);
 }
 
 /// Handle for a running animation.
@@ -818,11 +881,11 @@ pub fn spawn_effect(
 
     let start_row = get_cursor_row().unwrap_or(1);
 
-    if let Some(key) = quit_key {
+    let quit_pressed = quit_key.map(|key| {
         // Force the OSC color probe now, while we still own the tty.
         crate::terminal::probe_colors();
-        spawn_quit_listener(key, running.clone());
-    }
+        spawn_quit_listener(key, running.clone())
+    });
 
     let frame_duration = Duration::from_secs_f64(1.0 / FPS / speed.max(0.001));
     let term_width = crate::terminal::terminal_width();
@@ -946,10 +1009,8 @@ pub fn spawn_effect(
             frame += 1;
         }
 
-        // Cleanup: show cursor, move below
-        let mut stderr = std::io::stderr().lock();
-        let _ = write!(stderr, "\x1B[{};1H\x1B[?25h", start_row + height);
-        let _ = stderr.flush();
+        let quit = quit_pressed.is_some_and(|p| p.load(Ordering::Relaxed));
+        finish(&mut std::io::stderr().lock(), quit, start_row, height);
     });
 
     AnimationHandle {

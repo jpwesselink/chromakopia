@@ -57,6 +57,19 @@ impl Easing {
             Easing::Elastic(period) => elastic_out(t, period),
         }
     }
+
+    /// Back-and-forth through this curve, in -1..=1, repeating every 1.0
+    /// of `t`. Each half travels end to end along the curve (`EaseInOut`
+    /// slows at both ends, `Linear` is a triangle wave). Aligned like
+    /// `sin(TAU * t)`: 0 at t = 0, +1 at 0.25, -1 at 0.75.
+    pub fn swing(self, t: f64) -> f64 {
+        let p = (t + 0.25).rem_euclid(1.0);
+        if p < 0.5 {
+            self.apply(p * 2.0) * 2.0 - 1.0
+        } else {
+            1.0 - self.apply(p * 2.0 - 1.0) * 2.0
+        }
+    }
 }
 
 /// Solve cubic bezier: find y for a given x using Newton-Raphson.
@@ -118,6 +131,20 @@ mod tests {
             let t = i as f64 / 10.0;
             assert!((Easing::Linear.apply(t) - t).abs() < 1e-10);
         }
+    }
+
+    #[test]
+    fn swing_sine_aligned() {
+        for easing in [Easing::Linear, Easing::EaseInOut] {
+            assert!(easing.swing(0.0).abs() < 1e-10);
+            assert!((easing.swing(0.25) - 1.0).abs() < 1e-10);
+            assert!(easing.swing(0.5).abs() < 1e-10);
+            assert!((easing.swing(0.75) + 1.0).abs() < 1e-10);
+            assert!((easing.swing(1.3) - easing.swing(0.3)).abs() < 1e-10);
+        }
+        // Linear is a triangle wave; EaseInOut lingers near the ends.
+        assert!((Easing::Linear.swing(0.125) - 0.5).abs() < 1e-10);
+        assert!(Easing::EaseInOut.swing(0.2) > Easing::Linear.swing(0.2));
     }
 
     #[test]

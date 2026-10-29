@@ -76,7 +76,7 @@ pub mod prelude {
         Rainbow, Plasma, VectorField, HeightMap, Glow, Pulse, Radar, Neon, Karaoke, Glitch, Flap,
         Scroll, ScrollDirection, Marquee, VSineWave, Spread, SpreadOrigin, Dycp, Fld, Wind,
         Fade, FadeEnvelope, Chain, Phases, Blend, BlendMode, Transition, Composite, DelayedStart,
-        Solid, text, Easing, Timeline, AlphaIn, AlphaOut,
+        Solid, text, Easing, Timeline, AlphaIn, AlphaOut, Layer, Layers, Px, Canvas,
     };
     pub use crate::presets;
 

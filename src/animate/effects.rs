@@ -1278,9 +1278,11 @@ pub struct Marquee {
     cycle_secs: f64,
     /// Easing applied to progress within each cycle.
     easing: super::easing::Easing,
-    /// If true, the marquee oscillates back and forth (sine wave) instead
-    /// of scrolling in one direction. Peak excursion = speed * cycle / 4.
+    /// If true, the marquee oscillates back and forth (shaped by `easing`)
+    /// instead of scrolling in one direction. Peak excursion = speed * cycle / 4.
     swing: bool,
+    /// Offset into the cycle, as a fraction of `cycle_secs`.
+    phase: f64,
 }
 
 impl Marquee {
@@ -1293,6 +1295,7 @@ impl Marquee {
             cycle_secs: 0.0,
             easing: super::easing::Easing::Linear,
             swing: false,
+            phase: 0.0,
         }
     }
     pub fn speed(mut self, cells_per_sec: f64) -> Self {
@@ -1323,11 +1326,20 @@ impl Marquee {
         self
     }
 
-    /// Oscillate back and forth instead of scrolling one way. The motion
-    /// is a sine wave; peak excursion = `speed * cycle / 4` cells, so
-    /// faster layers swing wider — natural parallax depth cue.
+    /// Oscillate back and forth instead of scrolling one way. Each sweep
+    /// follows the `cycle` easing (`EaseInOut` slows at both ends,
+    /// `Linear` turns at full speed); peak excursion = `speed * cycle / 4`
+    /// cells, so faster layers swing wider — natural parallax depth cue.
     pub fn swing(mut self) -> Self {
         self.swing = true;
+        self
+    }
+
+    /// Start `fraction` of a cycle ahead (0.25 = a quarter cycle). Layers
+    /// sharing one cycle but with staggered phases move in a ripple
+    /// instead of in lockstep. No effect without `cycle`.
+    pub fn phase(mut self, fraction: f64) -> Self {
+        self.phase = fraction;
         self
     }
 }
@@ -1343,16 +1355,14 @@ impl Effect for Marquee {
 
         let t = frame as f64 / super::framebuffer::FPS;
         let offset_f = if self.swing && self.cycle_secs > 0.0 {
-            // Sine-wave oscillation. Peak excursion = speed * cycle / 4
-            // (sine peaks at t = cycle/4). Faster layers swing wider →
-            // parallax depth.
+            // Eased oscillation. Peak excursion = speed * cycle / 4.
+            // Faster layers swing wider → parallax depth.
             let amplitude = self.speed * self.cycle_secs * 0.25;
-            let phase = std::f64::consts::TAU * t / self.cycle_secs;
-            amplitude * phase.sin()
+            amplitude * self.easing.swing(t / self.cycle_secs + self.phase)
         } else if self.cycle_secs > 0.0 {
             // Eased one-way cycle: offset accumulates each cycle.
             let dist_per_cycle = self.speed * self.cycle_secs;
-            let cycles = t / self.cycle_secs;
+            let cycles = t / self.cycle_secs + self.phase;
             let cycle_idx = cycles.floor();
             let frac = cycles - cycle_idx;
             let eased = self.easing.apply(frac);
@@ -2223,7 +2233,7 @@ impl BlendMode {
         }
     }
 
-    fn blend(self, a: Color, b: Color) -> Color {
+    pub(crate) fn blend(self, a: Color, b: Color) -> Color {
         Color::new(
             self.apply(a.r, b.r),
             self.apply(a.g, b.g),
@@ -2235,7 +2245,9 @@ impl BlendMode {
 /// Blend two color effects together.
 ///
 /// Both effects render into separate buffers, then their colors are
-/// combined per-cell using the blend mode.
+/// combined per-cell using the blend mode — ink and background alike.
+/// To stack independent layers (shapes over shapes), use
+/// `Scene::overlay_blend` or `Layers` instead.
 pub struct Blend {
     a: Box<dyn Effect>,
     b: Box<dyn Effect>,
@@ -2257,24 +2269,30 @@ impl Effect for Blend {
         // Render A into buf
         self.a.render(buf, frame);
 
-        // Render B into a scratch buffer
+        // Render B into a scratch buffer. It sees A's text layout but no
+        // background, so any bg it holds afterwards is one B painted.
         let mut buf_b = FrameBuffer::new(buf.width, buf.height);
-        // Copy chars so B sees the same text layout
         for y in 0..buf.height {
             for x in 0..buf.width {
-                buf_b.set(x, y, buf.get(x, y));
+                buf_b.set(x, y, Cell { bg: None, ..buf.get(x, y) });
             }
         }
         self.b.render(&mut buf_b, frame);
 
-        // Blend colors per cell
+        // Blend per cell: ink where A has a glyph, background wherever
+        // B has a colour for it. Half-blocks carry a pixel in their bg,
+        // so B's ink colour tints that half too.
         for y in 0..buf.height {
             for x in 0..buf.width {
-                let cell = buf.get(x, y);
-                if cell.ch.is_whitespace() { continue; }
-                let color_a = cell.color;
-                let color_b = buf_b.get(x, y).color;
-                buf.set_color(x, y, self.mode.blend(color_a, color_b));
+                let a = buf.get(x, y);
+                let b = buf_b.get(x, y);
+                let color = if a.ch.is_whitespace() { a.color } else { self.mode.blend(a.color, b.color) };
+                let b_bg = b.bg.or(matches!(a.ch, '▀' | '▄').then_some(b.color));
+                let bg = match (a.bg, b_bg) {
+                    (Some(under), Some(over)) => Some(self.mode.blend(under, over)),
+                    (under, over) => over.or(under),
+                };
+                buf.set(x, y, Cell { color, bg, ..a });
             }
         }
     }
@@ -2973,6 +2991,26 @@ mod tests {
 
     fn make_buf(text: &str) -> FrameBuffer {
         FrameBuffer::from_text(text, Color::new(255, 255, 255))
+    }
+
+    fn marquee_row(m: &Marquee, frame: usize) -> String {
+        let mut buf = FrameBuffer::new(10, 1);
+        m.render(&mut buf, frame);
+        (0..10).map(|x| buf.get(x, 0).ch).collect()
+    }
+
+    #[test]
+    fn marquee_phase_is_a_time_offset() {
+        // 4s cycle at 60fps: a quarter-cycle phase == 60 frames later.
+        let make = |phase| {
+            Marquee::wrap(text("0123456789", Color::new(255, 255, 255)))
+                .speed(8.0)
+                .cycle(4.0, super::super::easing::Easing::EaseInOut)
+                .swing()
+                .phase(phase)
+        };
+        assert_eq!(marquee_row(&make(0.25), 0), marquee_row(&make(0.0), 60));
+        assert_ne!(marquee_row(&make(0.25), 0), marquee_row(&make(0.0), 0));
     }
 
     /// Writes the received frame number into the red channel of every
