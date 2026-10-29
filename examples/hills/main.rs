@@ -40,6 +40,7 @@ pub const TOP_PAD: usize = 6;
 struct PanelView {
     step: usize,
     local: f64,
+    slide: panel::Slide,
 }
 
 /// Everything the paint layers need to know about this frame.
@@ -49,6 +50,8 @@ struct View {
     /// Heading text and its drop-in progress (0..=1).
     heading: Option<(&'static str, f64)>,
     panel: Option<PanelView>,
+    /// The previous panel, while the current one pushes it off screen.
+    pushed: Option<PanelView>,
 }
 
 /// What is on screen `local` seconds into step `i`.
@@ -67,8 +70,37 @@ fn view_for(steps: &[Step], i: usize, local: f64) -> View {
             let progress = if h == i { (local / stage::HEADING_SECS).min(1.0) } else { 1.0 };
             (title, progress)
         });
-    let panel = matches!(step.kind, StepKind::Panel { .. }).then_some(PanelView { step: i, local });
-    View { logo, heading, panel }
+    let panel = is_panel(&steps[i]).then(|| PanelView { step: i, local, slide: slide_of(steps, i) });
+    let pushed = panel
+        .filter(|pv| !pv.slide.first && local < panel::ENTER_SECS)
+        .map(|_| PanelView { step: i - 1, local: steps[i - 1].secs + local, slide: slide_of(steps, i - 1) });
+    View { logo, heading, panel, pushed }
+}
+
+fn is_panel(step: &Step) -> bool {
+    matches!(step.kind, StepKind::Panel { .. })
+}
+
+/// Whether panel step `i` opens or closes its block's run of panels.
+fn slide_of(steps: &[Step], i: usize) -> panel::Slide {
+    let same_run = |j: usize| is_panel(&steps[j]) && steps[j].block == steps[i].block;
+    panel::Slide { first: i == 0 || !same_run(i - 1), last: i + 1 >= steps.len() || !same_run(i + 1) }
+}
+
+/// The panels on screen this frame — the current one and, while it slides
+/// in, the one it pushes out — each as (step, interior at its current
+/// place, local time).
+fn on_screen(steps: &[Step], view: &View, screen_w: usize) -> Vec<(usize, panel::Geometry, f64)> {
+    let Some(pv) = view.panel else { return Vec::new() };
+    let step = steps[pv.step];
+    let rest = panel::geometry(screen_w, step.block);
+    let x = panel::slide_x(&rest, screen_w, pv.local, step.secs, pv.slide);
+    let mut out = vec![(pv.step, panel::Geometry { x, ..rest }, pv.local)];
+    if let Some(old) = view.pushed {
+        let x = x - panel::travel(&rest, screen_w);
+        out.push((old.step, panel::Geometry { x, ..rest }, old.local));
+    }
+    out
 }
 
 /// Plays the storyboard: applies seeks, publishes the frame's `View` for
@@ -79,6 +111,8 @@ struct Stage {
     effects: Vec<Option<Box<dyn Effect>>>,
     screen_w: usize,
     layers: Layers,
+    /// The block heading, drawn last so it sits in front of the panels.
+    heading: Layers,
     view: Arc<Mutex<View>>,
     clock: Mutex<Clock>,
     seek: Arc<Mutex<Option<Seek>>>,
@@ -99,7 +133,8 @@ impl Stage {
             .collect();
         let view = Arc::new(Mutex::new(view_for(&steps, 0, 0.0)));
         let layers = build_layers(screen_w, view.clone(), steps.clone());
-        Self { steps, effects, screen_w, layers, view, clock: Mutex::new(Clock::new()), seek: Arc::new(Mutex::new(None)) }
+        let heading = build_heading(view.clone());
+        Self { steps, effects, screen_w, layers, heading, view, clock: Mutex::new(Clock::new()), seek: Arc::new(Mutex::new(None)) }
     }
 
     /// Jump the clock so storyboard time is `t` at frame 0 (tests).
@@ -120,22 +155,36 @@ impl Effect for Stage {
 
         self.layers.render(buf, frame);
 
-        // Headings too wide for the pixel font go in as plain text.
-        if let Some((title, _)) = view.heading {
-            if !pixel_caption_fits(title, buf.width) {
-                put_band(buf, HEADING_ROW, title);
+        for (s, geo, local) in on_screen(&self.steps, &view, self.screen_w) {
+            if let Some(effect) = &self.effects[s] {
+                panel::blit(buf, &geo, effect.as_ref(), panel::effect_frame(local));
+            }
+        }
+        if let Some(pv) = view.panel {
+            let step = self.steps[pv.step];
+            if let StepKind::Panel { subtitle, .. } = step.kind {
+                if panel::at_rest(pv.local, step.secs, pv.slide) {
+                    put_band(buf, subtitle_row(&panel::geometry(self.screen_w, step.block)), subtitle);
+                }
             }
         }
 
-        if let (Some(pv), Some(effect)) = (view.panel, &self.effects[i]) {
-            let step = self.steps[pv.step];
-            let geo = panel::geometry(self.screen_w, step.block);
-            let y = panel::panel_y(&geo, pv.local, step.secs);
-            panel::blit(buf, &geo, y, effect.as_ref(), panel::effect_frame(pv.local));
-            if let StepKind::Panel { subtitle, .. } = step.kind {
-                if panel::at_rest(pv.local, step.secs) {
-                    put_band(buf, subtitle_row(&geo), subtitle);
+        // The heading goes over everything else; headings too wide for the
+        // pixel font go in as plain text.
+        if let Some((title, _)) = view.heading {
+            if pixel_caption_fits(title, buf.width) {
+                let mut top = FrameBuffer::new(buf.width, buf.height);
+                self.heading.render(&mut top, frame);
+                for y in 0..buf.height {
+                    for x in 0..buf.width {
+                        let over = top.get(x, y);
+                        if over.ch != ' ' {
+                            buf.set(x, y, BlendMode::Normal.composite(buf.get(x, y), over, 1.0));
+                        }
+                    }
                 }
+            } else {
+                put_band(buf, HEADING_ROW, title);
             }
         }
 
@@ -164,7 +213,9 @@ fn frame_edges(buf: &mut FrameBuffer) {
 }
 
 /// Terminal row a plain-text heading sits on: where the pixel one would.
-const HEADING_ROW: usize = 2;
+const HEADING_ROW: usize = 4;
+/// Top pixel row of the resting pixel-font heading.
+const HEADING_Y: i64 = HEADING_ROW as i64 * 2;
 
 /// Terminal row the subtitle sits on: just below the panel's extrusion.
 fn subtitle_row(geo: &panel::Geometry) -> usize {
@@ -199,8 +250,7 @@ fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>) -> La
     let scroller = scroller::Scroller::new(scroller::LICENSE_TEXT, (ROWS * 2) as i64 - 15);
 
     let logo_view = view.clone();
-    let frame_view = view.clone();
-    let caption_view = view;
+    let frame_view = view;
     let frame_steps = steps;
 
     landscape::landscape()
@@ -208,25 +258,25 @@ fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>) -> La
             let phase = logo_view.lock().unwrap().logo;
             word.paint(c, x0, y0, phase)
         }))
-        // Panel box (fill, edge, extrusion).
+        // Panel boxes (fill, edge, extrusion).
         .layer(Layer::paint(move |c| {
-            let Some(pv) = frame_view.lock().unwrap().panel else { return };
-            let step = frame_steps[pv.step];
-            let geo = panel::geometry(c.width, step.block);
-            panel::paint_frame(c, &geo, panel::panel_y(&geo, pv.local, step.secs));
-        }))
-        // Heading above the panel, dropping in with a bounce (plain text
-        // when it is too wide — see Stage::render).
-        .layer(Layer::paint(move |c| {
-            let Some((title, progress)) = caption_view.lock().unwrap().heading else { return };
-            if !pixel_caption_fits(title, c.width) {
-                return;
+            let view = *frame_view.lock().unwrap();
+            for (_, geo, _) in on_screen(&frame_steps, &view, c.width) {
+                panel::paint_frame(c, &geo);
             }
-            let x = (c.width as i64 - glyphs::text_width(title)) / 2;
-            let y = 4 - ((1.0 - Easing::BounceOut.apply(progress)) * 16.0).round() as i64;
-            glyphs::stamp_text(c, title, (x, y), &mut Vec::new());
         }))
         .layer(Layer::paint(move |c| scroller.paint(c)))
+}
+
+/// The block heading, dropping in with a bounce (plain text when it is
+/// too wide — see Stage::render).
+fn build_heading(view: Arc<Mutex<View>>) -> Layers {
+    Layers::new(ROWS).layer(Layer::paint(move |c| {
+        let Some((title, progress)) = view.lock().unwrap().heading else { return };
+        let x = (c.width as i64 - glyphs::text_width(title)) / 2;
+        let y = HEADING_Y - ((1.0 - Easing::BounceOut.apply(progress)) * 20.0).round() as i64;
+        glyphs::stamp_text(c, title, (x, y), &mut Vec::new());
+    }))
 }
 
 /// Why a terminal `rows` tall can't show the scene, if it can't.
@@ -292,6 +342,7 @@ mod tests {
         let p = s.iter().position(|st| matches!(st.kind, StepKind::Panel { .. })).unwrap();
         let v = view_for(&s, p, 1.0);
         assert_eq!(v.panel.map(|pv| (pv.step, pv.local)), Some((p, 1.0)));
+        assert_eq!(v.pushed, None);
     }
 
     #[test]
@@ -299,6 +350,63 @@ mod tests {
         let s = storyboard();
         let v = view_for(&s, s.len() - 1, 1.0);
         assert_eq!((v.logo, v.heading, v.panel), (wordmark::LogoPhase::Enter(1.0), None, None));
+    }
+
+    #[test]
+    fn next_panel_pushes_the_current_one_out() {
+        let s = storyboard();
+        let p = s.iter().position(is_panel).unwrap();
+        assert!(slide_of(&s, p).first && !slide_of(&s, p).last);
+        // The block's second panel, a moment into its slide-in.
+        let v = view_for(&s, p + 1, 0.2);
+        let old = v.pushed.expect("first panel still on screen");
+        assert_eq!((old.step, old.local), (p, s[p].secs + 0.2));
+        let on = on_screen(&s, &v, 200);
+        assert_eq!(on.len(), 2);
+        assert!(on[1].1.x < on[0].1.x, "outgoing panel is to the left");
+        assert_eq!(on[0].1.x - on[1].1.x, panel::travel(&panel::geometry(200, 2), 200));
+        assert_eq!(view_for(&s, p + 1, panel::ENTER_SECS).pushed, None);
+    }
+
+    #[test]
+    fn last_panel_of_a_block_leaves_alone() {
+        let s = storyboard();
+        let last = s.iter().rposition(|st| st.block == 2 && is_panel(st)).unwrap();
+        assert!(slide_of(&s, last).last);
+        let first_of_next = s.iter().position(|st| st.block == 3 && is_panel(st)).unwrap();
+        assert!(slide_of(&s, first_of_next).first);
+        assert_eq!(view_for(&s, first_of_next, 0.1).pushed, None);
+    }
+
+    #[test]
+    fn heading_is_drawn_over_everything() {
+        // The heading goes on after the panels' cell effects and subtitles:
+        // wherever it is solid, it is what you see.
+        let s = storyboard();
+        let p = s.iter().position(is_panel).unwrap();
+        let stage = Stage::new(200);
+        stage.seek_to(start_of(&s, p) + 2.0);
+        let mut b = FrameBuffer::new(200, ROWS);
+        stage.render(&mut b, 0);
+        let mut heading = FrameBuffer::new(200, ROWS);
+        stage.heading.render(&mut heading, 0);
+        let ink = (0..ROWS)
+            .flat_map(|y| (0..200).map(move |x| (x, y)))
+            .filter(|&(x, y)| heading.get(x, y).ch != ' ')
+            .count();
+        assert!(ink > 0);
+        let mut solid = 0;
+        for y in 0..ROWS {
+            for x in 1..199 {
+                let h = heading.get(x, y);
+                // Both pixels set: opaque, so it reads exactly as the heading.
+                if h.ch == '▀' && h.bg.is_some() && y > 0 {
+                    solid += 1;
+                    assert_eq!(b.get(x, y), BlendMode::Normal.composite(Cell::space(), h, 1.0), "({x},{y})");
+                }
+            }
+        }
+        assert!(solid > 20, "only {solid} solid heading cells");
     }
 
     /// `cargo test --release --example hills bench_blocks -- --ignored --nocapture`
@@ -338,6 +446,12 @@ mod tests {
             stage.render(&mut b, 0);
             out += &format!("\n=== block {block} ===\n{}\n", b.to_ansi_string());
         }
+        // Mid-push: the second colour panel shoving the first one out.
+        let p = s.iter().position(is_panel).unwrap() + 1;
+        stage.seek_to(start_of(&s, p) + 0.3);
+        let mut b = FrameBuffer::new(120, ROWS);
+        stage.render(&mut b, 0);
+        out += &format!("\n=== push ===\n{}\n", b.to_ansi_string());
         std::fs::write("target/hills-blocks.ansi", out).unwrap();
     }
 

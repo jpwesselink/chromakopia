@@ -6,7 +6,6 @@ use chromakopia::prelude::*;
 
 use super::glyphs::LETTER_EXTRUDE;
 use super::stage::PanelKind;
-use super::ROWS;
 
 /// Panel fill and edge — the docs site's feature cards.
 pub const PANEL_FILL: Color = Color { r: 0x0F, g: 0x1F, b: 0x0F };
@@ -22,7 +21,7 @@ const MAX_W: usize = 104;
 const MIN_W: usize = 20;
 const MARGIN: usize = 10;
 /// Resting top row: leaves room for the heading above.
-const REST_Y: i64 = 8;
+const REST_Y: i64 = 11;
 
 /// Panel interior in cells. `y` is the resting row.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -39,20 +38,35 @@ pub fn geometry(screen_w: usize, block: usize) -> Geometry {
     Geometry { x: (screen_w as i64 - w as i64) / 2, y: REST_Y, w, h }
 }
 
-/// Panel top row `local` seconds into a step of `secs`: bounces in from
-/// above, rests, falls out below. Always a whole cell.
-pub fn panel_y(geo: &Geometry, local: f64, secs: f64) -> i64 {
-    let above = -(geo.h as f64) - 3.0;
-    let below = ROWS as f64 + 2.0;
-    let rest = geo.y as f64;
-    let y = if local < ENTER_SECS {
-        above + (rest - above) * Easing::BounceOut.apply(local / ENTER_SECS)
-    } else if local > secs - EXIT_SECS {
-        rest + (below - rest) * Easing::EaseIn.apply((local - (secs - EXIT_SECS)) / EXIT_SECS)
+/// Where a panel sits in its block's run of panels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Slide {
+    /// Slides in onto an empty stage (nothing to push).
+    pub first: bool,
+    /// Leaves by itself at the end of its step; others get pushed out.
+    pub last: bool,
+}
+
+/// How far a panel travels between off-screen right, rest, and off-screen
+/// left. The outgoing panel moves with the incoming one, this far behind.
+pub fn travel(geo: &Geometry, screen_w: usize) -> i64 {
+    screen_w as i64 - geo.x + 4
+}
+
+/// Panel left column `local` seconds into a step of `secs`: slides in
+/// from the right, rests, and — if it is the last of its block — slides
+/// out to the left. Always a whole cell.
+pub fn slide_x(geo: &Geometry, screen_w: usize, local: f64, secs: f64, slide: Slide) -> i64 {
+    let d = travel(geo, screen_w) as f64;
+    let rest = geo.x as f64;
+    let x = if local < ENTER_SECS {
+        rest + d * (1.0 - Easing::EaseInOut.apply(local / ENTER_SECS))
+    } else if slide.last && local > secs - EXIT_SECS {
+        rest - d * Easing::EaseIn.apply((local - (secs - EXIT_SECS)) / EXIT_SECS)
     } else {
         rest
     };
-    y.round() as i64
+    x.round() as i64
 }
 
 /// The effect's frame `local` seconds into a panel step.
@@ -60,9 +74,9 @@ pub fn effect_frame(local: f64) -> usize {
     ((local - EFFECT_DELAY).max(0.0) * FPS).round() as usize
 }
 
-/// Between the bounce-in and the fall-out.
-pub fn at_rest(local: f64, secs: f64) -> bool {
-    local >= ENTER_SECS && local <= secs - EXIT_SECS
+/// Standing still: after sliding in, and before sliding out.
+pub fn at_rest(local: f64, secs: f64, slide: Slide) -> bool {
+    local >= ENTER_SECS && (!slide.last || local <= secs - EXIT_SECS)
 }
 
 /// Fill `[x0, x1) × [y0, y1)` in canvas pixels.
@@ -75,9 +89,9 @@ fn fill(c: &mut Canvas, (x0, y0, x1, y1): (i64, i64, i64, i64), color: Color) {
 }
 
 /// Two-step extrusion down-right, one-pixel edge, then the fill — the
-/// letters' look, as a box. `y` is the panel's current top row (cells).
-pub fn paint_frame(c: &mut Canvas, geo: &Geometry, y: i64) {
-    let inner = (geo.x, y * 2, geo.x + geo.w as i64, (y + geo.h as i64) * 2);
+/// letters' look, as a box, at the panel's current place.
+pub fn paint_frame(c: &mut Canvas, geo: &Geometry) {
+    let inner = (geo.x, geo.y * 2, geo.x + geo.w as i64, (geo.y + geo.h as i64) * 2);
     let outer = (inner.0 - 1, inner.1 - 1, inner.2 + 1, inner.3 + 1);
     for k in [2, 1] {
         fill(c, (outer.0 + k, outer.1 + k, outer.2 + k, outer.3 + k), LETTER_EXTRUDE);
@@ -219,17 +233,16 @@ pub fn effect_for(kind: PanelKind, text: &str) -> Box<dyn Effect> {
     }
 }
 
-/// Render `effect` at `frame` and lay it over the panel interior at row
-/// `y`, centred. Sized effects keep their size; unsized ones (fields) fill
+/// Render `effect` at `frame` and lay it over the panel interior, centred. Sized effects keep their size; unsized ones (fields) fill
 /// the interior. Glyph cells get the panel fill as background; everything
 /// is clipped to `buf`.
-pub fn blit(buf: &mut FrameBuffer, geo: &Geometry, y: i64, effect: &dyn Effect, frame: usize) {
+pub fn blit(buf: &mut FrameBuffer, geo: &Geometry, effect: &dyn Effect, frame: usize) {
     let (ew, eh) = effect.size();
     let (w, h) = if ew == 0 || eh == 0 { (geo.w, geo.h) } else { (ew.min(geo.w), eh.min(geo.h)) };
     let mut sub = FrameBuffer::new(w, h);
     effect.render(&mut sub, frame);
     let ox = geo.x + (geo.w - w) as i64 / 2;
-    let oy = y + (geo.h - h) as i64 / 2;
+    let oy = geo.y + (geo.h - h) as i64 / 2;
     for sy in 0..h {
         for sx in 0..w {
             let cell = sub.get(sx, sy);
@@ -299,7 +312,7 @@ mod tests {
     #[test]
     fn geometry_is_centred() {
         let g = geometry(200, 2);
-        assert_eq!((g.w, g.h, g.y), (104, 13, 8));
+        assert_eq!((g.w, g.h, g.y), (104, 13, 11));
         assert_eq!(g.x, (200 - 104) / 2);
         assert_eq!(geometry(200, 4).h, 15);
     }
@@ -313,20 +326,36 @@ mod tests {
     }
 
     #[test]
-    fn panel_bounces_in_rests_and_falls_out() {
+    fn panel_slides_in_from_the_right_and_out_to_the_left() {
         let g = geometry(200, 2);
-        assert!(panel_y(&g, 0.0, 5.0) < 0);
-        assert_eq!(panel_y(&g, ENTER_SECS, 5.0), g.y);
-        assert_eq!(panel_y(&g, 2.5, 5.0), g.y);
-        assert!(panel_y(&g, 5.0, 5.0) >= super::super::ROWS as i64);
-        assert!(at_rest(2.5, 5.0) && !at_rest(0.1, 5.0) && !at_rest(4.9, 5.0));
+        let mid = Slide { first: true, last: false };
+        let last = Slide { first: false, last: true };
+        // Starts fully off the right edge (outline at x - 1).
+        assert!(slide_x(&g, 200, 0.0, 5.0, mid) - 1 >= 200);
+        assert_eq!(slide_x(&g, 200, ENTER_SECS, 5.0, mid), g.x);
+        // A panel that gets pushed doesn't leave by itself.
+        assert_eq!(slide_x(&g, 200, 4.9, 5.0, mid), g.x);
+        // The last of a block leaves fully off the left edge (extrusion to x + w + 3).
+        assert!(slide_x(&g, 200, 5.0, 5.0, last) + g.w as i64 + 3 <= 0);
+        assert!(at_rest(2.5, 5.0, mid) && !at_rest(0.1, 5.0, mid));
+        assert!(at_rest(4.9, 5.0, mid) && !at_rest(4.9, 5.0, last));
+    }
+
+    #[test]
+    fn pushed_panel_leaves_by_the_same_distance() {
+        let g = geometry(200, 2);
+        let s = Slide { first: false, last: false };
+        // At the start of the push the outgoing panel is where it rested,
+        // at the end it is fully off the left edge.
+        assert_eq!(slide_x(&g, 200, 0.0, 5.0, s) - travel(&g, 200), g.x);
+        assert!(slide_x(&g, 200, ENTER_SECS, 5.0, s) - travel(&g, 200) + g.w as i64 + 3 <= 0);
     }
 
     #[test]
     fn blit_paints_glyphs_on_panel_fill() {
         let g = Geometry { x: 2, y: 1, w: 6, h: 3 };
         let mut buf = FrameBuffer::new(10, 5);
-        blit(&mut buf, &g, 1, &text("X", Color::new(255, 0, 0)), 0);
+        blit(&mut buf, &g, &text("X", Color::new(255, 0, 0)), 0);
         // 1×1 content centred in a 6×3 interior: column 2 + 5/2 = 4, row 1 + 2/2 = 2.
         let cell = buf.get(4, 2);
         assert_eq!((cell.ch, cell.bg), ('X', Some(PANEL_FILL)));
@@ -336,7 +365,7 @@ mod tests {
     fn blit_clips_to_small_buffer() {
         let g = geometry(200, 2);
         let mut buf = FrameBuffer::new(30, 4); // far smaller than the panel
-        blit(&mut buf, &g, g.y, &text("WIDE TEXT", Color::new(255, 255, 255)), 0);
+        blit(&mut buf, &g, &text("WIDE TEXT", Color::new(255, 255, 255)), 0);
     }
 
     #[test]
