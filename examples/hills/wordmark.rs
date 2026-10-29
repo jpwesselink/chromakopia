@@ -107,6 +107,7 @@ impl Wordmark {
 
     /// Lowest pixel row the wordmark reaches at the top: glyph, two-step
     /// extrusion, calm swing down.
+    #[cfg(test)]
     pub fn bottom_at_top(&self) -> i64 {
         self.y_top + self.height() as i64 + 2 + self.calm_swing()
     }
