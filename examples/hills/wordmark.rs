@@ -38,6 +38,30 @@ const DROP_SECS: f64 = 0.9;
 const FALL: f64 = (ROWS * 2) as f64;
 const DYCP_RAMP: f64 = 1.0;
 
+// Exit: letter i rises off the top starting at i × EXIT_STAGGER seconds,
+// taking EXIT_SECS (ease-in) — 11 letters finish within 1.5 s.
+pub const EXIT_STAGGER: f64 = 0.08;
+pub const EXIT_SECS: f64 = 0.6;
+
+/// What the wordmark is doing, with local seconds into that phase.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LogoPhase {
+    Hidden,
+    Enter(f64),
+    Exit(f64),
+}
+
+/// Letter `i`'s drop-in offset `t` seconds into the entrance (−FALL → 0).
+fn drop_offset(i: usize, t: f64) -> f64 {
+    let falling = t - (DROP_START + i as f64 * DROP_STAGGER);
+    -FALL * (1.0 - Easing::BounceOut.apply(falling / DROP_SECS))
+}
+
+/// Letter `i`'s lift `t` seconds into the exit (0 → −FALL).
+fn exit_offset(i: usize, t: f64) -> f64 {
+    -FALL * Easing::EaseIn.apply((t - i as f64 * EXIT_STAGGER) / EXIT_SECS)
+}
+
 /// The wordmark: glyphs at `scale`× size, each letter at its own height.
 pub struct Wordmark {
     glyphs: Vec<[u8; 8]>,
@@ -81,30 +105,63 @@ impl Wordmark {
         (self.scale as f64).min(DYCP_MAX_GROW)
     }
 
-    /// Letter `i`'s vertical offset in screen pixels: bounce-in drop,
-    /// then its DYCP sine.
-    fn bob(&self, i: usize, frame: usize) -> i64 {
-        let t = frame as f64 / FPS;
-        let falling = t - (DROP_START + i as f64 * DROP_STAGGER);
-        let drop = -FALL * (1.0 - Easing::BounceOut.apply(falling / DROP_SECS));
-        let swell = Easing::EaseInOut.apply((falling - DROP_SECS) / DYCP_RAMP);
+    /// Letter `i`'s vertical offset: phase movement plus the DYCP wave,
+    /// which runs on wall time so it never jumps between phases.
+    fn bob(&self, i: usize, wall: f64, phase: LogoPhase) -> i64 {
+        let (shift, swell) = match phase {
+            LogoPhase::Hidden => return 0,
+            LogoPhase::Enter(t) => {
+                let landed = t - (DROP_START + i as f64 * DROP_STAGGER) - DROP_SECS;
+                (drop_offset(i, t), Easing::EaseInOut.apply(landed / DYCP_RAMP))
+            }
+            LogoPhase::Exit(t) => (exit_offset(i, t), 1.0),
+        };
         let i = i as f64;
-        let main = (TAU * t / DYCP_PERIOD - i * DYCP_SPREAD).sin();
-        let counter = (TAU * t / (DYCP_PERIOD * 1.9) + i * DYCP_SPREAD * 0.6).sin();
-        let breathe = 0.8 + 0.35 * (TAU * t / DYCP_BREATHE).sin();
+        let main = (TAU * wall / DYCP_PERIOD - i * DYCP_SPREAD).sin();
+        let counter = (TAU * wall / (DYCP_PERIOD * 1.9) + i * DYCP_SPREAD * 0.6).sin();
+        let breathe = 0.8 + 0.35 * (TAU * wall / DYCP_BREATHE).sin();
         let s = (0.7 * main + 0.45 * counter) * breathe;
-        (drop + swell * DYCP_AMP * self.swing_scale() * s).round() as i64
+        (shift + swell * DYCP_AMP * self.swing_scale() * s).round() as i64
     }
 
     /// Paint the word with its top-left at (x0, y0). Letters go left to
     /// right, each fully (extrusion, outline, face) before the next, so
     /// every letter covers its left neighbour's extrusion.
-    pub fn paint(&self, c: &mut Canvas, x0: i64, y0: i64) {
+    pub fn paint(&self, c: &mut Canvas, x0: i64, y0: i64, phase: LogoPhase) {
+        if phase == LogoPhase::Hidden {
+            return;
+        }
+        let wall = c.frame as f64 / FPS;
         let s = self.scale as i64;
         let mut face = Vec::new();
         for (i, glyph) in self.glyphs.iter().enumerate() {
-            let at = (x0 + (i * ADVANCE) as i64 * s, y0 + self.bob(i, c.frame));
+            let at = (x0 + (i * ADVANCE) as i64 * s, y0 + self.bob(i, wall, phase));
             stamp(c, glyph, at, s, 2, &mut face);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drop_starts_off_screen_and_lands() {
+        assert_eq!(drop_offset(0, 0.0), -FALL);
+        assert!(drop_offset(10, DROP_START + 10.0 * DROP_STAGGER + DROP_SECS).abs() < 1e-6);
+    }
+
+    #[test]
+    fn exit_starts_in_place_and_ends_off_screen() {
+        assert_eq!(exit_offset(0, 0.0), 0.0);
+        for i in 0..WORD.len() {
+            assert_eq!(exit_offset(i, super::super::stage::LOGO_EXIT_SECS), -FALL);
+        }
+    }
+
+    #[test]
+    fn exit_is_staggered() {
+        let t = 0.3;
+        assert!(exit_offset(0, t) < exit_offset(5, t));
     }
 }

@@ -38,7 +38,10 @@ fn build_layers(screen_w: usize) -> Layers {
     // Baseline high enough that the scroller's wave plus extrusion stays on screen.
     let scroller = scroller::Scroller::new(scroller::LICENSE_TEXT, (ROWS * 2) as i64 - 15);
     landscape::landscape()
-        .layer(Layer::paint(move |c| word.paint(c, x0, y0)))
+        .layer(Layer::paint(move |c| {
+            let t = c.frame as f64 / chromakopia::animate::framebuffer::FPS;
+            word.paint(c, x0, y0, wordmark::LogoPhase::Enter(t))
+        }))
         .layer(Layer::paint(move |c| scroller.paint(c)))
 }
 
