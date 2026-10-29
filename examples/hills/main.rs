@@ -660,6 +660,25 @@ mod tests {
     }
 
     #[test]
+    fn opening_line_holds_still_in_the_middle() {
+        for w in [80, 112, 200] {
+            let stage = Stage::new(w);
+            let pause = stage.timeline.cues.iter().find(|c| matches!(c.code, script::Code::Pause(_))).unwrap();
+            let script::Code::Pause(secs) = pause.code else { unreachable!() };
+            assert!(secs >= 2.0);
+            // The opening line: the terminal-font letters before the logo.
+            let line: Vec<_> = stage.glyphs.iter().take_while(|g| g.font == scroller::Font::Term).collect();
+            let scrolled = stage.timeline.scrolled(pause.t + secs / 2.0);
+            let left = w as f64 - scrolled + line.first().unwrap().x;
+            let right = w as f64 - scrolled + line.last().unwrap().x + 1.0;
+            let centre = (left + right) / 2.0;
+            assert!((centre - w as f64 / 2.0).abs() <= 2.0, "{w}: line centred at {centre}");
+            // ...and the hills rise while it stands there.
+            assert_eq!(stage.timeline.since(script::Code::Hills, pause.t), Some(pause.t));
+        }
+    }
+
+    #[test]
     fn space_jumps_to_the_next_code() {
         let stage = Stage::new(120);
         stage.seek_to(0.0);

@@ -37,10 +37,11 @@ const DEPTH: f64 = 0.18;
 const LAG: f64 = 0.11;
 
 // Entrance, in seconds since the `{hills}` code.
-const SKY_SECS: f64 = 0.6;
-const RISE_START: f64 = 0.5;
-const RISE_STAGGER: f64 = 0.2;
-const RISE_SECS: f64 = 0.8;
+const SKY_SECS: f64 = 1.2;
+/// The clouds wait until the sky is down.
+const RISE_START: f64 = SKY_SECS + 0.3;
+const RISE_STAGGER: f64 = 0.3;
+const RISE_SECS: f64 = 1.0;
 const SHADOW_START: f64 = RISE_START + 7.0 * RISE_STAGGER + RISE_SECS;
 const SHADOW_SECS: f64 = 0.5;
 /// When everything has landed.
@@ -238,6 +239,12 @@ mod tests {
         assert_eq!(sky_reveal(0.0), 0.0);
         assert!(sky_reveal(0.3) > 0.0 && sky_reveal(0.3) < 1.0);
         assert_eq!(sky_reveal(SKY_SECS), 1.0);
+    }
+
+    #[test]
+    fn clouds_wait_for_the_sky() {
+        assert_eq!(rise(0, SKY_SECS, 100.0), 100.0);
+        assert!(rise(0, SKY_SECS + 0.5, 100.0) < 100.0);
     }
 
     #[test]
