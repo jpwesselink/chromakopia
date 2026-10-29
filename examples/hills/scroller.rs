@@ -49,7 +49,7 @@ impl Scroller {
 
 /// The scroll text, cracktro style: brag about what's on screen, never
 /// explain how.
-pub const PITCH: &str = "Welly welly welly well...   what do we have here?   {logo}{pause 3}\
+pub const PITCH: &str = "Welly welly welly well...   what do we have here?{gap}{logo}{pause 3}{gap}\
 ...and yes, before you ask: this is a TERMINAL. No browser, no video, no tricks you can see, just the good old terminal you have known and loved...   which you will now love a little bit more.   \
 Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 Clouds that drift and throw shadows on the land.   \

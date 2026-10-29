@@ -22,6 +22,10 @@ pub enum Code {
     Logo,
     /// The text stands still for this many seconds (the wave keeps going).
     Pause(f64),
+    /// Half a screen of empty space — so what comes before has scrolled
+    /// off (or what comes after is still waiting off the right edge) when
+    /// a code next to it reaches the middle. Becomes spaces in `fit`.
+    Gap,
 }
 
 /// The scroll text without its codes, and where each code sits.
@@ -45,6 +49,7 @@ pub fn parse(src: &str) -> Result<Script, String> {
         let mut words = body.split_whitespace();
         let code = match (words.next(), words.next(), words.next()) {
             (Some("logo"), None, _) => Code::Logo,
+            (Some("gap"), None, _) => Code::Gap,
             (Some("pause"), Some(secs), None) => {
                 Code::Pause(secs.parse().map_err(|_| format!("bad seconds in {{{body}}}"))?)
             }
@@ -55,6 +60,26 @@ pub fn parse(src: &str) -> Result<Script, String> {
     }
     text.push_str(rest);
     Ok(Script { text, events })
+}
+
+impl Script {
+    /// The script for a screen `width` columns wide: every `{gap}` turned
+    /// into half a screen of spaces (whole characters, rounded up).
+    pub fn fit(&self, width: usize) -> Script {
+        let gap = " ".repeat((width as f64 / 2.0 / CHAR_PX).ceil() as usize);
+        let chars: Vec<char> = self.text.chars().collect();
+        let (mut text, mut events, mut from) = (String::new(), Vec::new(), 0);
+        for &(i, code) in &self.events {
+            text.extend(&chars[from..i]);
+            from = i;
+            match code {
+                Code::Gap => text.push_str(&gap),
+                _ => events.push((text.chars().count(), code)),
+            }
+        }
+        text.extend(&chars[from..]);
+        Script { text, events }
+    }
 }
 
 /// When a code fires.
@@ -145,6 +170,15 @@ mod tests {
         assert!(parse("a{pause}b").is_err());
         assert!(parse("a{pause x}b").is_err());
         assert!(parse("a{logo").is_err());
+    }
+
+    #[test]
+    fn gap_becomes_half_a_screen_of_spaces() {
+        let s = parse("ab{gap}{logo}c").unwrap().fit(32);
+        assert_eq!(s.text, "ab  c");
+        assert_eq!(s.events, vec![(4, Code::Logo)]);
+        // Rounds up to whole characters.
+        assert_eq!(parse("{gap}x").unwrap().fit(20).text, "  x");
     }
 
     // 10 characters (80 px) on a 100-column screen: a glyph at text pixel

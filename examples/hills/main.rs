@@ -135,6 +135,8 @@ struct Stage {
     /// The block heading, drawn last so it sits in front of the panels.
     heading: Layers,
     view: Arc<Mutex<View>>,
+    /// The scroll text as shown on this screen (gaps filled in).
+    text: String,
     timeline: script::Timeline,
     /// Wall time at which script time was 0.
     origin: Mutex<f64>,
@@ -157,7 +159,7 @@ impl Stage {
                 _ => None,
             })
             .collect();
-        let script = script::parse(scroller::PITCH).expect("scroll text parses");
+        let script = script::parse(scroller::PITCH).expect("scroll text parses").fit(screen_w);
         let timeline = script::Timeline::new(&script, screen_w);
         let view = Arc::new(Mutex::new(script_view(&timeline, 0.0)));
         let layers = build_layers(screen_w, view.clone(), steps.clone(), &script.text);
@@ -169,6 +171,7 @@ impl Stage {
             layers,
             heading,
             view,
+            text: script.text,
             timeline,
             origin: Mutex::new(0.0),
             seek: Arc::new(Mutex::new(None)),
@@ -603,6 +606,19 @@ mod tests {
         let v = stage.view_at(0);
         assert_eq!((v.logo, v.heading, v.panel), (LogoPhase::Hidden, None, None));
         assert!(v.scroll > 0.0);
+    }
+
+    #[test]
+    fn screen_is_empty_of_text_when_the_logo_drops() {
+        for w in [80, 112, 200] {
+            let stage = Stage::new(w);
+            let cue = stage.timeline.logo_since(f64::MAX).unwrap();
+            let scrolled = stage.timeline.scrolled(cue);
+            for (i, ch) in stage.text.chars().enumerate() {
+                let x = w as f64 - scrolled + i as f64 * 8.0;
+                assert!(ch == ' ' || x <= -8.0 || x >= w as f64, "{w}: {ch:?} on screen at x={x}");
+            }
+        }
     }
 
     #[test]
