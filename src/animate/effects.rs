@@ -1371,7 +1371,9 @@ impl Effect for Marquee {
             // Linear at constant speed.
             t * self.speed
         };
-        let offset = offset_f.floor() as i64;
+        // Nudge before flooring: frame / FPS * speed lands a hair under a
+        // whole cell (122.999…) and would hold a step one frame too long.
+        let offset = (offset_f + 1e-9).floor() as i64;
 
         match self.direction {
             ScrollDirection::Left | ScrollDirection::Right => {
@@ -3011,6 +3013,17 @@ mod tests {
         };
         assert_eq!(marquee_row(&make(0.25), 0), marquee_row(&make(0.0), 60));
         assert_ne!(marquee_row(&make(0.25), 0), marquee_row(&make(0.0), 0));
+    }
+
+    #[test]
+    fn marquee_steps_evenly_at_a_speed_that_divides_the_frame_rate() {
+        // 30 cells/s at 60fps = exactly one cell every 2 frames, forever.
+        // Float error (246 / 60 * 30 = 122.999…) must not drop a step.
+        let m = Marquee::wrap(text("0123456789", Color::new(255, 255, 255))).speed(30.0);
+        for frame in (0..600).step_by(2) {
+            assert_eq!(marquee_row(&m, frame + 1), marquee_row(&m, frame), "frame {frame}");
+            assert_ne!(marquee_row(&m, frame + 2), marquee_row(&m, frame), "frame {frame}");
+        }
     }
 
     /// Writes the received frame number into the red channel of every

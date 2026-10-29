@@ -214,7 +214,9 @@ pub fn effect_for(kind: PanelKind, text: &str) -> Box<dyn Effect> {
         K::Flap => Box::new(Remap::new(Faster { inner: Box::new(Flap::new(text)), k: 6 }, glow_ramp(), By::Luma)),
         K::Scroll => Box::new(Scroll::new(text).palette(brand())),
         K::Spread => Box::new(Spread::new(text).palette(dusk())),
-        K::Marquee => Box::new(Marquee::wrap(hero_plasma(text)).speed(20.0)),
+        // Whole cells only: a speed that divides the frame rate keeps every
+        // step the same length (30 cells/s = one cell every 2 frames).
+        K::Marquee => Box::new(Marquee::wrap(hero_plasma(text)).speed(30.0)),
         K::VSineWave => Box::new(VSineWave::wrap(hero_plasma(text))),
         K::Dycp => Box::new(Dycp::new(text).palette(hero())),
         K::Fld => Box::new(Fld::new(hero_plasma(text))),
