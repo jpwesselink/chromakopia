@@ -197,17 +197,34 @@ impl Effect for Stage {
     }
 }
 
-/// Paint the outermost columns and the top row one flat night-sky colour.
-/// Terminals like iTerm stretch edge cells' backgrounds into the window
-/// margin; with half-block dithering that shows as stripes.
+/// Flatten the outermost columns and the top row: each cell becomes one
+/// solid colour, the average of its two pixels. Terminals like iTerm
+/// stretch edge cells' backgrounds into the window margin; a dithered or
+/// two-tone cell there shows as stripes, a flat one just continues the
+/// scene.
 fn frame_edges(buf: &mut FrameBuffer) {
-    let edge = Cell::with_bg(' ', landscape::SKY, landscape::SKY);
+    let flatten = |buf: &mut FrameBuffer, x: usize, y: usize| {
+        let cell = buf.get(x, y);
+        let fg = Some(cell.color);
+        let (top, bottom) = match cell.ch {
+            '▀' => (fg, cell.bg),
+            '▄' => (cell.bg, fg),
+            '█' => (fg, fg),
+            ' ' => (cell.bg, cell.bg),
+            _ => (cell.bg.or(fg), cell.bg.or(fg)),
+        };
+        let c = match (top, bottom) {
+            (Some(t), Some(b)) => Color::lerp_rgb(t, b, 0.5),
+            (t, b) => t.or(b).unwrap_or(landscape::SKY),
+        };
+        buf.set(x, y, Cell::with_bg(' ', c, c));
+    };
     for y in 0..buf.height {
-        buf.set(0, y, edge);
-        buf.set(buf.width - 1, y, edge);
+        flatten(buf, 0, y);
+        flatten(buf, buf.width - 1, y);
     }
     for x in 0..buf.width {
-        buf.set(x, 0, edge);
+        flatten(buf, x, 0);
     }
 }
 
@@ -506,8 +523,13 @@ mod tests {
             let edges = (0..ROWS).flat_map(|y| [(0, y), (119, y)]).chain((0..120).map(|x| (x, 0)));
             for (x, y) in edges {
                 let cell = b.get(x, y);
-                assert_eq!((cell.ch, cell.bg), (' ', Some(landscape::SKY)), "({x},{y}) at t={t}");
+                assert_eq!(cell.ch, ' ', "({x},{y}) at t={t}");
+                assert!(cell.bg.is_some(), "({x},{y}) at t={t}");
             }
+            // ...but each edge cell keeps the colour of what is there, so
+            // the scene runs on into the margin instead of a sky-blue band.
+            let ground = b.get(0, ROWS - 2).bg.unwrap();
+            assert_ne!(ground, landscape::SKY, "edge over the ground is sky at t={t}");
         }
     }
 
