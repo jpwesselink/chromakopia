@@ -49,19 +49,22 @@ impl Scroller {
     }
 }
 
-/// The pitch, cracktro style: why an engineer would want this crate.
-pub const PITCH: &str = "Hey engineers!   Yes, you, staring at that grey spinner while your build crawls...   \
-Your CLI deserves better.   CHROMAKOPIA turns your terminal into a demo scene, in Rust.   \
-Plasma, rainbow, glow, neon, glitch, flap, marquee, DYCP, FLD, vector fields, height maps:   \
-each one a single line of code.   \
-Under the hood a real framebuffer at 60 fps with diff rendering, so only the cells that change get redrawn.   \
-Half-block pixels for twice the vertical resolution.   \
-Stack layers, sway them, blend them: normal, multiply, screen and friends, on any cell, glyph or pixel.   \
-This whole show renders in under a millisecond a frame. The other 15 ms are yours.   \
-The same code runs in the browser through WASM.   MIT licensed, so ship it tomorrow.   \
-cargo add chromakopia   ...and make your users smile.   \
-Greetings to everyone who still believes a terminal can be beautiful!   \
-Keys: space for the next effect, arrows to skip around, q to quit.   ...wrapping around...          ";
+/// The scroll text, cracktro style: brag about what's on screen, never
+/// explain how.
+pub const PITCH: &str = "Yo yo yo!   CHROMAKOPIA is back on your screen...   \
+...and yes, before you ask: this is a TERMINAL. No browser, no video, no tricks you can see.   \
+Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
+Clouds that drift and throw shadows on the land.   \
+A logo that will not sit still, bouncing every letter on its own little wave.   \
+And all of it at a silky 60 frames per second.   \
+Up in the box: plasma, rainbows, neon, glitches, flaps, sines, rows that float, letters that fly, \
+fields that flow, and colours mixed like a DJ at 3 am.   \
+Hit space and they push each other off the stage, one after the other.   \
+How is it done?   Ha!   A magician never tells...   \
+...but a crate does:   cargo add chromakopia   \
+Greetings fly out to everyone who still believes a terminal can be beautiful, \
+to all the coders, pixel pushers and scrollers of the past, and to YOU for reading this far!   \
+Keys: space or arrows to skip, q to quit.   Text wraps... now!          ";
 
 #[cfg(test)]
 mod tests {
