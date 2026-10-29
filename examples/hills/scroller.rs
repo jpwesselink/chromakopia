@@ -197,9 +197,6 @@ Count the layers behind me: eight bands of clouds and hills, all swinging to the
 Clouds that drift and throw shadows on the land.   \
 A logo that will not sit still, bouncing every letter on its own little wave.   \
 And all of it at a silky 60 frames per second.   \
-Up in the box: plasma, rainbows, neon, glitches, flaps, sines, rows that float, letters that fly, \
-fields that flow, and colours mixed like a DJ at 3 am.   {font big}BOOM!{font c64}   \
-Hit space and they push each other off the stage, one after the other.   \
 How is it done?   Ha!   A magician never tells...   {font term}(this is your terminal's own font, by the way - blink and you miss it){font c64}   \
 ...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}{wave off}...or type it the way we did in 1986, no colours, no shadows...{wave on}{style candy}   \
 Greetings fly out to everyone who still believes a terminal can be beautiful, \
