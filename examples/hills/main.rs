@@ -19,6 +19,7 @@
 //!
 //! Run: `cargo run --release --example hills`   (press q to quit)
 
+mod figlet;
 mod glyphs;
 mod landscape;
 mod scroller;
