@@ -100,6 +100,14 @@ fn baseline(font: Font) -> i64 {
     }
 }
 
+/// Whole pixels the text has moved, `scrolled` (fractional) pixels in.
+/// Rounded, not floored: scroll positions land on whole pixels give or
+/// take float noise (245.9999…), and flooring that drops a step — the text
+/// holds a frame, then jumps two.
+pub fn pen(scrolled: f64) -> i64 {
+    scrolled.round() as i64
+}
+
 /// The placed scroll text, scrolling right to left along the bottom.
 pub struct Scroller {
     glyphs: Vec<Glyph>,
@@ -114,7 +122,7 @@ impl Scroller {
     /// Screen x and wave-shifted bottom line of `g`, `scrolled` pixels in,
     /// or None when it's off screen.
     fn spot(&self, g: &Glyph, width: usize, scrolled: f64, t: f64) -> Option<(i64, i64)> {
-        let x = width as i64 - scrolled.floor() as i64 + g.x as i64;
+        let x = width as i64 - pen(scrolled) + g.x as i64;
         if x < -(advance(g.font, g.ch) + 4) || x > width as i64 {
             return None;
         }

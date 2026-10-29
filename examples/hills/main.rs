@@ -690,6 +690,25 @@ mod tests {
     }
 
     #[test]
+    fn scroller_steps_exactly_one_pixel_a_frame() {
+        // From the start, and after jumping to each code: the text moves
+        // one whole pixel every frame (0 while paused) — never 0-then-2.
+        let stage = Stage::new(112);
+        let mut starts = vec![0.0];
+        starts.extend(stage.timeline.cues.iter().map(|c| c.t));
+        for start in starts {
+            stage.seek_to(start);
+            let px: Vec<i64> = (0..600).map(|f| scroller::pen(stage.view_at(f).scroll)).collect();
+            for (f, w) in px.windows(2).enumerate() {
+                let step = w[1] - w[0];
+                assert!(step == 0 || step == 1, "from {start:.3}s, frame {f}: step {step}");
+            }
+            // Not stuck either: it does move.
+            assert!(px[599] > px[0]);
+        }
+    }
+
+    #[test]
     fn space_jumps_to_the_next_code() {
         let stage = Stage::new(120);
         stage.seek_to(0.0);
