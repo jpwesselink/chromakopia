@@ -69,10 +69,10 @@ struct View {
 
 /// What is on screen at script time `t`: the scroller, plus the landscape
 /// once `{hills}` and the wordmark once `{logo}` has fired.
-fn script_view(tl: &script::Timeline, t: f64) -> View {
+fn script_view(tl: &script::Timeline, intro_secs: f64, t: f64) -> View {
     let logo = tl.since(script::Code::Logo, t).map_or(LogoPhase::Hidden, |at| LogoPhase::Enter(t - at));
     let hills = tl.since(script::Code::Hills, t).map(|at| t - at);
-    let intro = (t < intro::SECS).then_some(t);
+    let intro = (t < intro_secs).then_some(t);
     View { logo, heading: None, panel: None, pushed: None, scroll: tl.scrolled(t), hills, intro }
 }
 
@@ -148,7 +148,7 @@ struct Stage {
     /// Shared with its paint layer; also puts terminal-font letters on.
     scroller: Arc<scroller::Scroller>,
     /// The cold open, played before the scroller starts.
-    intro: Timeline,
+    intro: intro::Intro,
     timeline: script::Timeline,
     /// Wall time at which script time was 0.
     origin: Mutex<f64>,
@@ -174,8 +174,9 @@ impl Stage {
         let placed = script::parse(scroller::PITCH)
             .and_then(|s| s.place(screen_w))
             .unwrap_or_else(|e| panic!("scroll text: {e}"));
-        let timeline = script::Timeline::new(&placed, screen_w).with_lead(intro::SECS, &intro::MARKS);
-        let view = Arc::new(Mutex::new(script_view(&timeline, 0.0)));
+        let cold_open = intro::Intro::new(screen_w, ROWS);
+        let timeline = script::Timeline::new(&placed, screen_w).with_lead(cold_open.secs, &cold_open.marks);
+        let view = Arc::new(Mutex::new(script_view(&timeline, cold_open.secs, 0.0)));
         let scroller = Arc::new(scroller::Scroller::new(placed.glyphs.clone(), SCROLLER_Y));
         let layers = build_layers(screen_w, view.clone(), steps.clone(), scroller.clone());
         let heading = build_heading(view.clone());
@@ -189,7 +190,7 @@ impl Stage {
             #[cfg(test)]
             glyphs: placed.glyphs,
             scroller,
-            intro: intro::cold_open(screen_w, ROWS),
+            intro: cold_open,
             timeline,
             origin: Mutex::new(0.0),
             seek: Arc::new(Mutex::new(None)),
@@ -235,7 +236,7 @@ impl Stage {
             let (i, local) = locate(&self.steps, t0 + now);
             return View { scroll: (t0 + now) * FPS, ..view_for(&self.steps, i, local) };
         }
-        script_view(&self.timeline, self.script_time(now))
+        script_view(&self.timeline, self.intro.secs, self.script_time(now))
     }
 }
 
@@ -248,7 +249,7 @@ impl Effect for Stage {
         self.scroller.paint_cells(buf, view.scroll, frame);
         if let Some(t) = view.intro {
             let mut open = FrameBuffer::new(buf.width, buf.height);
-            self.intro.render(&mut open, (t * FPS).round() as usize);
+            self.intro.timeline.render(&mut open, (t * FPS).round() as usize);
             for y in 0..buf.height {
                 for x in 0..buf.width {
                     let cell = open.get(x, y);
@@ -567,8 +568,8 @@ mod tests {
         for (name, t) in [
             ("step1", 1.0),
             ("step2", 4.5),
-            ("step3", 9.0),
-            ("line", intro::SECS + 2.0),
+            ("step3", 11.0),
+            ("line", stage.intro.secs + 2.0),
             ("opening", hills - 0.3),
             ("hills 0.1", hills + 0.1),
             ("hills 0.4", hills + 0.4),
@@ -664,7 +665,7 @@ mod tests {
         let LogoPhase::Enter(t) = stage.view_at(0).logo else { panic!("logo not entering") };
         assert!((t - 1.0).abs() < 1e-9);
         // Before the code (scroller running): no landscape, no logo.
-        stage.seek_to(intro::SECS + 0.5);
+        stage.seek_to(stage.intro.secs + 0.5);
         let v = stage.view_at(0);
         assert_eq!((v.logo, v.heading, v.panel, v.hills), (LogoPhase::Hidden, None, None, None));
         assert!(v.scroll > 0.0);
@@ -687,14 +688,14 @@ mod tests {
     #[test]
     fn cold_open_plays_before_the_scroller() {
         let stage = Stage::new(112);
-        for t in [0.1, 5.0, intro::SECS - 0.1] {
+        for t in [0.1, 5.0, stage.intro.secs - 0.1] {
             stage.seek_to(t);
             let v = stage.view_at(0);
             assert_eq!((v.intro, v.hills, v.logo), (Some(t), None, LogoPhase::Hidden));
             // No scroll text on screen yet.
             assert!(stage.glyphs.iter().all(|g| 112.0 - v.scroll + g.x >= 112.0), "t={t}");
         }
-        stage.seek_to(intro::SECS + 0.1);
+        stage.seek_to(stage.intro.secs + 0.1);
         assert_eq!(stage.view_at(0).intro, None);
     }
 
@@ -740,8 +741,8 @@ mod tests {
             stage.view_at(frame)
         };
         // The cold open's steps 2 and 3, then the scroller starting.
-        assert_eq!(next(0).intro, Some(2.8));
-        assert_eq!(next(0).intro, Some(7.0));
+        assert_eq!(next(0).intro, Some(stage.intro.marks[0]));
+        assert_eq!(next(0).intro, Some(stage.intro.marks[1]));
         let v = next(0);
         assert_eq!((v.intro, v.hills), (None, None));
         // Then the hills come in.
