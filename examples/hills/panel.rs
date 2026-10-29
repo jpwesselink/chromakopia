@@ -20,8 +20,8 @@ pub const EFFECT_DELAY: f64 = ENTER_SECS + 0.2;
 const MAX_W: usize = 104;
 const MIN_W: usize = 20;
 const MARGIN: usize = 10;
-/// Resting top row: just below the wordmark at the top (2× letters).
-const REST_Y: i64 = 15;
+/// Panel interior height in rows: 7-row names plus room for DYCP/FLD.
+pub const PANEL_H: usize = 11;
 
 /// Panel interior in cells. `y` is the resting row.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -35,8 +35,8 @@ pub struct Geometry {
 pub fn geometry(screen_w: usize, block: usize) -> Geometry {
     let w = screen_w.saturating_sub(MARGIN).clamp(MIN_W, MAX_W);
     let _ = block;
-    let h = 11;
-    Geometry { x: (screen_w as i64 - w as i64) / 2, y: REST_Y, w, h }
+    let y = super::layout::Layout::for_width(screen_w).panel_y;
+    Geometry { x: (screen_w as i64 - w as i64) / 2, y, w, h: PANEL_H }
 }
 
 /// Where a panel sits in its block's run of panels.
@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn geometry_is_centred() {
         let g = geometry(200, 2);
-        assert_eq!((g.w, g.h, g.y), (104, 11, 15));
+        assert_eq!((g.w, g.h, g.y), (104, PANEL_H, super::super::layout::Layout::for_width(200).panel_y));
         assert_eq!(g.x, (200 - 104) / 2);
         assert_eq!(geometry(200, 4).h, 11);
     }

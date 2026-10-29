@@ -184,11 +184,6 @@ pub fn has_c64(ch: char) -> bool {
     C64_GLYPHS.iter().any(|(g, _)| *g == ch)
 }
 
-/// Width in pixels of `text` set in the C64 caption font.
-pub fn text_width(text: &str) -> i64 {
-    text.chars().count() as i64 * 8
-}
-
 /// `text` in the C64 ROM font as terminal text: every lit pixel one `█`
 /// cell, so a letter is 8 columns by 8 rows — tall and narrow on screen,
 /// like a double-height intro charset. Blank rows above and below are
@@ -208,14 +203,6 @@ pub fn block_text(text: &str) -> Vec<String> {
     }
     let top = rows.iter().take_while(|r| r.trim().is_empty()).count();
     rows.split_off(top)
-}
-
-/// Set `text` in the C64 caption font with its top-left at `at`, in the
-/// letter style (one extrusion step).
-pub fn stamp_text(c: &mut Canvas, text: &str, at: (i64, i64), face: &mut Vec<(i64, i64, Color)>) {
-    for (i, ch) in text.chars().enumerate() {
-        stamp(c, &c64(ch), (at.0 + i as i64 * 8, at.1), 1, 1, face);
-    }
 }
 
 #[cfg(test)]
@@ -246,8 +233,4 @@ mod tests {
         assert!(block_text("AB").iter().all(|r| r.chars().count() == 16));
     }
 
-    #[test]
-    fn text_width_is_eight_per_char() {
-        assert_eq!(text_width("COLOR"), 40);
-    }
 }

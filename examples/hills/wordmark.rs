@@ -7,9 +7,17 @@ use chromakopia::prelude::*;
 use std::f64::consts::TAU;
 
 use super::glyphs::{mario, stamp};
+use super::layout::Layout;
+use super::tiny;
 use super::ROWS;
 
 pub const WORD: &str = "CHROMAKOPIA";
+/// The line under the wordmark, typed out once the letters have landed.
+pub const TAGLINE: &str = "animations for rust";
+/// Characters per second the tagline types at.
+const TYPE_RATE: f64 = 24.0;
+/// When the tagline starts typing, seconds into the entrance.
+const TYPE_START: f64 = 2.8;
 
 /// How far above centre the wordmark sits, in pixels — unless its DYCP
 /// swing needs more headroom.
@@ -42,11 +50,24 @@ const DYCP_RAMP: f64 = 1.0;
 
 /// Seconds to glide between the centre and the top.
 pub const RISE_SECS: f64 = super::stage::LOGO_RISE_SECS;
-/// DYCP swing at the top, as a fraction of the full swing — calm enough
-/// to leave room for the panels below.
-const CALM: f64 = 0.22;
-/// Topmost pixel row the wordmark may reach (row 0 is the border).
-const TOP_MARGIN: i64 = 2;
+/// Peak of the DYCP sine mix, as a multiple of DYCP_AMP.
+const SWING_PEAK: f64 = 1.3225;
+
+/// Letter scale for a screen `screen_w` columns wide: at most 2× so it
+/// fits above the panels.
+pub fn scale_for(screen_w: usize) -> usize {
+    (screen_w / (WORD.len() * ADVANCE + 8)).clamp(1, 2)
+}
+
+/// Glyph height in pixels at `scale`.
+pub fn height(scale: usize) -> i64 {
+    8 * scale as i64
+}
+
+/// Largest DYCP excursion at full swing, in pixels, at `scale`.
+pub fn full_swing(scale: usize) -> i64 {
+    (SWING_PEAK * DYCP_AMP * (scale as f64).min(DYCP_MAX_GROW)).ceil() as i64
+}
 
 /// What the wordmark is doing, with local seconds into that phase.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -88,46 +109,47 @@ pub struct Wordmark {
     /// Top pixel row at the centre (intro, finale) and at the top.
     y_mid: i64,
     y_top: i64,
+    /// Swing at the top as a fraction of the full swing.
+    calm: f64,
+    /// Tagline glyph top at the centre and at the top.
+    tag_mid: i64,
+    tag_top: i64,
 }
 
 impl Wordmark {
     /// The wordmark sized and placed for a screen `screen_w` columns wide.
-    /// At most 2× so it fits above the panels.
     pub fn placed(screen_w: usize) -> Wordmark {
-        let scale = (screen_w / (WORD.len() * ADVANCE + 8)).clamp(1, 2);
+        let layout = Layout::for_width(screen_w);
+        let scale = layout.scale;
         let glyphs = WORD.chars().map(mario).collect();
-        let mut word = Self { glyphs, scale, x0: 0, y_mid: 0, y_top: 0 };
+        let full = full_swing(scale);
+        let mut word = Self { glyphs, scale, x0: 0, y_mid: 0, y_top: layout.logo_y, calm: 0.0, tag_mid: 0, tag_top: layout.tagline_y };
         word.x0 = (screen_w as i64 - word.width() as i64) / 2;
         // Centred, then lifted LOGO_LIFT pixels — but never so high that the
         // tallest DYCP swing (plus outline) leaves the top of the screen.
-        word.y_mid = ((ROWS * 2) as i64 / 2 - word.height() as i64 / 2 - LOGO_LIFT).max(word.max_swing() + 3);
-        word.y_top = TOP_MARGIN + word.calm_swing() + 1;
+        word.y_mid = ((ROWS * 2) as i64 / 2 - height(scale) / 2 - LOGO_LIFT).max(full + 3);
+        word.tag_mid = word.y_mid + height(scale) + 2 + full + 2;
+        word.calm = layout.top_swing as f64 / (SWING_PEAK * DYCP_AMP * word.swing_scale());
         word
     }
 
-    /// Lowest pixel row the wordmark reaches at the top: glyph, two-step
-    /// extrusion, calm swing down.
-    #[cfg(test)]
-    pub fn bottom_at_top(&self) -> i64 {
-        self.y_top + self.height() as i64 + 2 + self.calm_swing()
-    }
-
-    fn calm_swing(&self) -> i64 {
-        (1.32 * DYCP_AMP * self.swing_scale() * CALM).ceil() as i64
+    /// Paint the tagline under the wordmark for `phase`: typed out during
+    /// the entrance, then riding along with the wordmark.
+    pub fn paint_tagline(&self, c: &mut Canvas, phase: LogoPhase) {
+        let shown = match phase {
+            LogoPhase::Enter(t) => ((t - TYPE_START).max(0.0) * TYPE_RATE) as usize,
+            _ => TAGLINE.len(),
+        };
+        let lift = phase.lift();
+        let y = (self.tag_mid as f64 + (self.tag_top - self.tag_mid) as f64 * lift).round() as i64;
+        let x = (c.width as i64 - tiny::width(TAGLINE)) / 2;
+        tiny::stamp(c, TAGLINE, (x, y), shown);
     }
 
     fn width(&self) -> usize {
         ((self.glyphs.len() - 1) * ADVANCE + 7) * self.scale
     }
 
-    fn height(&self) -> usize {
-        8 * self.scale
-    }
-
-    /// Largest upward DYCP excursion, in screen pixels.
-    fn max_swing(&self) -> i64 {
-        (1.32 * DYCP_AMP * self.swing_scale()).ceil() as i64
-    }
 
     fn swing_scale(&self) -> f64 {
         (self.scale as f64).min(DYCP_MAX_GROW)
@@ -141,7 +163,7 @@ impl Wordmark {
                 let landed = t - (DROP_START + i as f64 * DROP_STAGGER) - DROP_SECS;
                 (drop_offset(i, t), Easing::EaseInOut.apply(landed / DYCP_RAMP))
             }
-            _ => (0.0, 1.0 + (CALM - 1.0) * phase.lift()),
+            _ => (0.0, 1.0 + (self.calm - 1.0) * phase.lift()),
         };
         let i = i as f64;
         let main = (TAU * wall / DYCP_PERIOD - i * DYCP_SPREAD).sin();
@@ -181,7 +203,7 @@ mod tests {
     fn rises_to_the_top_and_stays_on_screen_there() {
         for screen_w in [80, 120, 200, 300] {
             let word = Wordmark::placed(screen_w);
-            let bottom = word.bottom_at_top();
+            let bottom = Layout::for_width(screen_w).logo_last();
             let layers = Layers::new(ROWS).layer(Layer::paint(move |c| word.paint(c, LogoPhase::Top)));
             let (mut lowest, mut highest) = (0, i64::MAX);
             for frame in (0..600).step_by(3) {
@@ -202,7 +224,7 @@ mod tests {
                     }
                 }
             }
-            assert!(highest >= TOP_MARGIN, "{screen_w}: reaches row {highest}");
+            assert!(highest >= super::super::layout::TOP_MARGIN, "{screen_w}: reaches row {highest}");
             assert!(lowest <= bottom, "{screen_w}: reaches {lowest} > {bottom}");
         }
     }
