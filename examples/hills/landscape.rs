@@ -1,4 +1,4 @@
-//! The pastel landscape: sky, clouds, hills, ground and cloud shadows.
+//! The spooky landscape: night sky, purple slime fog, toxic hills, slime ground.
 
 use chromakopia::animate::dither;
 use chromakopia::prelude::*;
@@ -6,24 +6,26 @@ use std::f64::consts::PI;
 
 use super::{ROWS, TOP_PAD};
 
-// Cloud shadows multiply with NES blue (2C02 entry 22).
-const SHADOW_BLUE: Color = Color { r: 0x68, g: 0x88, b: 0xFC };
+// Cloud shadows multiply with a cold violet.
+const SHADOW: Color = Color { r: 0x6A, g: 0x4C, b: 0x93 };
 
-// Pastel landscape, lightest at the back.
-const SKY: Color = Color { r: 0xA8, g: 0xD8, b: 0xFF };
-const SKY_HAZE: Color = Color { r: 0xC9, g: 0xC2, b: 0xFF };
-const CLOUD_LILAC: Color = Color { r: 0xC8, g: 0xB4, b: 0xFF };
-const CLOUD_PINK: Color = Color { r: 0xFF, g: 0xC4, b: 0xDE };
-const CLOUD_BLUSH: Color = Color { r: 0xFF, g: 0xE0, b: 0xEE };
-const MINT_MIST: Color = Color { r: 0xD4, g: 0xF5, b: 0xD0 };
-const MINT_PALE: Color = Color { r: 0xBD, g: 0xED, b: 0xB8 };
-const MINT: Color = Color { r: 0xA6, g: 0xE3, b: 0xA6 };
-const PISTACHIO: Color = Color { r: 0xD8, g: 0xF0, b: 0xA8 };
-const SAGE: Color = Color { r: 0x8C, g: 0xD1, b: 0x9E };
-const SAGE_DEEP: Color = Color { r: 0x76, g: 0xBF, b: 0x93 };
-const PEACH: Color = Color { r: 0xFF, g: 0xD4, b: 0xB8 };
-const CORAL: Color = Color { r: 0xF7, g: 0xB0, b: 0x98 };
-const ROSE: Color = Color { r: 0xDE, g: 0x98, b: 0x92 };
+// Halloween night, darkest at the back; the front hills glow the docs
+// site's toxic green (#00ff88 → #00ffcc).
+const SKY: Color = Color { r: 0x0E, g: 0x07, b: 0x16 };
+const SKY_HAZE: Color = Color { r: 0x2A, g: 0x10, b: 0x3E };
+const FOG_DEEP: Color = Color { r: 0x3A, g: 0x14, b: 0x58 };
+const FOG: Color = Color { r: 0x5B, g: 0x1E, b: 0x86 };
+const FOG_GLOW: Color = Color { r: 0x8E, g: 0x3C, b: 0xC8 };
+const MOSS_DARK: Color = Color { r: 0x0F, g: 0x2E, b: 0x1C };
+const MOSS: Color = Color { r: 0x17, g: 0x4A, b: 0x2A };
+const SWAMP: Color = Color { r: 0x1E, g: 0x6B, b: 0x3A };
+const SWAMP_LIGHT: Color = Color { r: 0x2E, g: 0x8B, b: 0x4A };
+const SLIME: Color = Color { r: 0x39, g: 0xB5, b: 0x4A };
+const TOXIC: Color = Color { r: 0x00, g: 0xFF, b: 0x88 };
+const TOXIC_CYAN: Color = Color { r: 0x00, g: 0xFF, b: 0xCC };
+const SLIME_PURPLE: Color = Color { r: 0x8A, g: 0x2B, b: 0xE2 };
+const SLIME_GRAPE: Color = Color { r: 0x5B, g: 0x1E, b: 0x86 };
+const SLIME_DEEP: Color = Color { r: 0x2A, g: 0x0E, b: 0x3F };
 /// Seconds for one full left→right→left swing.
 const PERIOD: f64 = 4.5;
 /// Peak horizontal displacement of the back layer, in pixels (= cells)
@@ -81,17 +83,17 @@ pub fn landscape() -> Layers {
     let h = ((ROWS - TOP_PAD) * 2) as f64;
     // Back to front: clouds, greens, then ground.
     let ridges = [
-        ridge(top + h * 0.28, 8.0, (23.0, 41.0), 0.3, (CLOUD_LILAC, CLOUD_PINK, 2)),
-        ridge_lifted(top + h * 0.38, 8.0, (19.0, 37.0), 1.9, (CLOUD_BLUSH, CLOUD_BLUSH, 0), cumulus),
-        ridge(top + h * 0.49, 8.0, (21.0, 33.0), 4.1, (MINT_MIST, MINT_PALE, 2)),
-        ridge(top + h * 0.59, 7.0, (25.0, 43.0), 2.6, (MINT, PISTACHIO, 1)),
-        ridge(top + h * 0.69, 7.0, (18.0, 31.0), 5.2, (SAGE, MINT, 1)),
-        ridge(top + h * 0.79, 6.0, (22.0, 39.0), 0.9, (SAGE_DEEP, SAGE, 2)),
-        ridge(top + h * 0.91, 6.0, (20.0, 35.0), 3.3, (CORAL, PEACH, 1)),
-        ridge(top + h * 1.03, 5.0, (24.0, 45.0), 6.0, (ROSE, CORAL, 2)),
+        ridge(top + h * 0.28, 8.0, (23.0, 41.0), 0.3, (FOG_DEEP, FOG, 2)),
+        ridge_lifted(top + h * 0.38, 8.0, (19.0, 37.0), 1.9, (FOG, FOG_GLOW, 1), cumulus),
+        ridge(top + h * 0.49, 8.0, (21.0, 33.0), 4.1, (MOSS_DARK, MOSS, 2)),
+        ridge(top + h * 0.59, 7.0, (25.0, 43.0), 2.6, (SWAMP, SWAMP_LIGHT, 1)),
+        ridge(top + h * 0.69, 7.0, (18.0, 31.0), 5.2, (SLIME, SWAMP_LIGHT, 1)),
+        ridge(top + h * 0.79, 6.0, (22.0, 39.0), 0.9, (TOXIC, TOXIC_CYAN, 1)),
+        ridge(top + h * 0.91, 6.0, (20.0, 35.0), 3.3, (SLIME_GRAPE, SLIME_PURPLE, 1)),
+        ridge(top + h * 1.03, 5.0, (24.0, 45.0), 6.0, (SLIME_DEEP, SLIME_GRAPE, 2)),
     ];
 
-    // Sky: pastel blue, dithered toward periwinkle in the top rows.
+    // Sky: night black-purple, dithered toward a violet haze in the top rows.
     let sky = Layer::new(|p| {
         let level = match p.y {
             0..=1 => 2,
@@ -102,15 +104,15 @@ pub fn landscape() -> Layers {
     });
 
     // Cloud shadows: ovals over the land, one every 64 pixels, each a
-    // bit different in size and height — multiplied with NES blue so they
-    // cool whatever they pass over. Slower and wider than the ridges, on
+    // bit different in size and height — multiplied with cold violet so
+    // they darken whatever they pass over. Slower and wider than the ridges, on
     // their own swing.
     let shadows = Layer::new(move |p| {
         let slot = (p.x / 64.0).floor();
         let vary = (slot * 2.3).sin(); // -1..1, fixed per oval
         let dx = (p.x - slot * 64.0 - 32.0) / (16.0 + 5.0 * vary);
         let dy = (p.y as f64 - top - h * (0.72 + 0.06 * vary)) / 6.0;
-        (dx * dx + dy * dy < 1.0).then_some(SHADOW_BLUE)
+        (dx * dx + dy * dy < 1.0).then_some(SHADOW)
     })
     .swing(30.0, 9.0, Easing::EaseInOut)
     .blend(BlendMode::Multiply)

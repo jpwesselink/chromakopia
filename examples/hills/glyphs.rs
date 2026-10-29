@@ -2,11 +2,13 @@
 
 use chromakopia::prelude::*;
 
-pub const LETTER_CREAM: Color = Color { r: 0xFF, g: 0xF8, b: 0xE7 };
-pub const LETTER_PINK: Color = Color { r: 0xFF, g: 0xB3, b: 0xC7 };
-pub const LETTER_LAVENDER: Color = Color { r: 0xB9, g: 0xA2, b: 0xF0 };
-pub const LETTER_OUTLINE: Color = Color { r: 0x2A, g: 0x16, b: 0x38 };
-pub const LETTER_EXTRUDE: Color = Color { r: 0x4E, g: 0x30, b: 0x6E };
+// Letter style: a glow edge on top, slime lime fading to toxic green,
+// near-black outline, purple slime extrusion.
+pub const LETTER_HIGHLIGHT: Color = Color { r: 0xE8, g: 0xFF, b: 0xE8 };
+pub const LETTER_UPPER: Color = Color { r: 0x7C, g: 0xFF, b: 0x4F };
+pub const LETTER_LOWER: Color = Color { r: 0x00, g: 0xFF, b: 0x88 };
+pub const LETTER_OUTLINE: Color = Color { r: 0x12, g: 0x00, b: 0x1F };
+pub const LETTER_EXTRUDE: Color = Color { r: 0x6A, g: 0x1B, b: 0x9A };
 
 
 /// Chunky Mario-title-style capitals, drawn for this demo: 7×8, three-
@@ -119,8 +121,8 @@ const C64_GLYPHS: [(char, [u8; 8]); 87] = [
 
 /// Stamp one 8×8 glyph (MSB = leftmost pixel) at `scale`× with its top-
 /// left at (ox, oy): `extrude` steps of extrusion down-right, a one-pixel
-/// outline, then the face — cream along each top edge, pink upper half,
-/// lavender lower. `face` is scratch space, reused between calls.
+/// outline, then the face — highlight along each top edge, lime upper half,
+/// toxic green lower. `face` is scratch space, reused between calls.
 pub fn stamp(
     c: &mut Canvas,
     glyph: &[u8; 8],
@@ -138,11 +140,11 @@ pub fn stamp(
             }
             for dy in 0..scale {
                 let color = if dy == 0 && !lit(gx, gy - 1) {
-                    LETTER_CREAM
+                    LETTER_HIGHLIGHT
                 } else if gy < 4 {
-                    LETTER_PINK
+                    LETTER_UPPER
                 } else {
-                    LETTER_LAVENDER
+                    LETTER_LOWER
                 };
                 for dx in 0..scale {
                     face.push((ox + gx * scale + dx, oy + gy * scale + dy, color));

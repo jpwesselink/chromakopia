@@ -1,10 +1,11 @@
 //! Hills showcase — every chromakopia effect, cracktro style, over a
-//! pastel landscape of swaying dithered hills (half-block pixel `Layers`).
+//! spooky Halloween landscape of toxic green and purple slime hills
+//! (half-block pixel `Layers`).
 //!
 //! The show: CHROMAKOPIA drops in letter by letter and rides a DYCP wave,
 //! the MIT licence starts scrolling along the bottom (and keeps going),
 //! the letters jump away, and then block by block — COLOR EFFECTS, SHAPE &
-//! LAYOUT, FIELDS, MIXING — each effect gets its own panel: aubergine box
+//! LAYOUT, FIELDS, MIXING — each effect gets its own panel: near-black box
 //! with the letters' outline and 3D extrusion, bouncing in with the
 //! effect's name in figlet, a heading above and a subtitle below. A finale
 //! drops the wordmark in again, and the show loops.
@@ -142,7 +143,7 @@ fn subtitle_row(geo: &panel::Geometry) -> usize {
     (geo.y + geo.h as i64 + 2) as usize
 }
 
-/// Write `text` centred on `row` as plain terminal text — cream on a panel-
+/// Write `text` centred on `row` as plain terminal text — glow on a panel-
 /// coloured band one space wider each side — so any length fits. Clipped
 /// to the buffer.
 fn put_subtitle(buf: &mut FrameBuffer, row: usize, text: &str) {
@@ -154,7 +155,7 @@ fn put_subtitle(buf: &mut FrameBuffer, row: usize, text: &str) {
     for (i, ch) in band.chars().enumerate() {
         let x = x0 + i as i64;
         if x >= 0 && (x as usize) < buf.width {
-            buf.set(x as usize, row, Cell::with_bg(ch, glyphs::LETTER_CREAM, panel::PANEL_FILL));
+            buf.set(x as usize, row, Cell::with_bg(ch, glyphs::LETTER_HIGHLIGHT, panel::PANEL_FILL));
         }
     }
 }

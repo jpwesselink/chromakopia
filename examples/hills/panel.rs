@@ -7,7 +7,7 @@ use super::glyphs::{LETTER_EXTRUDE, LETTER_OUTLINE};
 use super::stage::PanelKind;
 use super::ROWS;
 
-/// Panel fill — the letter-outline aubergine.
+/// Panel fill — the letter outline's near-black purple.
 pub const PANEL_FILL: Color = LETTER_OUTLINE;
 /// One-pixel edge around the fill, a shade darker.
 pub const PANEL_EDGE: Color = Color { r: 0x12, g: 0x0A, b: 0x18 };
