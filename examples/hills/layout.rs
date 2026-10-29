@@ -52,6 +52,7 @@ impl Layout {
     }
 
     /// Lowest pixel row the wordmark reaches at the top.
+    #[cfg(test)]
     pub fn logo_last(&self) -> i64 {
         self.logo_y + wordmark::height(self.scale) + 2 + self.top_swing
     }
