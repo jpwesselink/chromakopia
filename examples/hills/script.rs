@@ -18,6 +18,8 @@ const SPEED: f64 = FPS;
 /// A control code in the scroll text.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Code {
+    /// The landscape builds up: sky slides down, hills rise layer by layer.
+    Hills,
     /// CHROMAKOPIA drops in at the centre; the tagline types out under it.
     Logo,
     /// The text stands still for this many seconds (the wave keeps going).
@@ -49,6 +51,7 @@ pub fn parse(src: &str) -> Result<Script, String> {
         let mut words = body.split_whitespace();
         let code = match (words.next(), words.next(), words.next()) {
             (Some("logo"), None, _) => Code::Logo,
+            (Some("hills"), None, _) => Code::Hills,
             (Some("gap"), None, _) => Code::Gap,
             (Some("pause"), Some(secs), None) => {
                 Code::Pause(secs.parse().map_err(|_| format!("bad seconds in {{{body}}}"))?)
@@ -135,9 +138,9 @@ impl Timeline {
         (t - paused) * SPEED
     }
 
-    /// When the latest `{logo}` at or before `t` fired.
-    pub fn logo_since(&self, t: f64) -> Option<f64> {
-        self.cues.iter().rev().find(|c| c.code == Code::Logo && c.t <= t).map(|c| c.t)
+    /// When the latest `code` at or before `t` fired.
+    pub fn since(&self, code: Code, t: f64) -> Option<f64> {
+        self.cues.iter().rev().find(|c| c.code == code && c.t <= t).map(|c| c.t)
     }
 
     /// The next cue strictly after `t`, or the start when there is none.
@@ -159,9 +162,9 @@ mod tests {
 
     #[test]
     fn parse_strips_codes_and_records_their_positions() {
-        let s = parse("ab{logo}cd{pause 2}e").unwrap();
+        let s = parse("ab{logo}cd{pause 2}e{hills}").unwrap();
         assert_eq!(s.text, "abcde");
-        assert_eq!(s.events, vec![(2, Code::Logo), (4, Code::Pause(2.0))]);
+        assert_eq!(s.events, vec![(2, Code::Logo), (4, Code::Pause(2.0)), (5, Code::Hills)]);
     }
 
     #[test]
@@ -211,8 +214,9 @@ mod tests {
     #[test]
     fn logo_shows_from_its_cue_on() {
         let tl = timeline();
-        assert_eq!(tl.logo_since(1.0), None);
-        assert_eq!(tl.logo_since(2.0), Some(82.0 / 60.0));
+        assert_eq!(tl.since(Code::Logo, 1.0), None);
+        assert_eq!(tl.since(Code::Logo, 2.0), Some(82.0 / 60.0));
+        assert_eq!(tl.since(Code::Hills, 2.0), None);
     }
 
     #[test]

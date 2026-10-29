@@ -60,13 +60,16 @@ struct View {
     pushed: Option<PanelView>,
     /// Pixels the scroll text has scrolled in.
     scroll: f64,
+    /// Seconds since the `{hills}` code (None: the landscape isn't in yet).
+    hills: Option<f64>,
 }
 
-/// What is on screen at script time `t`: landscape and scroller, plus
-/// the wordmark once a `{logo}` code has fired.
+/// What is on screen at script time `t`: the scroller, plus the landscape
+/// once `{hills}` and the wordmark once `{logo}` has fired.
 fn script_view(tl: &script::Timeline, t: f64) -> View {
-    let logo = tl.logo_since(t).map_or(LogoPhase::Hidden, |at| LogoPhase::Enter(t - at));
-    View { logo, heading: None, panel: None, pushed: None, scroll: tl.scrolled(t) }
+    let logo = tl.since(script::Code::Logo, t).map_or(LogoPhase::Hidden, |at| LogoPhase::Enter(t - at));
+    let hills = tl.since(script::Code::Hills, t).map(|at| t - at);
+    View { logo, heading: None, panel: None, pushed: None, scroll: tl.scrolled(t), hills }
 }
 
 /// What is on screen `local` seconds into storyboard step `i`. The
@@ -93,7 +96,7 @@ fn view_for(steps: &[Step], i: usize, local: f64) -> View {
     let pushed = panel
         .filter(|pv| !pv.slide.first && local < panel::ENTER_SECS)
         .map(|_| PanelView { step: i - 1, local: steps[i - 1].secs + local, slide: slide_of(steps, i - 1) });
-    View { logo, heading, panel, pushed, scroll: 0.0 }
+    View { logo, heading, panel, pushed, scroll: 0.0, hills: Some(f64::INFINITY) }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -322,10 +325,11 @@ fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>, text:
 
     let logo_view = view.clone();
     let scroll_view = view.clone();
+    let hills_view = view.clone();
     let frame_view = view;
     let frame_steps = steps;
 
-    landscape::landscape()
+    landscape::landscape(move || hills_view.lock().unwrap().hills)
         .layer(Layer::paint(move |c| {
             let phase = logo_view.lock().unwrap().logo;
             word.paint(c, phase);
@@ -531,8 +535,15 @@ mod tests {
         }
         // The script: before {logo}, and with the logo in and the tagline typed.
         let stage = Stage::new(112);
-        let cue = stage.timeline.logo_since(f64::MAX).unwrap();
-        for (name, t) in [("script before", cue - 1.0), ("script logo", cue + 4.0)] {
+        let cue = stage.timeline.since(script::Code::Logo, f64::MAX).unwrap();
+        let hills = stage.timeline.since(script::Code::Hills, f64::MAX).unwrap();
+        for (name, t) in [
+            ("hills 0.4", hills + 0.4),
+            ("hills 1.3", hills + 1.3),
+            ("hills 2.2", hills + 2.2),
+            ("script before", cue - 1.0),
+            ("script logo", cue + 4.0),
+        ] {
             stage.seek_to(t);
             let mut b = FrameBuffer::new(112, ROWS);
             stage.render(&mut b, 0);
@@ -595,16 +606,16 @@ mod tests {
     #[test]
     fn logo_waits_for_its_code() {
         let stage = Stage::new(120);
-        let cue = stage.timeline.logo_since(f64::MAX).expect("pitch has a {logo}");
+        let cue = stage.timeline.since(script::Code::Logo, f64::MAX).expect("pitch has a {logo}");
         stage.seek_to(cue - 0.5);
         assert_eq!(stage.view_at(0).logo, LogoPhase::Hidden);
         stage.seek_to(cue + 1.0);
         let LogoPhase::Enter(t) = stage.view_at(0).logo else { panic!("logo not entering") };
         assert!((t - 1.0).abs() < 1e-9);
         // Before the code: landscape and scroller only.
-        stage.seek_to(1.0);
+        stage.seek_to(0.5);
         let v = stage.view_at(0);
-        assert_eq!((v.logo, v.heading, v.panel), (LogoPhase::Hidden, None, None));
+        assert_eq!((v.logo, v.heading, v.panel, v.hills), (LogoPhase::Hidden, None, None, None));
         assert!(v.scroll > 0.0);
     }
 
@@ -612,7 +623,7 @@ mod tests {
     fn screen_is_empty_of_text_when_the_logo_drops() {
         for w in [80, 112, 200] {
             let stage = Stage::new(w);
-            let cue = stage.timeline.logo_since(f64::MAX).unwrap();
+            let cue = stage.timeline.since(script::Code::Logo, f64::MAX).unwrap();
             let scrolled = stage.timeline.scrolled(cue);
             for (i, ch) in stage.text.chars().enumerate() {
                 let x = w as f64 - scrolled + i as f64 * 8.0;
@@ -625,10 +636,14 @@ mod tests {
     fn space_jumps_to_the_next_code() {
         let stage = Stage::new(120);
         stage.seek_to(0.0);
+        // First code: the hills come in.
         *stage.seek.lock().unwrap() = Some(Seek::Next);
-        assert_eq!(stage.view_at(0).logo, LogoPhase::Enter(0.0));
-        // The jump sticks: a second later the logo is a second in.
-        assert_eq!(stage.view_at(60).logo, LogoPhase::Enter(1.0));
+        let v = stage.view_at(0);
+        assert_eq!((v.hills, v.logo), (Some(0.0), LogoPhase::Hidden));
+        // Next: the logo drops — and the jump sticks: a second later it's a second in.
+        *stage.seek.lock().unwrap() = Some(Seek::Next);
+        assert_eq!(stage.view_at(60).logo, LogoPhase::Enter(0.0));
+        assert_eq!(stage.view_at(120).logo, LogoPhase::Enter(1.0));
     }
 
     #[test]
