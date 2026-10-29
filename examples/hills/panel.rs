@@ -1,5 +1,6 @@
 //! The styled panel each effect is shown on.
 
+use chromakopia::animate::framebuffer::FPS;
 use chromakopia::animate::Cell;
 use chromakopia::prelude::*;
 
@@ -14,12 +15,15 @@ pub const PANEL_EDGE: Color = Color { r: 0x12, g: 0x0A, b: 0x18 };
 
 pub const ENTER_SECS: f64 = 0.7;
 pub const EXIT_SECS: f64 = 0.5;
+/// The effect starts this long into the step — a beat after the panel
+/// lands — and holds its first frame until then.
+pub const EFFECT_DELAY: f64 = ENTER_SECS + 0.2;
 
 const MAX_W: usize = 104;
 const MIN_W: usize = 20;
 const MARGIN: usize = 10;
 /// Resting top row: leaves room for the heading above.
-const REST_Y: i64 = 9;
+const REST_Y: i64 = 8;
 
 /// Panel interior in cells. `y` is the resting row.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,6 +54,11 @@ pub fn panel_y(geo: &Geometry, local: f64, secs: f64) -> i64 {
         rest
     };
     y.round() as i64
+}
+
+/// The effect's frame `local` seconds into a panel step.
+pub fn effect_frame(local: f64) -> usize {
+    ((local - EFFECT_DELAY).max(0.0) * FPS).round() as usize
 }
 
 /// Between the bounce-in and the fall-out.
@@ -169,9 +178,17 @@ mod tests {
     }
 
     #[test]
+    fn effect_holds_its_first_frame_until_after_landing() {
+        assert_eq!(effect_frame(0.0), 0);
+        assert_eq!(effect_frame(ENTER_SECS), 0);
+        assert_eq!(effect_frame(EFFECT_DELAY), 0);
+        assert_eq!(effect_frame(EFFECT_DELAY + 1.0), 60);
+    }
+
+    #[test]
     fn geometry_is_centred() {
         let g = geometry(200, 2);
-        assert_eq!((g.w, g.h, g.y), (104, 13, 9));
+        assert_eq!((g.w, g.h, g.y), (104, 13, 8));
         assert_eq!(g.x, (200 - 104) / 2);
         assert_eq!(geometry(200, 4).h, 15);
     }

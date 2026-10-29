@@ -131,7 +131,7 @@ impl Effect for Stage {
             let step = self.steps[pv.step];
             let geo = panel::geometry(self.screen_w, step.block);
             let y = panel::panel_y(&geo, pv.local, step.secs);
-            panel::blit(buf, &geo, y, effect.as_ref(), (pv.local * FPS) as usize);
+            panel::blit(buf, &geo, y, effect.as_ref(), panel::effect_frame(pv.local));
             if let StepKind::Panel { subtitle, .. } = step.kind {
                 if panel::at_rest(pv.local, step.secs) {
                     put_band(buf, subtitle_row(&geo), subtitle);
