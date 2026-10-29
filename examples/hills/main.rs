@@ -22,6 +22,7 @@
 mod figlet;
 mod glyphs;
 mod landscape;
+mod panel;
 mod scroller;
 mod stage;
 mod wordmark;
