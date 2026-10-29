@@ -1,5 +1,5 @@
 //! The cold open, before the scroller starts: three lines on an empty
-//! screen, each a step louder — built as a library `Timeline` of cell
+//! screen, on the scroller's line, each a step louder — built as a library `Timeline` of cell
 //! effects.
 //!
 //! 1. "hey there" — hard on, hard off.
@@ -58,11 +58,13 @@ pub struct Intro {
 }
 
 impl Intro {
-    pub fn new(width: usize, height: usize) -> Self {
-        // Lines 1 and 2 in the terminal's own font, dead centre.
-        let centred = |line: &str| {
-            text(line, glyphs::LETTER_HIGHLIGHT).pad(height / 2, 0, 0, width.saturating_sub(line.len()) / 2)
-        };
+    /// The cold open for a `width` × `height` screen, on the scroller's
+    /// line: `scroll_y` is the scroller's glyph top in pixel rows.
+    pub fn new(width: usize, height: usize, scroll_y: i64) -> Self {
+        // Lines 1 and 2 in the terminal's own font, centred across, on the
+        // middle of the scroller's letters.
+        let row = (scroll_y.max(0) as usize + 4) / 2;
+        let centred = |line: &str| text(line, glyphs::LETTER_HIGHLIGHT).pad(row, 0, 0, width.saturating_sub(line.len()) / 2);
         let big = text(&half_blocks(LINE3), glyphs::LETTER_HIGHLIGHT);
         // Step 3 lasts as long as the letters take to cross the screen.
         let travel = width + big.size().0;
@@ -73,17 +75,17 @@ impl Intro {
             .at(STEP2.0..STEP2.1, centred(LINE2))
             .at(STEP2.0..STEP2.0 + FADE_SECS, AlphaIn::new(FADE_SECS))
             .at(STEP2.1 - FADE_SECS..STEP2.1, AlphaOut::new(FADE_SECS))
-            .at(STEP3_START..step3_end, Slide { inner: Box::new(big), width, height });
+            .at(STEP3_START..step3_end, Slide { inner: Box::new(big), width, top: scroll_y.max(0) / 2 });
         Self { timeline, secs: step3_end + TAIL_SECS, marks: [STEP2.0, STEP3_START] }
     }
 }
 
-/// `inner`, vertically centred, sliding from just off the right edge
-/// leftward `SLIDE_COLS` columns a frame, until it's gone off the left.
+/// `inner` with its top on row `top`, sliding from just off the right
+/// edge leftward `SLIDE_COLS` columns a frame, until it's gone off the left.
 struct Slide {
     inner: Box<dyn Effect>,
     width: usize,
-    height: usize,
+    top: i64,
 }
 
 impl Effect for Slide {
@@ -92,7 +94,7 @@ impl Effect for Slide {
         let mut sub = FrameBuffer::new(iw, ih);
         self.inner.render(&mut sub, frame);
         let x0 = self.width as i64 - (frame * SLIDE_COLS) as i64;
-        let y0 = self.height.saturating_sub(ih) as i64 / 2;
+        let y0 = self.top;
         for y in 0..ih {
             for x in 0..iw {
                 let cell = sub.get(x, y);
@@ -105,7 +107,7 @@ impl Effect for Slide {
     }
 
     fn size(&self) -> (usize, usize) {
-        (self.width, self.height)
+        (self.width, self.top as usize + self.inner.size().1)
     }
 }
 
@@ -115,6 +117,8 @@ mod tests {
 
     const W: usize = 112;
     const H: usize = 50;
+    /// The scroller's glyph top, in pixel rows.
+    const SCROLL_Y: i64 = 74;
 
     fn frame_at(intro: &Intro, t: f64) -> FrameBuffer {
         let mut buf = FrameBuffer::new(W, H);
@@ -149,11 +153,12 @@ mod tests {
 
     #[test]
     fn step_one_is_a_hard_cut_in_the_middle() {
-        let intro = Intro::new(W, H);
+        let intro = Intro::new(W, H, SCROLL_Y);
         assert_eq!(text_of(&frame_at(&intro, 0.2)), "");
         let buf = frame_at(&intro, 1.0);
         assert_eq!(text_of(&buf), LINE1);
-        assert_eq!(line_at(&buf, LINE1), Some(((W - LINE1.len()) / 2, H / 2)));
+        // On the scroller's line: the middle of its 8-pixel letters.
+        assert_eq!(line_at(&buf, LINE1), Some(((W - LINE1.len()) / 2, (SCROLL_Y as usize + 4) / 2)));
         // Full colour from the first frame on: no fade.
         let (x, y) = line_at(&buf, LINE1).unwrap();
         assert_eq!(frame_at(&intro, STEP1.0).get(x, y).color, buf.get(x, y).color);
@@ -162,7 +167,7 @@ mod tests {
 
     #[test]
     fn step_two_fades_in_and_out() {
-        let intro = Intro::new(W, H);
+        let intro = Intro::new(W, H, SCROLL_Y);
         let luma = |t: f64| {
             let buf = frame_at(&intro, t);
             let (x, y) = line_at(&buf, LINE2).expect("line 2 on screen");
@@ -176,7 +181,7 @@ mod tests {
 
     #[test]
     fn step_three_slides_big_letters_straight_through() {
-        let intro = Intro::new(W, H);
+        let intro = Intro::new(W, H, SCROLL_Y);
         assert_eq!(intro.marks, [STEP2.0, STEP3_START]);
         // Starts off the right edge, ends off the left edge.
         assert!(blocks(&frame_at(&intro, STEP3_START)).is_empty());
@@ -187,6 +192,9 @@ mod tests {
         assert!(!ra.is_empty());
         assert_eq!(ra.iter().min().unwrap() - rb.iter().min().unwrap(), SLIDE_COLS);
         let a = frame_at(&intro, STEP3_START + (intro.secs - STEP3_START) / 2.0);
+        // Same height as the scroller: its top row is the scroller's.
+        let top = (0..H).find(|&y| (0..W).any(|x| is_block(a.get(x, y).ch))).unwrap();
+        assert_eq!(top, SCROLL_Y as usize / 2);
         // The scroller's size: 8 columns a letter, two pixel rows a cell —
         // 8 pixel rows (with descenders) in 4 terminal rows.
         let rows = (0..H).filter(|&y| (0..W).any(|x| is_block(a.get(x, y).ch))).count();
@@ -203,6 +211,6 @@ mod tests {
 
     #[test]
     fn longer_on_wider_screens() {
-        assert!(Intro::new(200, H).secs > Intro::new(112, H).secs);
+        assert!(Intro::new(200, H, SCROLL_Y).secs > Intro::new(112, H, SCROLL_Y).secs);
     }
 }

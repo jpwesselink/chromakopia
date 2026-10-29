@@ -185,7 +185,7 @@ impl Stage {
         let placed = script::parse(scroller::PITCH)
             .and_then(|s| s.place(screen_w))
             .unwrap_or_else(|e| panic!("scroll text: {e}"));
-        let cold_open = intro::Intro::new(screen_w, ROWS);
+        let cold_open = intro::Intro::new(screen_w, ROWS, SCROLLER_Y);
         let timeline = script::Timeline::new(&placed, screen_w).with_lead(cold_open.secs, &cold_open.marks);
         let view = Arc::new(Mutex::new(script_view(&timeline, cold_open.secs, 0.0)));
         let scroller = Arc::new(scroller::Scroller::new(placed.glyphs.clone(), SCROLLER_Y));
