@@ -103,13 +103,34 @@ impl Effect for Faster {
     }
 }
 
+/// Purple slime → toxic green → cyan and back: the cyclic plasma palette.
+fn slime() -> Vec<Color> {
+    gradient(&["#12001F", "#6A1B9A", "#8A2BE2", "#00FF88", "#7CFF4F", "#00FFCC", "#6A1B9A", "#12001F"]).palette(256)
+}
+
+/// Dark moss → toxic green → glow: spotlights and height.
+fn toxic() -> Vec<Color> {
+    gradient(&["#0F2E1C", "#1E6B3A", "#00FF88", "#E8FFE8"]).palette(64)
+}
+
+/// Deep purple → ghostly lilac.
+fn ghost() -> Vec<Color> {
+    gradient(&["#2A0E3F", "#6A1B9A", "#8E3CC8", "#E8D8FF"]).palette(64)
+}
+
+fn slime_plasma(text: &str) -> On<Plasma> {
+    Plasma::new().palette(slime()).on(text)
+}
+
 /// The effect a panel shows, driven over `text` (the figlet-rendered name).
+/// Everything that takes a palette gets the Halloween ones; only the
+/// RAINBOW panel shows a rainbow.
 pub fn effect_for(kind: PanelKind, text: &str) -> Box<dyn Effect> {
     use PanelKind as K;
     match kind {
-        K::Plasma => Box::new(Plasma::on(text)),
+        K::Plasma => Box::new(slime_plasma(text)),
         K::Rainbow => Box::new(Rainbow::on(text)),
-        K::Glow => Box::new(Glow::on(text)),
+        K::Glow => Box::new(Glow::new().palette(toxic()).on(text)),
         K::Pulse => Box::new(Pulse::on(text)),
         K::Neon => Box::new(Neon::on(text)),
         K::Radar => Box::new(Radar::on(text)),
@@ -118,18 +139,23 @@ pub fn effect_for(kind: PanelKind, text: &str) -> Box<dyn Effect> {
         // Flap settles one cell every 2 frames, spaces included — far too
         // slow for a figlet block in a 5 s panel, so run it 6× faster.
         K::Flap => Box::new(Faster { inner: Box::new(Flap::new(text)), k: 6 }),
-        K::Scroll => Box::new(Scroll::new(text)),
-        K::Spread => Box::new(Spread::new(text)),
-        K::Marquee => Box::new(Marquee::wrap(Rainbow::on(text)).speed(20.0)),
-        K::VSineWave => Box::new(VSineWave::wrap(Plasma::on(text))),
-        K::Dycp => Box::new(Dycp::new(text)),
-        K::Fld => Box::new(Fld::new(Plasma::on(text))),
-        K::Wind => Box::new(Wind::wrap(Plasma::on(text))),
-        K::VectorField => Box::new(VectorField::new()),
-        K::HeightMap => Box::new(HeightMap::new()),
-        K::Screen => Box::new(Blend::new(Plasma::on(text), Radar::on(text), BlendMode::Screen)),
-        K::Multiply => Box::new(Blend::new(Rainbow::on(text), Glow::on(text), BlendMode::Multiply)),
-        K::Transition => Box::new(Transition::new(Plasma::on(text), Rainbow::on(text), 2.5, Easing::EaseInOut)),
+        K::Scroll => Box::new(Scroll::new(text).palette(toxic())),
+        K::Spread => Box::new(Spread::new(text).palette(ghost())),
+        K::Marquee => Box::new(Marquee::wrap(slime_plasma(text)).speed(20.0)),
+        K::VSineWave => Box::new(VSineWave::wrap(slime_plasma(text))),
+        K::Dycp => Box::new(Dycp::new(text).palette(slime())),
+        K::Fld => Box::new(Fld::new(slime_plasma(text))),
+        K::Wind => Box::new(Wind::wrap(slime_plasma(text))),
+        K::VectorField => Box::new(VectorField::new().palette(slime())),
+        K::HeightMap => Box::new(HeightMap::new().palette(toxic())),
+        K::Screen => Box::new(Blend::new(slime_plasma(text), Radar::on(text), BlendMode::Screen)),
+        K::Multiply => Box::new(Blend::new(slime_plasma(text), Glow::new().palette(ghost()).on(text), BlendMode::Multiply)),
+        K::Transition => Box::new(Transition::new(
+            slime_plasma(text),
+            Glow::new().palette(ghost()).on(text),
+            2.5,
+            Easing::EaseInOut,
+        )),
     }
 }
 
@@ -174,6 +200,36 @@ mod tests {
         for (y, row) in text.lines().enumerate() {
             let got: String = (0..w).map(|x| buf.get(x, y).ch).collect();
             assert_eq!(got.trim_end(), row.trim_end(), "row {y}");
+        }
+    }
+
+    #[test]
+    fn spooky_panels_have_no_warm_rainbow_hues() {
+        use super::super::stage::{storyboard, StepKind};
+        use PanelKind as K;
+        // Effects with their own fixed library colours keep them.
+        let fixed = [K::Rainbow, K::Pulse, K::Neon, K::Radar, K::Karaoke, K::Glitch, K::Flap, K::Screen];
+        for st in storyboard() {
+            let StepKind::Panel { kind, name, .. } = st.kind else { continue };
+            if fixed.contains(&kind) {
+                continue;
+            }
+            let fx = effect_for(kind, &super::super::figlet::fit(name, 100).join("\n"));
+            for frame in [0, 40, 90, 150] {
+                let mut buf = FrameBuffer::new(100, 13);
+                fx.render(&mut buf, frame);
+                for y in 0..13 {
+                    for x in 0..100 {
+                        let cell = buf.get(x, y);
+                        if cell.ch == ' ' {
+                            continue;
+                        }
+                        let (h, sat, v) = cell.color.to_hsv();
+                        let warm = (h < 70.0 || h > 330.0) && sat > 0.45 && v > 0.35;
+                        assert!(!warm, "{name} frame {frame}: warm colour {:?} at ({x},{y})", cell.color);
+                    }
+                }
+            }
         }
     }
 
