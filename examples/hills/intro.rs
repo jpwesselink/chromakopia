@@ -5,8 +5,8 @@
 //! 1. "hey there" — hard on, hard off.
 //! 2. "how nice of you to come along" — fading in and out
 //!    (`AlphaIn` / `AlphaOut`).
-//! 3. "are you entertained? or would you like some more?" — big cream
-//!    block letters sliding through from right to left.
+//! 3. "are you entertained? or would you like some more?" — cream C64
+//!    letters at the scroller's size, sliding through from right to left.
 
 use chromakopia::animate::framebuffer::FPS;
 use chromakopia::prelude::*;
@@ -26,13 +26,24 @@ const SLIDE_COLS: usize = 2;
 /// Quiet after step 3 before the scroller starts.
 const TAIL_SECS: f64 = 0.5;
 
-/// `line` in the C64 ROM font, each pixel 2×2 `█` cells — big, and
-/// square-ish on tall terminal cells.
-fn big_blocks(line: &str) -> String {
-    glyphs::block_text(line)
-        .iter()
-        .map(|r| r.chars().flat_map(|c| [c, c]).collect::<String>())
-        .flat_map(|r| [r.clone(), r])
+/// `line` in the C64 ROM font at the scroller's size: one column per
+/// pixel, two pixel rows per cell (`▀` `▄` `█`).
+fn half_blocks(line: &str) -> String {
+    let rows = glyphs::block_text(line);
+    rows.chunks(2)
+        .map(|pair| {
+            let bottom: Vec<char> = pair.get(1).map_or(Vec::new(), |r| r.chars().collect());
+            pair[0]
+                .chars()
+                .enumerate()
+                .map(|(i, top)| match (top != ' ', bottom.get(i).is_some_and(|&b| b != ' ')) {
+                    (true, true) => '█',
+                    (true, false) => '▀',
+                    (false, true) => '▄',
+                    (false, false) => ' ',
+                })
+                .collect::<String>()
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -52,7 +63,7 @@ impl Intro {
         let centred = |line: &str| {
             text(line, glyphs::LETTER_HIGHLIGHT).pad(height / 2, 0, 0, width.saturating_sub(line.len()) / 2)
         };
-        let big = text(&big_blocks(LINE3), glyphs::LETTER_HIGHLIGHT);
+        let big = text(&half_blocks(LINE3), glyphs::LETTER_HIGHLIGHT);
         // Step 3 lasts as long as the letters take to cross the screen.
         let travel = width + big.size().0;
         let slide_secs = (travel / SLIDE_COLS + 1) as f64 / FPS;
@@ -127,9 +138,13 @@ mod tests {
         })
     }
 
+    fn is_block(ch: char) -> bool {
+        matches!(ch, '█' | '▀' | '▄')
+    }
+
     /// Columns holding step 3's block letters.
     fn blocks(buf: &FrameBuffer) -> Vec<usize> {
-        (0..buf.width).filter(|&x| (0..buf.height).any(|y| buf.get(x, y).ch == '█')).collect()
+        (0..buf.width).filter(|&x| (0..buf.height).any(|y| is_block(buf.get(x, y).ch))).collect()
     }
 
     #[test]
@@ -166,19 +181,19 @@ mod tests {
         // Starts off the right edge, ends off the left edge.
         assert!(blocks(&frame_at(&intro, STEP3_START)).is_empty());
         assert!(blocks(&frame_at(&intro, intro.secs - 0.05)).is_empty());
-        // In between it moves exactly SLIDE_COLS columns every frame.
-        let mid = STEP3_START + (intro.secs - STEP3_START) / 2.0;
-        let a = frame_at(&intro, mid);
-        let b = frame_at(&intro, mid + 1.0 / FPS);
-        let (ra, rb) = (blocks(&a), blocks(&b));
+        // Coming in, its left edge moves exactly SLIDE_COLS columns a frame.
+        let early = STEP3_START + 0.3;
+        let (ra, rb) = (blocks(&frame_at(&intro, early)), blocks(&frame_at(&intro, early + 1.0 / FPS)));
         assert!(!ra.is_empty());
-        assert_eq!(ra.iter().max().unwrap() - rb.iter().max().unwrap(), SLIDE_COLS);
-        // Big (each ROM pixel 2×2 cells), plain cream like lines 1 and 2.
-        let rows = (0..H).filter(|&y| (0..W).any(|x| a.get(x, y).ch == '█')).count();
-        assert!(rows >= 12, "only {rows} rows tall");
+        assert_eq!(ra.iter().min().unwrap() - rb.iter().min().unwrap(), SLIDE_COLS);
+        let a = frame_at(&intro, STEP3_START + (intro.secs - STEP3_START) / 2.0);
+        // The scroller's size: 8 columns a letter, two pixel rows a cell —
+        // 8 pixel rows (with descenders) in 4 terminal rows.
+        let rows = (0..H).filter(|&y| (0..W).any(|x| is_block(a.get(x, y).ch))).count();
+        assert_eq!(rows, 4);
         let colours: std::collections::HashSet<(u8, u8, u8)> = (0..W)
             .flat_map(|x| (0..H).map(move |y| (x, y)))
-            .filter(|&(x, y)| a.get(x, y).ch == '█')
+            .filter(|&(x, y)| is_block(a.get(x, y).ch))
             .map(|(x, y)| a.get(x, y).color)
             .map(|c| (c.r, c.g, c.b))
             .collect();
