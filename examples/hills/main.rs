@@ -547,7 +547,9 @@ mod tests {
         let hills = stage.timeline.since(script::Code::Hills, f64::MAX).unwrap();
         for (name, t) in [
             ("opening", hills - 0.3),
+            ("hills 0.1", hills + 0.1),
             ("hills 0.4", hills + 0.4),
+            ("hills 0.9", hills + 0.9),
             ("hills 1.3", hills + 1.3),
             ("hills 2.2", hills + 2.2),
             ("script before", cue - 1.0),
@@ -665,7 +667,7 @@ mod tests {
             let stage = Stage::new(w);
             let pause = stage.timeline.cues.iter().find(|c| matches!(c.code, script::Code::Pause(_))).unwrap();
             let script::Code::Pause(secs) = pause.code else { unreachable!() };
-            assert!(secs >= 2.0);
+            assert!(secs >= 2.5, "long enough to wonder what this is");
             // The opening line: the terminal-font letters before the logo.
             let line: Vec<_> = stage.glyphs.iter().take_while(|g| g.font == scroller::Font::Term).collect();
             let scrolled = stage.timeline.scrolled(pause.t + secs / 2.0);
@@ -673,8 +675,10 @@ mod tests {
             let right = w as f64 - scrolled + line.last().unwrap().x + 1.0;
             let centre = (left + right) / 2.0;
             assert!((centre - w as f64 / 2.0).abs() <= 2.0, "{w}: line centred at {centre}");
-            // ...and the hills rise while it stands there.
-            assert_eq!(stage.timeline.since(script::Code::Hills, pause.t), Some(pause.t));
+            // It stands there alone first — no landscape yet — and the
+            // hills only start once that first pause is over.
+            assert_eq!(stage.timeline.since(script::Code::Hills, pause.t + secs - 0.01), None);
+            assert_eq!(stage.timeline.since(script::Code::Hills, pause.t + secs), Some(pause.t + secs));
         }
     }
 
