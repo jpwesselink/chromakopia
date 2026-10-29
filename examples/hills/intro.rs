@@ -5,8 +5,8 @@
 //! 1. "hey there" — hard on, hard off.
 //! 2. "how nice of you to come along" — fading in and out
 //!    (`AlphaIn` / `AlphaOut`).
-//! 3. "are you entertained? or would you like some more?" — big block
-//!    letters in a wild plasma, sliding through from right to left.
+//! 3. "are you entertained? or would you like some more?" — big cream
+//!    block letters sliding through from right to left.
 
 use chromakopia::animate::framebuffer::FPS;
 use chromakopia::prelude::*;
@@ -25,11 +25,6 @@ const STEP3_START: f64 = 8.0;
 const SLIDE_COLS: usize = 2;
 /// Quiet after step 3 before the scroller starts.
 const TAIL_SECS: f64 = 0.5;
-
-/// The wild plasma for step 3: hot pink, sun yellow, ice cyan, violet.
-fn wild() -> Vec<Color> {
-    gradient(&["#ff2bd6", "#ffd23f", "#3fe0ff", "#9b5cff", "#ff2bd6"]).palette(256)
-}
 
 /// `line` in the C64 ROM font, each pixel 2×2 `█` cells — big, and
 /// square-ish on tall terminal cells.
@@ -57,7 +52,7 @@ impl Intro {
         let centred = |line: &str| {
             text(line, glyphs::LETTER_HIGHLIGHT).pad(height / 2, 0, 0, width.saturating_sub(line.len()) / 2)
         };
-        let big = Plasma::new().palette(wild()).on(&big_blocks(LINE3));
+        let big = text(&big_blocks(LINE3), glyphs::LETTER_HIGHLIGHT);
         // Step 3 lasts as long as the letters take to cross the screen.
         let travel = width + big.size().0;
         let slide_secs = (travel / SLIDE_COLS + 1) as f64 / FPS;
@@ -165,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn step_three_slides_big_plasma_letters_straight_through() {
+    fn step_three_slides_big_letters_straight_through() {
         let intro = Intro::new(W, H);
         assert_eq!(intro.marks, [STEP2.0, STEP3_START]);
         // Starts off the right edge, ends off the left edge.
@@ -178,7 +173,7 @@ mod tests {
         let (ra, rb) = (blocks(&a), blocks(&b));
         assert!(!ra.is_empty());
         assert_eq!(ra.iter().max().unwrap() - rb.iter().max().unwrap(), SLIDE_COLS);
-        // Big (each ROM pixel 2×2 cells) and in plasma colours.
+        // Big (each ROM pixel 2×2 cells), plain cream like lines 1 and 2.
         let rows = (0..H).filter(|&y| (0..W).any(|x| a.get(x, y).ch == '█')).count();
         assert!(rows >= 12, "only {rows} rows tall");
         let colours: std::collections::HashSet<(u8, u8, u8)> = (0..W)
@@ -187,7 +182,8 @@ mod tests {
             .map(|(x, y)| a.get(x, y).color)
             .map(|c| (c.r, c.g, c.b))
             .collect();
-        assert!(colours.len() > 5);
+        assert_eq!(colours.len(), 1);
+        assert!(colours.contains(&(glyphs::LETTER_HIGHLIGHT.r, glyphs::LETTER_HIGHLIGHT.g, glyphs::LETTER_HIGHLIGHT.b)));
     }
 
     #[test]
