@@ -398,6 +398,8 @@ impl<E: Effect> EffectExt for E {}
 use std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use super::keys::{parse_keys, Key, KeyHandler};
 
 /// Commands sent from AnimationHandle to the animation task.
 #[cfg(not(target_arch = "wasm32"))]
@@ -483,12 +485,16 @@ fn get_cursor_row() -> Option<usize> {
     None
 }
 
-/// Watch `/dev/tty` for `key` (case-insensitive) and flip `running` to
-/// false when pressed. Clears only ICANON|ECHO — ISIG stays on so Ctrl-C
-/// still works. Restores the original termios when the thread exits.
-/// Returns a flag that turns true once the key was actually pressed.
+/// Watch `/dev/tty` for keys. `quit` (case-insensitive) flips `running` to
+/// false; every other key goes to `on_key`. Clears only ICANON|ECHO — ISIG
+/// stays on so Ctrl-C still works. Restores the original termios when the
+/// thread exits. Returns a flag that turns true once quit was pressed.
 #[cfg(unix)]
-fn spawn_quit_listener(key: char, running: Arc<std::sync::atomic::AtomicBool>) -> Arc<std::sync::atomic::AtomicBool> {
+fn spawn_key_listener(
+    quit: Option<char>,
+    on_key: Option<KeyHandler>,
+    running: Arc<std::sync::atomic::AtomicBool>,
+) -> Arc<std::sync::atomic::AtomicBool> {
     use std::io::Read;
     use std::os::unix::io::AsRawFd;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -530,15 +536,24 @@ fn spawn_quit_listener(key: char, running: Arc<std::sync::atomic::AtomicBool>) -
             return;
         }
 
-        let mut byte = [0u8; 1];
-        while running.load(Ordering::Relaxed) {
-            match tty.read(&mut byte) {
-                Ok(1) if (byte[0] as char).eq_ignore_ascii_case(&key) => {
-                    flag.store(true, Ordering::Relaxed);
-                    running.store(false, Ordering::Relaxed);
-                    break;
+        let mut bytes = [0u8; 32];
+        'read: while running.load(Ordering::Relaxed) {
+            match tty.read(&mut bytes) {
+                Ok(0) => {}
+                Ok(n) => {
+                    for key in parse_keys(&bytes[..n]) {
+                        if let (Key::Char(c), Some(q)) = (key, quit) {
+                            if c.eq_ignore_ascii_case(&q) {
+                                flag.store(true, Ordering::Relaxed);
+                                running.store(false, Ordering::Relaxed);
+                                break 'read;
+                            }
+                        }
+                        if let Some(handler) = &on_key {
+                            handler(key);
+                        }
+                    }
                 }
-                Ok(_) => {}
                 Err(_) => break,
             }
         }
@@ -547,7 +562,11 @@ fn spawn_quit_listener(key: char, running: Arc<std::sync::atomic::AtomicBool>) -
 }
 
 #[cfg(all(not(unix), not(target_arch = "wasm32")))]
-fn spawn_quit_listener(_key: char, _running: Arc<std::sync::atomic::AtomicBool>) -> Arc<std::sync::atomic::AtomicBool> {
+fn spawn_key_listener(
+    _quit: Option<char>,
+    _on_key: Option<KeyHandler>,
+    _running: Arc<std::sync::atomic::AtomicBool>,
+) -> Arc<std::sync::atomic::AtomicBool> {
     Arc::new(std::sync::atomic::AtomicBool::new(false))
 }
 
@@ -632,7 +651,7 @@ pub async fn run_effect(
     speed: f64,
     quit_key: Option<char>,
 ) {
-    run_effect_in(effect, width, height, duration, speed, quit_key, false).await
+    run_effect_in(effect, width, height, duration, speed, quit_key, None, false).await
 }
 
 /// Restores the main screen if the process is killed by Ctrl-C while an
@@ -657,6 +676,7 @@ pub(crate) async fn run_effect_in(
     duration: Duration,
     speed: f64,
     quit_key: Option<char>,
+    on_key: Option<KeyHandler>,
     alt_screen: bool,
 ) {
     use std::io::Write;
@@ -698,10 +718,10 @@ pub(crate) async fn run_effect_in(
         get_cursor_row().unwrap_or(1)
     };
 
-    let quit_pressed = quit_key.map(|key| {
+    let quit_pressed = (quit_key.is_some() || on_key.is_some()).then(|| {
         // Force the OSC color probe now, while we still own the tty.
         crate::terminal::probe_colors();
-        spawn_quit_listener(key, running.clone())
+        spawn_key_listener(quit_key, on_key, running.clone())
     });
 
     let frame_duration = Duration::from_secs_f64(1.0 / FPS / speed.max(0.001));
@@ -884,7 +904,7 @@ pub fn spawn_effect(
     let quit_pressed = quit_key.map(|key| {
         // Force the OSC color probe now, while we still own the tty.
         crate::terminal::probe_colors();
-        spawn_quit_listener(key, running.clone())
+        spawn_key_listener(Some(key), None, running.clone())
     });
 
     let frame_duration = Duration::from_secs_f64(1.0 / FPS / speed.max(0.001));

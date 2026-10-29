@@ -95,7 +95,6 @@ pub use effects::{Rainbow, Glow, Plasma, VectorField, HeightMap, Pulse, Glitch, 
 pub use framebuffer::{Cell, Effect, EffectExt, On, FrameBuffer};
 pub use layers::{dither, Canvas, Layer, Layers, Px};
 pub use keys::{parse_keys, Key};
-pub(crate) use keys::KeyHandler;
 pub use scene::{Scene, Line};
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -2,6 +2,7 @@
 
 use crate::color::Color;
 use super::effects::BlendMode;
+use super::keys::{Key, KeyHandler};
 use super::framebuffer::{Cell, Effect, FrameBuffer};
 #[cfg(not(target_arch = "wasm32"))]
 use super::framebuffer::AnimationHandle;
@@ -166,11 +167,12 @@ pub struct Scene {
     items: Vec<SceneItem>,
     quit_key: Option<char>,
     fullscreen: bool,
+    on_key: Option<KeyHandler>,
 }
 
 impl Scene {
     pub fn new() -> Self {
-        Self { items: Vec::new(), quit_key: None, fullscreen: false }
+        Self { items: Vec::new(), quit_key: None, fullscreen: false, on_key: None }
     }
 
     /// Run on the terminal's alternate screen (like `vim` or `less`): the
@@ -185,6 +187,15 @@ impl Scene {
     /// Stop the animation early when `key` is pressed (case-insensitive).
     pub fn quit_key(mut self, key: char) -> Self {
         self.quit_key = Some(key);
+        self
+    }
+
+    /// Call `f` for every key pressed while the scene runs (except the
+    /// quit key, which still stops it). Runs on the input thread — keep it
+    /// short; hand work to the effect through a shared value. Honoured by
+    /// `run`.
+    pub fn on_key(mut self, f: impl Fn(Key) + Send + Sync + 'static) -> Self {
+        self.on_key = Some(std::sync::Arc::new(f));
         self
     }
 
@@ -294,8 +305,8 @@ impl Scene {
         use std::time::Duration;
         let width = crate::terminal::terminal_width().max(1);
         let height = self.height().max(1);
-        let (quit_key, fullscreen) = (self.quit_key, self.fullscreen);
-        super::framebuffer::run_effect_in(self, width, height, Duration::from_secs_f64(seconds), 1.0, quit_key, fullscreen).await;
+        let (quit_key, fullscreen, on_key) = (self.quit_key, self.fullscreen, self.on_key.clone());
+        super::framebuffer::run_effect_in(self, width, height, Duration::from_secs_f64(seconds), 1.0, quit_key, on_key, fullscreen).await;
     }
 }
 
@@ -436,6 +447,23 @@ impl Effect for Scene {
 mod tests {
     use super::*;
     use super::super::framebuffer::EffectExt;
+
+    #[test]
+    fn on_key_handler_receives_keys() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let h = hits.clone();
+        let scene = Scene::new().on_key(move |k| {
+            if k == super::super::keys::Key::Right {
+                h.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        let handler = scene.on_key.as_ref().expect("handler stored");
+        handler(super::super::keys::Key::Right);
+        handler(super::super::keys::Key::Left);
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn overlay_blend_composites_half_blocks() {
