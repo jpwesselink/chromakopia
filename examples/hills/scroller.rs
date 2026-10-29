@@ -153,13 +153,13 @@ impl Scroller {
     }
 
     /// Put the terminal-font letters on as real characters over whatever
-    /// is beneath them, on one straight row — no wave. Run after the pixel
-    /// layers have rendered.
+    /// is beneath them, riding the wave in whole rows (or one straight row
+    /// with `{wave off}`). Run after the pixel layers have rendered.
     pub fn paint_cells(&self, buf: &mut FrameBuffer, scrolled: f64, frame: usize) {
         let t = frame as f64 / FPS;
-        let row = (self.y0 + BASE - 4) / 2;
         for g in self.glyphs.iter().filter(|g| g.font == Font::Term) {
-            let Some((x, _)) = self.spot(g, buf.width, scrolled, t) else { continue };
+            let Some((x, base)) = self.spot(g, buf.width, scrolled, t) else { continue };
+            let row = (base - 4).div_euclid(2);
             if x < 0 || x as usize >= buf.width || row < 0 || row as usize >= buf.height {
                 continue;
             }
@@ -278,16 +278,21 @@ mod tests {
     }
 
     #[test]
-    fn term_letters_ride_a_straight_line() {
-        let s = one(Font::Term, Style::Candy, 'Q');
-        let rows: Vec<usize> = (0..48)
-            .map(|frame| {
-                let mut buf = FrameBuffer::new(60, 40);
-                s.paint_cells(&mut buf, 50.0, frame);
-                (0..40).find(|&y| (0..60).any(|x| buf.get(x, y).ch == 'Q')).unwrap()
-            })
-            .collect();
-        assert!(rows.iter().all(|&r| r == rows[0]), "{rows:?}");
+    fn term_letters_wave_in_whole_rows_unless_wave_is_off() {
+        let rows = |wave: bool| -> Vec<usize> {
+            let s = Scroller::new(vec![Glyph { ch: 'Q', x: 0.0, font: Font::Term, style: Style::Candy, wave }], 40);
+            (0..48)
+                .map(|frame| {
+                    let mut buf = FrameBuffer::new(60, 40);
+                    s.paint_cells(&mut buf, 50.0, frame);
+                    (0..40).find(|&y| (0..60).any(|x| buf.get(x, y).ch == 'Q')).unwrap()
+                })
+                .collect()
+        };
+        let waving = rows(true);
+        assert!(waving.iter().any(|&r| r != waving[0]), "{waving:?}");
+        let straight = rows(false);
+        assert!(straight.iter().all(|&r| r == straight[0]), "{straight:?}");
     }
 
     #[test]

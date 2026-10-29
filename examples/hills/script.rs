@@ -93,7 +93,7 @@ pub struct Glyph {
     pub x: f64,
     pub font: Font,
     pub style: Style,
-    /// Rides the wave (terminal letters never do).
+    /// Rides the wave (terminal letters in whole rows).
     pub wave: bool,
 }
 
