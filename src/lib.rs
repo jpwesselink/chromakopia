@@ -62,7 +62,7 @@ pub fn color_enabled() -> bool { true }
 pub fn set_color_enabled(_: Option<bool>) {}
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use terminal::{bg_color, fg_color, is_dark_theme, is_light_theme, probe_colors, set_bg_color, set_fg_color, terminal_width};
+pub use terminal::{bg_color, fg_color, is_dark_theme, is_light_theme, probe_colors, set_bg_color, set_fg_color, terminal_height, terminal_width};
 
 /// Curated imports for animation work.
 ///
@@ -83,7 +83,7 @@ pub mod prelude {
     #[cfg(not(target_arch = "wasm32"))]
     pub use crate::animate::AnimationHandle;
     #[cfg(not(target_arch = "wasm32"))]
-    pub use crate::{gradient, bg_color, fg_color, terminal_width};
+    pub use crate::{gradient, bg_color, fg_color, terminal_height, terminal_width};
 }
 
 /// Create a gradient from a slice of colors.

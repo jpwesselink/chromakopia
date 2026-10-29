@@ -120,6 +120,13 @@ impl Effect for Stage {
 
         self.layers.render(buf, frame);
 
+        // Headings too wide for the pixel font go in as plain text.
+        if let Some((title, _)) = view.heading {
+            if !pixel_caption_fits(title, buf.width) {
+                put_band(buf, HEADING_ROW, title);
+            }
+        }
+
         if let (Some(pv), Some(effect)) = (view.panel, &self.effects[i]) {
             let step = self.steps[pv.step];
             let geo = panel::geometry(self.screen_w, step.block);
@@ -127,7 +134,7 @@ impl Effect for Stage {
             panel::blit(buf, &geo, y, effect.as_ref(), (pv.local * FPS) as usize);
             if let StepKind::Panel { subtitle, .. } = step.kind {
                 if panel::at_rest(pv.local, step.secs) {
-                    put_subtitle(buf, subtitle_row(&geo), subtitle);
+                    put_band(buf, subtitle_row(&geo), subtitle);
                 }
             }
         }
@@ -138,15 +145,23 @@ impl Effect for Stage {
     }
 }
 
+/// Terminal row a plain-text heading sits on: where the pixel one would.
+const HEADING_ROW: usize = 2;
+
 /// Terminal row the subtitle sits on: just below the panel's extrusion.
 fn subtitle_row(geo: &panel::Geometry) -> usize {
     (geo.y + geo.h as i64 + 2) as usize
 }
 
+/// Whether a caption fits on screen in the 8-column pixel font.
+fn pixel_caption_fits(text: &str, width: usize) -> bool {
+    glyphs::text_width(text) + 2 <= width as i64
+}
+
 /// Write `text` centred on `row` as plain terminal text — glow on a panel-
 /// coloured band one space wider each side — so any length fits. Clipped
 /// to the buffer.
-fn put_subtitle(buf: &mut FrameBuffer, row: usize, text: &str) {
+fn put_band(buf: &mut FrameBuffer, row: usize, text: &str) {
     if row >= buf.height {
         return;
     }
@@ -182,9 +197,13 @@ fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>) -> La
             let geo = panel::geometry(c.width, step.block);
             panel::paint_frame(c, &geo, panel::panel_y(&geo, pv.local, step.secs));
         }))
-        // Heading above the panel, dropping in with a bounce.
+        // Heading above the panel, dropping in with a bounce (plain text
+        // when it is too wide — see Stage::render).
         .layer(Layer::paint(move |c| {
             let Some((title, progress)) = caption_view.lock().unwrap().heading else { return };
+            if !pixel_caption_fits(title, c.width) {
+                return;
+            }
             let x = (c.width as i64 - glyphs::text_width(title)) / 2;
             let y = 4 - ((1.0 - Easing::BounceOut.apply(progress)) * 16.0).round() as i64;
             glyphs::stamp_text(c, title, (x, y), &mut Vec::new());
@@ -192,8 +211,19 @@ fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>) -> La
         .layer(Layer::paint(move |c| scroller.paint(c)))
 }
 
+/// Why a terminal `rows` tall can't show the scene, if it can't.
+fn size_problem(rows: usize) -> Option<String> {
+    (rows < ROWS).then(|| {
+        format!("hills needs a terminal at least {ROWS} rows tall (this one has {rows}) — make the window taller or zoom out.")
+    })
+}
+
 #[tokio::main]
 async fn main() {
+    if let Some(problem) = size_problem(terminal_height()) {
+        eprintln!("{problem}");
+        return;
+    }
     let stage = Stage::new(terminal_width());
     let seek = stage.seek.clone();
     Scene::new()
@@ -308,6 +338,28 @@ mod tests {
         let x = line.windows(want.len()).position(|w| w == want.as_slice());
         let x = x.unwrap_or_else(|| panic!("row {row}: {:?}", line.iter().collect::<String>()));
         assert_eq!(b.get(x, row).bg, Some(panel::PANEL_FILL));
+    }
+
+    #[test]
+    fn heading_falls_back_to_plain_text_when_too_wide() {
+        let s = storyboard();
+        let stage = Stage::new(80);
+        let p = s.iter().position(|st| st.block == 3 && matches!(st.kind, StepKind::Panel { .. })).unwrap();
+        stage.seek_to(start_of(&s, p) + 2.0);
+        let mut b = FrameBuffer::new(80, ROWS);
+        stage.render(&mut b, 0);
+        let found = (0..ROWS).any(|y| {
+            let line: String = (0..80).map(|x| b.get(x, y).ch).collect();
+            line.contains("SHAPE & LAYOUT")
+        });
+        assert!(found, "plain heading not found");
+    }
+
+    #[test]
+    fn size_check_needs_the_scene_height() {
+        assert!(size_problem(24).unwrap().contains("40"));
+        assert_eq!(size_problem(ROWS), None);
+        assert_eq!(size_problem(60), None);
     }
 
     #[test]

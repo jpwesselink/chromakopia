@@ -87,14 +87,15 @@ pub fn basic() -> FigletFont {
     FigletFont::parse(BASIC_FLF)
 }
 
-/// `text` in Colossal when it fits in `max_w` columns, else in Basic.
+/// `text` in Colossal when it fits in `max_w` columns, else in Basic,
+/// else as plain text (cut to `max_w`).
 pub fn fit(text: &str, max_w: usize) -> Vec<String> {
-    let big = colossal();
-    if big.width(text) <= max_w {
-        big.render(text)
-    } else {
-        basic().render(text)
+    for font in [colossal(), basic()] {
+        if font.width(text) <= max_w {
+            return font.render(text);
+        }
     }
+    vec![text.chars().take(max_w).collect()]
 }
 
 #[cfg(test)]
@@ -114,6 +115,19 @@ mod tests {
         assert_eq!(rows.len(), 11);
         assert_eq!(f.width("AB"), f.width("A") + f.width("B"));
         assert!(rows.iter().all(|r| r.chars().count() == f.width("AB")));
+    }
+
+    #[test]
+    fn fit_always_fits() {
+        use super::super::stage::{storyboard, StepKind};
+        for st in storyboard() {
+            let StepKind::Panel { name, .. } = st.kind else { continue };
+            for max_w in [12, 20, 40, 68] {
+                let rows = fit(name, max_w);
+                assert!(rows.iter().all(|r| r.chars().count() <= max_w), "{name} at {max_w}: {rows:?}");
+            }
+        }
+        assert_eq!(fit("TRANSITION", 20), vec!["TRANSITION".to_string()]);
     }
 
     #[test]

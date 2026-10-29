@@ -78,6 +78,22 @@ pub fn paint_frame(c: &mut Canvas, geo: &Geometry, y: i64) {
     fill(c, inner, PANEL_FILL);
 }
 
+/// Plays `inner` `k` times faster.
+struct Faster {
+    inner: Box<dyn Effect>,
+    k: usize,
+}
+
+impl Effect for Faster {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        self.inner.render(buf, frame * self.k);
+    }
+
+    fn size(&self) -> (usize, usize) {
+        self.inner.size()
+    }
+}
+
 /// The effect a panel shows, driven over `text` (the figlet-rendered name).
 pub fn effect_for(kind: PanelKind, text: &str) -> Box<dyn Effect> {
     use PanelKind as K;
@@ -90,7 +106,9 @@ pub fn effect_for(kind: PanelKind, text: &str) -> Box<dyn Effect> {
         K::Radar => Box::new(Radar::on(text)),
         K::Karaoke => Box::new(Karaoke::on(text)),
         K::Glitch => Box::new(Glitch::new(text)),
-        K::Flap => Box::new(Flap::new(text)),
+        // Flap settles one cell every 2 frames, spaces included — far too
+        // slow for a figlet block in a 5 s panel, so run it 6× faster.
+        K::Flap => Box::new(Faster { inner: Box::new(Flap::new(text)), k: 6 }),
         K::Scroll => Box::new(Scroll::new(text)),
         K::Spread => Box::new(Spread::new(text)),
         K::Marquee => Box::new(Marquee::wrap(Rainbow::on(text)).speed(20.0)),
@@ -134,6 +152,21 @@ pub fn blit(buf: &mut FrameBuffer, geo: &Geometry, y: i64, effect: &dyn Effect, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flap_spells_its_name_before_it_falls_out() {
+        use super::super::stage::PANEL_SECS;
+        let text = super::super::figlet::fit("FLAP", geometry(200, 3).w - 2).join("\n");
+        let fx = effect_for(PanelKind::Flap, &text);
+        let (w, h) = fx.size();
+        let mut buf = FrameBuffer::new(w, h);
+        // Half a second before the panel starts to fall out.
+        fx.render(&mut buf, ((PANEL_SECS - EXIT_SECS - 0.5) * 60.0) as usize);
+        for (y, row) in text.lines().enumerate() {
+            let got: String = (0..w).map(|x| buf.get(x, y).ch).collect();
+            assert_eq!(got.trim_end(), row.trim_end(), "row {y}");
+        }
+    }
 
     #[test]
     fn geometry_is_centred() {

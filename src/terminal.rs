@@ -386,6 +386,35 @@ pub fn terminal_width() -> usize {
         .unwrap_or(80)
 }
 
+/// Get the terminal height in rows.
+///
+/// Returns 24 if detection fails.
+#[cfg(unix)]
+pub fn terminal_height() -> usize {
+    unsafe {
+        let mut ws: libc::winsize = std::mem::zeroed();
+        if libc::ioctl(2, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_row > 0 {
+            ws.ws_row as usize
+        } else {
+            std::env::var("LINES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(24)
+        }
+    }
+}
+
+/// Get the terminal height in rows.
+///
+/// Returns 24 if detection fails.
+#[cfg(not(unix))]
+pub fn terminal_height() -> usize {
+    std::env::var("LINES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(24)
+}
+
 /// Manually set the background color (overrides auto-detection).
 pub fn set_bg_color(color: Color) {
     let _ = BG_COLOR.set(color);
