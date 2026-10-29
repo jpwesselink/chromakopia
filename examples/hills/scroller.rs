@@ -51,7 +51,7 @@ impl Scroller {
 
 /// The scroll text, cracktro style: brag about what's on screen, never
 /// explain how.
-pub const PITCH: &str = "Welly welly welly well...   what do we have here?   CHROMAKOPIA, back on your screen, my droogs...   \
+pub const PITCH: &str = "Welly welly welly well...   what do we have here?   \
 ...and yes, before you ask: this is a TERMINAL. No browser, no video, no tricks you can see.   \
 Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 Clouds that drift and throw shadows on the land.   \
