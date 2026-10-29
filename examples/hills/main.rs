@@ -23,6 +23,7 @@ mod figlet;
 mod glyphs;
 mod landscape;
 mod scroller;
+mod stage;
 mod wordmark;
 
 use chromakopia::prelude::*;
