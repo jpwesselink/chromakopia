@@ -6,9 +6,8 @@ use std::f64::consts::TAU;
 
 use super::glyphs::{c64, stamp};
 
-// Scroller: one pixel per frame (smooth at any FPS-locked rate), riding a
-// gentle sine through screen x — classic cracktro bottom scroller.
-const SCROLL_SPEED: f64 = FPS;
+// Scroller: riding a gentle sine through screen x — classic cracktro
+// bottom scroller. Its speed lives in the script's timeline.
 const SCROLL_WAVE: f64 = 4.0;
 const SCROLL_WAVE_PERIOD: f64 = 0.8;
 
@@ -28,13 +27,12 @@ impl Scroller {
         Self { glyphs, y0 }
     }
 
-    /// Only the glyphs on screen are stamped. The text enters from the
-    /// right edge, runs out, and starts again.
-    pub fn paint(&self, c: &mut Canvas) {
+    /// Paint the text `scrolled` pixels in (0 = just off the right edge;
+    /// the script's timeline decides, pauses included). Only the glyphs on
+    /// screen are stamped.
+    pub fn paint(&self, c: &mut Canvas, scrolled: f64) {
         let t = c.frame as f64 / FPS;
-        let run = (self.glyphs.len() * 8 + c.width) as i64;
-        let scrolled = (t * SCROLL_SPEED) as i64 % run;
-        let start = c.width as i64 - scrolled;
+        let start = c.width as i64 - scrolled.floor() as i64;
         let first = (-start - 8).max(0) / 8;
         let mut face = Vec::new();
         for i in first as usize..self.glyphs.len() {
@@ -51,7 +49,7 @@ impl Scroller {
 
 /// The scroll text, cracktro style: brag about what's on screen, never
 /// explain how.
-pub const PITCH: &str = "Welly welly welly well...   what do we have here?   \
+pub const PITCH: &str = "Welly welly welly well...   what do we have here?   {logo}{pause 3}\
 ...and yes, before you ask: this is a TERMINAL. No browser, no video, no tricks you can see, just the good old terminal you have known and loved...   which you will now love a little bit more.   \
 Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 Clouds that drift and throw shadows on the land.   \
@@ -72,7 +70,8 @@ mod tests {
 
     #[test]
     fn pitch_is_all_c64_glyphs() {
-        for ch in PITCH.chars().filter(|&c| c != '\n') {
+        let text = super::super::script::parse(PITCH).expect("pitch parses").text;
+        for ch in text.chars() {
             assert!(super::super::glyphs::has_c64(ch), "no C64 glyph for {ch:?}");
         }
         assert!(PITCH.contains("cargo add chromakopia"));

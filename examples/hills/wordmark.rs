@@ -72,6 +72,8 @@ pub fn full_swing(scale: usize) -> i64 {
 /// What the wordmark is doing, with local seconds into that phase.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LogoPhase {
+    /// Not on screen.
+    Hidden,
     /// Dropping in at the centre, full swing.
     Enter(f64),
     /// Gliding from the centre up to the top.
@@ -86,7 +88,7 @@ impl LogoPhase {
     /// 0 = centre with full swing, 1 = top with calm swing.
     fn lift(self) -> f64 {
         match self {
-            LogoPhase::Enter(_) => 0.0,
+            LogoPhase::Hidden | LogoPhase::Enter(_) => 0.0,
             LogoPhase::Rise(t) => Easing::EaseInOut.apply(t / RISE_SECS),
             LogoPhase::Top => 1.0,
             LogoPhase::Fall(t) => 1.0 - Easing::EaseInOut.apply(t / RISE_SECS),
@@ -136,6 +138,9 @@ impl Wordmark {
     /// Paint the tagline under the wordmark for `phase`: typed out during
     /// the entrance, then riding along with the wordmark.
     pub fn paint_tagline(&self, c: &mut Canvas, phase: LogoPhase) {
+        if phase == LogoPhase::Hidden {
+            return;
+        }
         let shown = match phase {
             LogoPhase::Enter(t) => ((t - TYPE_START).max(0.0) * TYPE_RATE) as usize,
             _ => TAGLINE.len(),
@@ -177,6 +182,9 @@ impl Wordmark {
     /// (extrusion, outline, face) before the next, so every letter covers
     /// its left neighbour's extrusion.
     pub fn paint(&self, c: &mut Canvas, phase: LogoPhase) {
+        if phase == LogoPhase::Hidden {
+            return;
+        }
         let (x0, lift) = (self.x0, phase.lift());
         let y0 = (self.y_mid as f64 + (self.y_top - self.y_mid) as f64 * lift).round() as i64;
         let wall = c.frame as f64 / FPS;

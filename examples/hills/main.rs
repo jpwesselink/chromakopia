@@ -1,24 +1,25 @@
-//! Hills showcase — every chromakopia effect, cracktro style, over a
-//! pastel landscape of swaying dithered hills (half-block pixel `Layers`).
+//! Hills showcase — chromakopia, cracktro style, over a pastel landscape
+//! of swaying dithered hills (half-block pixel `Layers`).
 //!
-//! The show: CHROMAKOPIA drops in letter by letter and rides a DYCP wave,
-//! the sales pitch starts scrolling along the bottom (and keeps going),
-//! the letters jump away, and then block by block — COLOR EFFECTS, SHAPE &
-//! LAYOUT, FIELDS, MIXING — each effect gets its own panel: aubergine box
-//! with the letters' outline and 3D extrusion, bouncing in with the
-//! effect's name in figlet, a heading above and a subtitle below. A finale
-//! drops the wordmark in again, and the show loops.
+//! The scroll text along the bottom runs the show: control codes in it
+//! (see `script.rs`) fire as they pass the middle of the screen. It opens
+//! on the landscape and the scroller alone; `{logo}` drops CHROMAKOPIA in
+//! and types the tagline under it. The effect panels (`stage.rs`,
+//! `panel.rs`) wait for codes of their own.
 //!
 //! Run: `cargo run --release --example hills`
-//! Keys: → n space next · ← p previous · ↓ ↑ next/previous block ·
-//! 1–6 jump to block · q quit
+//! Keys: → n space next code · ← p previous code · q quit
 
 mod figlet;
 mod glyphs;
 mod landscape;
 mod layout;
 mod panel;
+mod script;
 mod scroller;
+// The storyboard's clock and seeking are idle until script codes drive
+// the panels again.
+#[allow(dead_code)]
 mod stage;
 mod tiny;
 mod wordmark;
@@ -28,7 +29,9 @@ use std::sync::{Arc, Mutex};
 
 use chromakopia::animate::framebuffer::FPS;
 use chromakopia::animate::Cell;
-use stage::{locate, storyboard, Clock, Seek, Step, StepKind};
+#[cfg(test)]
+use stage::locate;
+use stage::{storyboard, Seek, Step, StepKind};
 use wordmark::LogoPhase;
 
 /// Scene height in terminal rows (two pixels each).
@@ -55,9 +58,21 @@ struct View {
     panel: Option<PanelView>,
     /// The previous panel, while the current one pushes it off screen.
     pushed: Option<PanelView>,
+    /// Pixels the scroll text has scrolled in.
+    scroll: f64,
 }
 
-/// What is on screen `local` seconds into step `i`.
+/// What is on screen at script time `t`: landscape and scroller, plus
+/// the wordmark once a `{logo}` code has fired.
+fn script_view(tl: &script::Timeline, t: f64) -> View {
+    let logo = tl.logo_since(t).map_or(LogoPhase::Hidden, |at| LogoPhase::Enter(t - at));
+    View { logo, heading: None, panel: None, pushed: None, scroll: tl.scrolled(t) }
+}
+
+/// What is on screen `local` seconds into storyboard step `i`. The
+/// storyboard (panels, headings) is re-attached to the script by later
+/// codes; until then only the tests drive it.
+#[cfg_attr(not(test), allow(dead_code))]
 fn view_for(steps: &[Step], i: usize, local: f64) -> View {
     let step = steps[i];
     let logo = match step.kind {
@@ -78,14 +93,16 @@ fn view_for(steps: &[Step], i: usize, local: f64) -> View {
     let pushed = panel
         .filter(|pv| !pv.slide.first && local < panel::ENTER_SECS)
         .map(|_| PanelView { step: i - 1, local: steps[i - 1].secs + local, slide: slide_of(steps, i - 1) });
-    View { logo, heading, panel, pushed }
+    View { logo, heading, panel, pushed, scroll: 0.0 }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn is_panel(step: &Step) -> bool {
     matches!(step.kind, StepKind::Panel { .. })
 }
 
 /// Whether panel step `i` opens or closes its block's run of panels.
+#[cfg_attr(not(test), allow(dead_code))]
 fn slide_of(steps: &[Step], i: usize) -> panel::Slide {
     let same_run = |j: usize| is_panel(&steps[j]) && steps[j].block == steps[i].block;
     panel::Slide { first: i == 0 || !same_run(i - 1), last: i + 1 >= steps.len() || !same_run(i + 1) }
@@ -107,8 +124,8 @@ fn on_screen(steps: &[Step], view: &View, screen_w: usize) -> Vec<(usize, panel:
     out
 }
 
-/// Plays the storyboard: applies seeks, publishes the frame's `View` for
-/// the paint layers, renders them, then blits the active panel effect.
+/// Plays the script: applies seeks, publishes the frame's `View` for the
+/// paint layers, renders them, then blits any panel effects.
 struct Stage {
     steps: Vec<Step>,
     /// Per step: the panel's effect (None for non-panel steps).
@@ -118,8 +135,13 @@ struct Stage {
     /// The block heading, drawn last so it sits in front of the panels.
     heading: Layers,
     view: Arc<Mutex<View>>,
-    clock: Mutex<Clock>,
+    timeline: script::Timeline,
+    /// Wall time at which script time was 0.
+    origin: Mutex<f64>,
     seek: Arc<Mutex<Option<Seek>>>,
+    /// Tests: show the storyboard from this time instead of the script.
+    #[cfg(test)]
+    story: Mutex<Option<f64>>,
 }
 
 impl Stage {
@@ -135,26 +157,70 @@ impl Stage {
                 _ => None,
             })
             .collect();
-        let view = Arc::new(Mutex::new(view_for(&steps, 0, 0.0)));
-        let layers = build_layers(screen_w, view.clone(), steps.clone());
+        let script = script::parse(scroller::PITCH).expect("scroll text parses");
+        let timeline = script::Timeline::new(&script, screen_w);
+        let view = Arc::new(Mutex::new(script_view(&timeline, 0.0)));
+        let layers = build_layers(screen_w, view.clone(), steps.clone(), &script.text);
         let heading = build_heading(view.clone());
-        Self { steps, effects, screen_w, layers, heading, view, clock: Mutex::new(Clock::new()), seek: Arc::new(Mutex::new(None)) }
+        Self {
+            steps,
+            effects,
+            screen_w,
+            layers,
+            heading,
+            view,
+            timeline,
+            origin: Mutex::new(0.0),
+            seek: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            story: Mutex::new(None),
+        }
     }
 
-    /// Jump the clock so storyboard time is `t` at frame 0 (tests).
+    /// Jump the clock so script time is `t` at frame 0 (tests).
     #[cfg(test)]
     fn seek_to(&self, t: f64) {
-        *self.clock.lock().unwrap() = Clock::at(t);
+        *self.origin.lock().unwrap() = -t;
+        *self.story.lock().unwrap() = None;
+    }
+
+    /// Show the storyboard from time `t` at frame 0 instead of the script
+    /// (tests of the panels, until codes drive them).
+    #[cfg(test)]
+    fn story_at(&self, t: f64) {
+        *self.story.lock().unwrap() = Some(t);
+    }
+
+    /// Script time at wall time `now`, after applying a pending seek:
+    /// → jumps to the next code, ← to the previous one; past the end the
+    /// show starts over.
+    fn script_time(&self, now: f64) -> f64 {
+        let mut origin = self.origin.lock().unwrap();
+        let t = (now - *origin).rem_euclid(self.timeline.total);
+        let target = match self.seek.lock().unwrap().take() {
+            Some(Seek::Next) => self.timeline.next_after(t),
+            Some(Seek::Prev) => self.timeline.prev_before(t),
+            _ => return t,
+        };
+        *origin = now - target;
+        target
+    }
+
+    /// This frame's view.
+    fn view_at(&self, frame: usize) -> View {
+        let now = frame as f64 / FPS;
+        #[cfg(test)]
+        if let Some(t0) = *self.story.lock().unwrap() {
+            let (i, local) = locate(&self.steps, t0 + now);
+            return View { scroll: (t0 + now) * FPS, ..view_for(&self.steps, i, local) };
+        }
+        script_view(&self.timeline, self.script_time(now))
     }
 }
 
 impl Effect for Stage {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        let now = frame as f64 / FPS;
-        let seek = self.seek.lock().unwrap().take();
-        let t = self.clock.lock().unwrap().time(&self.steps, now, seek);
-        let (i, local) = locate(&self.steps, t);
-        let view = view_for(&self.steps, i, local);
+        let view = self.view_at(frame);
         *self.view.lock().unwrap() = view;
 
         self.layers.render(buf, frame);
@@ -246,12 +312,13 @@ fn put_band(buf: &mut FrameBuffer, row: usize, text: &str) {
     }
 }
 
-fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>) -> Layers {
+fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>, text: &str) -> Layers {
     let word = wordmark::Wordmark::placed(screen_w);
     // Baseline high enough that the scroller's wave plus extrusion stays on screen.
-    let scroller = scroller::Scroller::new(scroller::PITCH, SCROLLER_Y);
+    let scroller = scroller::Scroller::new(text, SCROLLER_Y);
 
     let logo_view = view.clone();
+    let scroll_view = view.clone();
     let frame_view = view;
     let frame_steps = steps;
 
@@ -268,7 +335,7 @@ fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>) -> La
                 panel::paint_frame(c, &geo);
             }
         }))
-        .layer(Layer::paint(move |c| scroller.paint(c)))
+        .layer(Layer::paint(move |c| scroller.paint(c, scroll_view.lock().unwrap().scroll)))
 }
 
 /// The block heading under the panel in the small font, popping up with
@@ -305,9 +372,6 @@ async fn main() {
             let request = match key {
                 Key::Right | Key::Char('n') | Key::Char(' ') => Seek::Next,
                 Key::Left | Key::Char('p') => Seek::Prev,
-                Key::Down => Seek::NextBlock,
-                Key::Up => Seek::PrevBlock,
-                Key::Char(c @ '1'..='6') => Seek::Block(c as usize - '0' as usize),
                 _ => return,
             };
             *seek.lock().unwrap() = Some(request);
@@ -388,7 +452,7 @@ mod tests {
         let s = storyboard();
         let p = s.iter().position(is_panel).unwrap();
         let stage = Stage::new(200);
-        stage.seek_to(start_of(&s, p) + 2.0);
+        stage.story_at(start_of(&s, p) + 2.0);
         let mut b = FrameBuffer::new(200, ROWS);
         stage.render(&mut b, 0);
         let mut heading = FrameBuffer::new(200, ROWS);
@@ -420,7 +484,7 @@ mod tests {
         let stage = Stage::new(200);
         for block in 1..=6 {
             let i = s.iter().position(|st| st.block == block).unwrap();
-            stage.seek_to(start_of(&s, i) + 1.0);
+            stage.story_at(start_of(&s, i) + 1.0);
             let start = std::time::Instant::now();
             for f in 0..120 {
                 let mut b = FrameBuffer::new(200, ROWS);
@@ -445,22 +509,31 @@ mod tests {
                 let i = s.iter().position(|st| st.block == block).unwrap();
                 let target = if block == 1 { 0 } else { i + 1 }; // first panel of the block
                 let target = target.min(s.len() - 1);
-                stage.seek_to(start_of(&s, target) + 2.0);
+                stage.story_at(start_of(&s, target) + 2.0);
                 let mut b = FrameBuffer::new(w, ROWS);
                 stage.render(&mut b, 0);
                 out += &format!("\n=== {w} block {block} ===\n{}\n", b.to_ansi_string());
             }
             // Mid-push: the second colour panel shoving the first one out.
             let p = s.iter().position(is_panel).unwrap() + 1;
-            stage.seek_to(start_of(&s, p) + 0.3);
+            stage.story_at(start_of(&s, p) + 0.3);
             let mut b = FrameBuffer::new(w, ROWS);
             stage.render(&mut b, 0);
             out += &format!("\n=== {w} push ===\n{}\n", b.to_ansi_string());
             // Intro after the tagline has typed out.
-            stage.seek_to(5.0);
+            stage.story_at(5.0);
             let mut b = FrameBuffer::new(w, ROWS);
             stage.render(&mut b, 0);
             out += &format!("\n=== {w} intro ===\n{}\n", b.to_ansi_string());
+        }
+        // The script: before {logo}, and with the logo in and the tagline typed.
+        let stage = Stage::new(112);
+        let cue = stage.timeline.logo_since(f64::MAX).unwrap();
+        for (name, t) in [("script before", cue - 1.0), ("script logo", cue + 4.0)] {
+            stage.seek_to(t);
+            let mut b = FrameBuffer::new(112, ROWS);
+            stage.render(&mut b, 0);
+            out += &format!("\n=== {name} ===\n{}\n", b.to_ansi_string());
         }
         std::fs::write("target/hills-blocks.ansi", out).unwrap();
     }
@@ -471,7 +544,7 @@ mod tests {
         let stage = Stage::new(120);
         let p = s.iter().position(|st| matches!(st.kind, StepKind::Panel { .. })).unwrap();
         let StepKind::Panel { subtitle, .. } = s[p].kind else { unreachable!() };
-        stage.seek_to(start_of(&s, p) + 2.0);
+        stage.story_at(start_of(&s, p) + 2.0);
         let mut b = FrameBuffer::new(120, ROWS);
         stage.render(&mut b, 0);
         let row = subtitle_row(&panel::geometry(120, s[p].block));
@@ -487,7 +560,7 @@ mod tests {
         let s = storyboard();
         let stage = Stage::new(50);
         let p = s.iter().position(|st| st.block == 3 && matches!(st.kind, StepKind::Panel { .. })).unwrap();
-        stage.seek_to(start_of(&s, p) + 2.0);
+        stage.story_at(start_of(&s, p) + 2.0);
         let mut b = FrameBuffer::new(50, ROWS);
         stage.render(&mut b, 0);
         let found = (0..ROWS).any(|y| {
@@ -499,8 +572,9 @@ mod tests {
 
     #[test]
     fn scroller_wave_clears_the_bottom_border_with_room_to_spare() {
-        let scroller = scroller::Scroller::new(scroller::PITCH, SCROLLER_Y);
-        let layers = Layers::new(ROWS).layer(Layer::paint(move |c| scroller.paint(c)));
+        let text = script::parse(scroller::PITCH).unwrap().text;
+        let scroller = scroller::Scroller::new(&text, SCROLLER_Y);
+        let layers = Layers::new(ROWS).layer(Layer::paint(move |c| scroller.paint(c, c.frame as f64)));
         let mut lowest = 0;
         for frame in 0..120 {
             let mut b = FrameBuffer::new(120, ROWS);
@@ -513,6 +587,41 @@ mod tests {
         }
         // At least three free rows between the wave's lowest point and the border.
         assert!(lowest + 4 < ROWS - 1, "scroller reaches row {lowest} of {ROWS}");
+    }
+
+    #[test]
+    fn logo_waits_for_its_code() {
+        let stage = Stage::new(120);
+        let cue = stage.timeline.logo_since(f64::MAX).expect("pitch has a {logo}");
+        stage.seek_to(cue - 0.5);
+        assert_eq!(stage.view_at(0).logo, LogoPhase::Hidden);
+        stage.seek_to(cue + 1.0);
+        let LogoPhase::Enter(t) = stage.view_at(0).logo else { panic!("logo not entering") };
+        assert!((t - 1.0).abs() < 1e-9);
+        // Before the code: landscape and scroller only.
+        stage.seek_to(1.0);
+        let v = stage.view_at(0);
+        assert_eq!((v.logo, v.heading, v.panel), (LogoPhase::Hidden, None, None));
+        assert!(v.scroll > 0.0);
+    }
+
+    #[test]
+    fn space_jumps_to_the_next_code() {
+        let stage = Stage::new(120);
+        stage.seek_to(0.0);
+        *stage.seek.lock().unwrap() = Some(Seek::Next);
+        assert_eq!(stage.view_at(0).logo, LogoPhase::Enter(0.0));
+        // The jump sticks: a second later the logo is a second in.
+        assert_eq!(stage.view_at(60).logo, LogoPhase::Enter(1.0));
+    }
+
+    #[test]
+    fn show_starts_over_after_the_text() {
+        let stage = Stage::new(120);
+        stage.seek_to(stage.timeline.total + 0.5);
+        let v = stage.view_at(0);
+        assert_eq!(v.logo, LogoPhase::Hidden);
+        assert!((v.scroll - 30.0).abs() < 1e-6, "scroll {}", v.scroll);
     }
 
     #[test]
@@ -530,7 +639,7 @@ mod tests {
         let s = storyboard();
         let stage = Stage::new(120);
         for t in [2.0, start_of(&s, 3) + 2.0] {
-            stage.seek_to(t);
+            stage.story_at(t);
             let mut b = FrameBuffer::new(120, ROWS);
             stage.render(&mut b, 0);
             let edges = (0..ROWS)
@@ -549,7 +658,7 @@ mod tests {
         let stage = Stage::new(120);
         for block in 1..=6 {
             let i = s.iter().position(|st| st.block == block).unwrap();
-            stage.seek_to(start_of(&s, i) + 2.0);
+            stage.story_at(start_of(&s, i) + 2.0);
             let mut b = FrameBuffer::new(120, ROWS);
             stage.render(&mut b, 0);
             assert!(b.to_ansi_string().contains('▀'), "block {block}");
