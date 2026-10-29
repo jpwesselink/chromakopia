@@ -92,7 +92,13 @@ pub fn basic() -> FigletFont {
 pub fn fit(text: &str, max_w: usize) -> Vec<String> {
     for font in [colossal(), basic()] {
         if font.width(text) <= max_w {
-            return font.render(text);
+            // Drop blank rows (descender space) so the ink centres.
+            let mut rows = font.render(text);
+            while rows.last().is_some_and(|r| r.trim().is_empty()) {
+                rows.pop();
+            }
+            let top = rows.iter().take_while(|r| r.trim().is_empty()).count();
+            return rows.split_off(top);
         }
     }
     vec![text.chars().take(max_w).collect()]
@@ -118,6 +124,14 @@ mod tests {
     }
 
     #[test]
+    fn fit_trims_blank_rows_so_names_centre() {
+        let rows = fit("PLASMA", 104);
+        assert!(rows.first().unwrap().trim().len() > 0);
+        assert!(rows.last().unwrap().trim().len() > 0);
+        assert_eq!(rows.len(), 8);
+    }
+
+    #[test]
     fn fit_always_fits() {
         use super::super::stage::{storyboard, StepKind};
         for st in storyboard() {
@@ -133,7 +147,8 @@ mod tests {
     #[test]
     fn fit_falls_back_to_basic() {
         let wide = colossal().width("VECTORFIELD");
-        assert_eq!(fit("VECTORFIELD", wide).len(), 11);
-        assert_eq!(fit("VECTORFIELD", wide - 1).len(), 8);
+        let width = |rows: Vec<String>| rows[0].chars().count();
+        assert_eq!(width(fit("VECTORFIELD", wide)), wide);
+        assert_eq!(width(fit("VECTORFIELD", wide - 1)), basic().width("VECTORFIELD"));
     }
 }
