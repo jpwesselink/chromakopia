@@ -30,11 +30,11 @@ use stage::{locate, storyboard, Clock, Seek, Step, StepKind};
 use wordmark::LogoPhase;
 
 /// Scene height in terminal rows (two pixels each).
-pub const ROWS: usize = 44;
+pub const ROWS: usize = 48;
 /// Rows of open sky above the landscape, so the wordmark has headroom.
 pub const TOP_PAD: usize = 6;
 /// Top pixel row of the licence scroller at rest (it waves around this).
-const SCROLLER_Y: i64 = (ROWS * 2) as i64 - 21;
+const SCROLLER_Y: i64 = (ROWS * 2) as i64 - 27;
 
 /// A panel step in progress.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -504,13 +504,13 @@ mod tests {
                 }
             }
         }
-        // At least one free row between the wave's lowest point and the border.
-        assert!(lowest + 2 < ROWS - 1, "scroller reaches row {lowest} of {ROWS}");
+        // At least three free rows between the wave's lowest point and the border.
+        assert!(lowest + 4 < ROWS - 1, "scroller reaches row {lowest} of {ROWS}");
     }
 
     #[test]
     fn size_check_needs_the_scene_height() {
-        assert!(size_problem(24).unwrap().contains("44"));
+        assert!(size_problem(24).unwrap().contains("48"));
         assert_eq!(size_problem(ROWS), None);
         assert_eq!(size_problem(60), None);
     }
