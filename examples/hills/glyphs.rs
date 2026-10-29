@@ -177,6 +177,7 @@ pub fn c64(ch: char) -> [u8; 8] {
 }
 
 /// Whether the C64 caption font has `ch`.
+#[cfg(test)]
 pub fn has_c64(ch: char) -> bool {
     C64_GLYPHS.iter().any(|(g, _)| *g == ch)
 }

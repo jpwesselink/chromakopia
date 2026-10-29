@@ -153,6 +153,7 @@ impl Clock {
     }
 
     /// A clock that reads storyboard time `t` at wall time 0.
+    #[cfg(test)]
     pub fn at(t: f64) -> Self {
         Self { origin: -t }
     }
