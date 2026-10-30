@@ -167,9 +167,6 @@ impl Script {
                 glyphs.push(Glyph { ch, x, font, style, wave, path });
             }
             x += scroller::advance(font, ch) as f64;
-            if path.is_some() && ch != ' ' {
-                x += looping::LETTER_GAP;
-            }
         }
         Ok(Placed { glyphs, events, length: x })
     }
@@ -292,13 +289,12 @@ mod tests {
         let p = s.place(100).unwrap();
         let paths: Vec<_> = p.glyphs.iter().map(|g| g.path).collect();
         assert_eq!(paths, [None, Some(Shape::Loop), Some(Shape::Loop), None]);
-        // Loopers ride further apart, so turned letters don't touch.
-        assert_eq!(p.glyphs[2].x - p.glyphs[1].x, 8.0 + looping::LETTER_GAP);
-        // Spaces don't get it: words sit as far apart as on the line.
+        // Letters and spaces sit as far apart as on the line.
+        assert_eq!(p.glyphs[2].x - p.glyphs[1].x, 8.0);
         let spaced = parse("{path loop}a b{path off}").unwrap().place(100).unwrap();
-        assert_eq!(spaced.glyphs[1].x - spaced.glyphs[0].x, 8.0 + looping::LETTER_GAP + 8.0);
+        assert_eq!(spaced.glyphs[1].x - spaced.glyphs[0].x, 16.0);
         // What follows waits until the last looper is out.
-        assert_eq!(p.glyphs[3].x, 24.0 + 2.0 * looping::LETTER_GAP + looping::LOOP_EXTRA);
+        assert_eq!(p.glyphs[3].x, 24.0 + looping::LOOP_EXTRA);
         assert!(p.events.is_empty(), "nothing to fire: {:?}", p.events);
     }
 
