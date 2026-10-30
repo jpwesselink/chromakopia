@@ -22,6 +22,9 @@ pub const LOOP_SHIFT: f64 = 32.0;
 pub const LOOP_SPREAD: f64 = 1.4;
 /// Text the loop takes, in pixels: once round, at the loop's speed.
 pub const LOOP_EXTRA: f64 = TAU * LOOP_R / LOOP_SPREAD;
+/// Track pixels over which the scroller's wave dies down before the loop
+/// (and swells back after it).
+pub const WAVE_FADE: f64 = 24.0;
 /// Angles a letter can be turned to.
 pub const ANGLES: usize = 32;
 
@@ -47,6 +50,19 @@ impl Shape {
 pub fn extra(shape: Shape, _width: usize) -> f64 {
     match shape {
         Shape::Loop => LOOP_EXTRA,
+    }
+}
+
+/// How much of the scroller's wave a letter `d` pixels along `shape`'s
+/// track rides (0..=1): all of it on the straight, dying down to none as
+/// it nears the loop, swelling back once out — never a jump.
+pub fn wave_weight(shape: Shape, d: f64, width: usize) -> f64 {
+    match shape {
+        Shape::Loop => {
+            let (start, end) = (loop_start(width), loop_start(width) + LOOP_EXTRA);
+            let away = if d < start { start - d } else if d > end { d - end } else { 0.0 };
+            (away / WAVE_FADE).min(1.0)
+        }
     }
 }
 
@@ -292,6 +308,23 @@ mod tests {
         for i in 1..ANGLES {
             let n = turned(&W_GLYPH, 2, i).len() as f64;
             assert!((0.75 * ink..1.25 * ink).contains(&n), "angle {i}: {n} vs {ink}");
+        }
+    }
+
+    #[test]
+    fn wave_dies_down_into_the_loop_and_back_up_after() {
+        let (a, end) = (entry_d(), entry_d() + LOOP_EXTRA);
+        assert_eq!(wave_weight(Shape::Loop, a - 100.0, W), 1.0);
+        assert_eq!(wave_weight(Shape::Loop, a, W), 0.0);
+        assert_eq!(wave_weight(Shape::Loop, a + LOOP_EXTRA / 2.0, W), 0.0);
+        assert_eq!(wave_weight(Shape::Loop, end + 100.0, W), 1.0);
+        // Gently, not in a jump.
+        let w = |d| wave_weight(Shape::Loop, d, W);
+        assert!(w(a - 10.0) > 0.0 && w(a - 10.0) < 1.0);
+        assert!(w(end + 10.0) > 0.0 && w(end + 10.0) < 1.0);
+        for k in 0..400 {
+            let d = a - 50.0 + k as f64;
+            assert!((w(d + 1.0) - w(d)).abs() <= 1.0 / WAVE_FADE + 1e-9, "at {d}");
         }
     }
 

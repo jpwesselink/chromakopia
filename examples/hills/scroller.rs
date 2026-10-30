@@ -148,7 +148,14 @@ impl Scroller {
         let (Some(shape), Some(turns)) = (g.path, self.turns.get(&(g.ch, g.font))) else { return false };
         let adv = advance(g.font, g.ch);
         let d = (pen(scrolled) - g.x as i64) as f64 - adv as f64 / 2.0;
-        let spot = track(shape, d, c.width, (self.y0 + BASE) as f64);
+        let mut spot = track(shape, d, c.width, (self.y0 + BASE) as f64);
+        // On the straight it rides the wave like any letter (same phase, by
+        // its left edge), calming down for the loop.
+        if g.wave {
+            let left = spot.x - adv as f64 / 2.0;
+            let wave = (TAU * c.frame as f64 / FPS / SCROLL_WAVE_PERIOD + left * 0.05).sin();
+            spot.y += (SCROLL_WAVE * wave * looping::wave_weight(shape, d, c.width)).round();
+        }
         if spot.x < -(adv as f64) - 4.0 || spot.x > c.width as f64 + adv as f64 {
             return true;
         }
@@ -370,6 +377,29 @@ mod tests {
         assert!(!ink.is_empty());
         // Hanging from the top of the loop, feet up, head towards the middle.
         assert!(ink.iter().all(|&y| (y as f64) >= top - 2.0 && (y as f64) <= top + 16.0), "{ink:?} vs top {top}");
+    }
+
+    #[test]
+    fn looped_letters_ride_the_wave_until_the_loop() {
+        let w = 200;
+        // Top ink row of a looped letter at track distance `d`, per frame.
+        let tops = |d: f64| -> Vec<usize> {
+            (0..48)
+                .map(|frame| {
+                    let g = Glyph { ch: 'M', x: 0.0, font: Font::C64, style: Style::Flat, wave: true, path: Some(looping::Shape::Loop) };
+                    let s = Scroller::new(vec![g], SCROLLER_Y);
+                    let layers = Layers::new(ROWS).layer(Layer::paint(move |c| s.paint(c, d + 4.0)));
+                    let mut buf = FrameBuffer::new(w, ROWS);
+                    layers.render(&mut buf, frame);
+                    (0..ROWS).find(|&y| (0..w).any(|x| buf.get(x, y).ch != ' ')).unwrap()
+                })
+                .collect()
+        };
+        let waving = tops(30.0);
+        assert!(waving.iter().any(|&t| t != waving[0]), "no wave on the way in: {waving:?}");
+        // Right at the loop's mouth it rides flat.
+        let flat = tops(looping::loop_start(w));
+        assert!(flat.iter().all(|&t| t == flat[0]), "{flat:?}");
     }
 
     #[test]
