@@ -255,7 +255,7 @@ pub const PITCH: &str = "{hills}{style flat}Welly well, what do we have here?{st
 ...and yes, before you ask: this is a TERMINAL. No browser, no video, no tricks you can see, just the good old terminal you have known and loved...   which you will now love a little bit more.   {font tiny}(psst... the small print: no pixels were harmed in the making of this demo - because there are no pixels, just text and ANSI escape codes!){font c64}   \
 Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 Clouds that drift and throw shadows on the land. Never shade. They're above that.   \
-A logo that will not sit still, bouncing every letter on its own little wave...   in fact,{logo away} it won't even stay.   \
+A logo that will not sit still, bouncing every letter on its own little wave...   in fact, it won't{logo away} even stay.    \
 {path loop}And all of it at a silky 60 frames per second.{path off}   {font big}BENDING THE RULES{font c64}   {logo}\
 How is it done?   Ha!   A magician never tells...   {font term}(this is your terminal's own font, by the way - blink and you miss it){font c64}   \
 ...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}{wave off}...ofc you should type it without the colours, just like we did in 1986...{wave on}{style candy}   \
