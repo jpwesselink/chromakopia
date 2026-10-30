@@ -262,6 +262,7 @@ Keys: space or arrows to skip, q to quit.   {bye}Text wraps... now!          ";
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::{ROWS, SCROLLER_Y};
     use std::f64::consts::PI;
 
     #[test]
@@ -353,14 +354,15 @@ mod tests {
     fn looped_letters_ride_over_the_top_upside_down() {
         let w = 200;
         let g = Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave: true, looped: true };
-        let base = (40 + BASE) as f64;
+        // On the real screen: the scroller's own line, full height.
+        let base = (SCROLLER_Y + BASE) as f64;
         // Scrolled so the letter's middle is halfway round the loop.
         let scrolled = looping::loop_start(w) + PI * looping::LOOP_R + 8.0;
-        let s = Scroller::new(vec![g], 40);
-        let layers = Layers::new(60).layer(Layer::paint(move |c| s.paint(c, scrolled)));
-        let mut buf = FrameBuffer::new(w, 60);
+        let s = Scroller::new(vec![g], SCROLLER_Y);
+        let layers = Layers::new(ROWS).layer(Layer::paint(move |c| s.paint(c, scrolled)));
+        let mut buf = FrameBuffer::new(w, ROWS);
         layers.render(&mut buf, 0);
-        let ink: Vec<usize> = (0..120).filter(|&y| (0..w).any(|x| {
+        let ink: Vec<usize> = (0..ROWS * 2).filter(|&y| (0..w).any(|x| {
             let cell = buf.get(x, y / 2);
             cell.ch != ' ' && if y % 2 == 0 { cell.color == LETTER_HIGHLIGHT } else { cell.bg == Some(LETTER_HIGHLIGHT) }
         })).collect();

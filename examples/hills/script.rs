@@ -165,6 +165,9 @@ impl Script {
                 glyphs.push(Glyph { ch, x, font, style, wave, looped });
             }
             x += scroller::advance(font, ch) as f64;
+            if looped {
+                x += looping::LETTER_GAP;
+            }
         }
         Ok(Placed { glyphs, events, length: x })
     }
@@ -287,8 +290,10 @@ mod tests {
         let p = s.place(100).unwrap();
         let looped: Vec<bool> = p.glyphs.iter().map(|g| g.looped).collect();
         assert_eq!(looped, [false, true, true, false]);
+        // Loopers ride further apart, so turned letters don't touch.
+        assert_eq!(p.glyphs[2].x - p.glyphs[1].x, 8.0 + looping::LETTER_GAP);
         // What follows waits until the last looper is out.
-        assert_eq!(p.glyphs[3].x, 24.0 + looping::LOOP_EXTRA);
+        assert_eq!(p.glyphs[3].x, 24.0 + 2.0 * looping::LETTER_GAP + looping::LOOP_EXTRA);
         assert!(p.events.is_empty(), "nothing to fire: {:?}", p.events);
     }
 

@@ -694,6 +694,15 @@ mod tests {
     }
 
     #[test]
+    fn loop_is_as_big_as_fits_under_the_top_border() {
+        // Its top (an upside-down letter's outline) stays clear of the
+        // border, with little room to spare.
+        let top = (SCROLLER_Y + 7) as f64 - 2.0 * looping::LOOP_R - 1.0;
+        assert!(top >= layout::TOP_MARGIN as f64, "{top}");
+        assert!(top <= layout::TOP_MARGIN as f64 + 8.0, "room for a bigger loop: {top}");
+    }
+
+    #[test]
     fn logo_steps_aside_for_the_loop_and_comes_back() {
         let w = 112;
         let stage = Stage::new(w);

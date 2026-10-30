@@ -13,12 +13,15 @@ use std::f64::consts::TAU;
 use super::glyphs::{LETTER_HIGHLIGHT, LETTER_LOWER, LETTER_UPPER};
 
 /// Radius of the loop, in pixels.
-pub const LOOP_R: f64 = 30.0;
+pub const LOOP_R: f64 = 36.0;
 /// How far left of where they went in the letters come out, so the way
 /// out doesn't run over the way in.
 pub const LOOP_SHIFT: f64 = 32.0;
 /// Track length the loop adds: once round.
 pub const LOOP_EXTRA: f64 = TAU * LOOP_R;
+/// Extra room between looping letters, in pixels: turned, a letter
+/// reaches further than upright, so they'd touch at their usual spacing.
+pub const LETTER_GAP: f64 = 3.0;
 /// Angles a letter can be turned to.
 pub const ANGLES: usize = 32;
 
