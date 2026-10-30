@@ -90,6 +90,7 @@ const LAND_H: f64 = ((ROWS - TOP_PAD) * 2) as f64;
 
 /// Highest the cloud banks reach: the front bank's base, less its humps
 /// and the tallest cumulus. Sky clouds stay above it.
+#[cfg(test)]
 fn sky_floor() -> f64 {
     LAND_TOP + LAND_H * 0.38 - 8.0 - 15.0
 }
