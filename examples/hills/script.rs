@@ -10,7 +10,7 @@
 
 use chromakopia::animate::framebuffer::FPS;
 
-use super::looping;
+use super::looping::{self, Shape};
 use super::scroller::{self, Font, Style};
 
 /// Scroll speed, pixels per second (one pixel per frame).
@@ -37,9 +37,9 @@ pub enum Code {
     Style(Style),
     /// Everything after rides the wave (true) or a straight line (false).
     Wave(bool),
-    /// Everything after rides the loop-the-loop (true), until it's
-    /// switched off again (false).
-    Loop(bool),
+    /// Everything after rides this path across the screen (None: back on
+    /// the scroller's line).
+    Path(Option<Shape>),
     /// Everything leaves: the logo jumps away, the landscape takes
     /// itself down — before the text wraps and the show starts over.
     Bye,
@@ -83,8 +83,10 @@ pub fn parse(src: &str) -> Result<Script, String> {
             }
             (Some("wave"), Some("on"), None) => Code::Wave(true),
             (Some("wave"), Some("off"), None) => Code::Wave(false),
-            (Some("loop"), Some("on"), None) => Code::Loop(true),
-            (Some("loop"), Some("off"), None) => Code::Loop(false),
+            (Some("path"), Some("off"), None) => Code::Path(None),
+            (Some("path"), Some(name), None) => {
+                Code::Path(Some(Shape::named(name).ok_or_else(|| format!("unknown path {{{body}}}"))?))
+            }
             (Some("style"), Some(name), None) => {
                 Code::Style(Style::named(name).ok_or_else(|| format!("unknown style {{{body}}}"))?)
             }
@@ -110,8 +112,8 @@ pub struct Glyph {
     pub style: Style,
     /// Rides the wave (terminal letters in whole rows).
     pub wave: bool,
-    /// Rides the loop-the-loop instead.
-    pub looped: bool,
+    /// Rides this path across the screen instead.
+    pub path: Option<Shape>,
 }
 
 /// The script laid out for one screen width: every visible letter with its
@@ -129,11 +131,11 @@ pub struct Placed {
 impl Script {
     /// Lay the text out for a screen `width` columns wide: each letter
     /// as wide as its font makes it, `{gap}` as half a screen of space.
-    /// After a loop, what follows waits the length of the ride so the
-    /// loopers are out before it comes through. A letter its font doesn't
+    /// After a path, what follows waits the length of the ride so the
+    /// riders are out before it comes through. A letter its font doesn't
     /// have is an error.
     pub fn place(&self, width: usize) -> Result<Placed, String> {
-        let (mut font, mut style, mut wave, mut looped) = (Font::C64, Style::Candy, true, false);
+        let (mut font, mut style, mut wave, mut path) = (Font::C64, Style::Candy, true, None);
         let (mut glyphs, mut events, mut x) = (Vec::new(), Vec::new(), 0.0);
         let mut codes = self.events.iter().peekable();
         let chars: Vec<char> = self.text.chars().collect();
@@ -148,11 +150,11 @@ impl Script {
                     Code::Font(f) => font = f,
                     Code::Style(st) => style = st,
                     Code::Wave(on) => wave = on,
-                    Code::Loop(on) => {
-                        if looped && !on {
-                            x += looping::LOOP_EXTRA;
+                    Code::Path(next) => {
+                        if let Some(shape) = path.filter(|&p| Some(p) != next) {
+                            x += looping::extra(shape, width);
                         }
-                        looped = on;
+                        path = next;
                     }
                     _ => events.push((x, code)),
                 }
@@ -162,10 +164,10 @@ impl Script {
                 return Err(format!("font {font:?} has no {ch:?} (in {:?})", chars[i.saturating_sub(10)..(i + 10).min(chars.len())].iter().collect::<String>()));
             }
             if ch != ' ' {
-                glyphs.push(Glyph { ch, x, font, style, wave, looped });
+                glyphs.push(Glyph { ch, x, font, style, wave, path });
             }
             x += scroller::advance(font, ch) as f64;
-            if looped {
+            if path.is_some() && ch != ' ' {
                 x += looping::LETTER_GAP;
             }
         }
@@ -283,15 +285,18 @@ mod tests {
     }
 
     #[test]
-    fn loop_marks_its_letters_and_leaves_room_for_the_ride() {
-        let s = parse("a{loop on}bc{loop off}d").unwrap();
-        assert!(parse("{loop sideways}").is_err());
+    fn path_marks_its_letters_and_leaves_room_for_the_ride() {
+        let s = parse("a{path loop}bc{path off}d").unwrap();
+        assert!(parse("{path sideways}").is_err());
         assert_eq!(parse("{logo away}").unwrap().events, vec![(0, Code::LogoAway)]);
         let p = s.place(100).unwrap();
-        let looped: Vec<bool> = p.glyphs.iter().map(|g| g.looped).collect();
-        assert_eq!(looped, [false, true, true, false]);
+        let paths: Vec<_> = p.glyphs.iter().map(|g| g.path).collect();
+        assert_eq!(paths, [None, Some(Shape::Loop), Some(Shape::Loop), None]);
         // Loopers ride further apart, so turned letters don't touch.
         assert_eq!(p.glyphs[2].x - p.glyphs[1].x, 8.0 + looping::LETTER_GAP);
+        // Spaces don't get it: words sit as far apart as on the line.
+        let spaced = parse("{path loop}a b{path off}").unwrap().place(100).unwrap();
+        assert_eq!(spaced.glyphs[1].x - spaced.glyphs[0].x, 8.0 + looping::LETTER_GAP + 8.0);
         // What follows waits until the last looper is out.
         assert_eq!(p.glyphs[3].x, 24.0 + 2.0 * looping::LETTER_GAP + looping::LOOP_EXTRA);
         assert!(p.events.is_empty(), "nothing to fire: {:?}", p.events);

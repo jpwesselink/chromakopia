@@ -620,7 +620,7 @@ mod tests {
             out += &format!("\n=== {name} ===\n{}\n", b.to_ansi_string());
         }
         // The loop-the-loop: its first letter this far round.
-        let first = stage.glyphs.iter().find(|g| g.looped).unwrap();
+        let first = stage.glyphs.iter().find(|g| g.path == Some(looping::Shape::Loop)).unwrap();
         for k in [40.0, 100.0, 200.0, 400.0] {
             let target = first.x + 8.0 + 112.0 / 2.0 + k;
             let t = (0..).map(|f| f as f64 / FPS).find(|&t| stage.timeline.scrolled(t) >= target).unwrap();
@@ -708,7 +708,7 @@ mod tests {
         let stage = Stage::new(w);
         let away = first_cue(&stage, script::Code::LogoAway);
         let back = stage.timeline.cues.iter().find(|c| c.code == script::Code::Logo && c.t > away).expect("logo comes back").t;
-        let loopers: Vec<_> = stage.glyphs.iter().filter(|g| g.looped).collect();
+        let loopers: Vec<_> = stage.glyphs.iter().filter(|g| g.path.is_some()).collect();
         // Out of the way before the first letter reaches the loop...
         let first_in = when_scrolled(&stage, loopers[0].x + 4.0 + looping::loop_start(w));
         assert!(away + wordmark::EXIT_DONE <= first_in, "{away} + exit vs {first_in}");
