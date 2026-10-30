@@ -58,6 +58,25 @@ fn sky_reveal(t: f64) -> f64 {
     Easing::EaseOut.apply((t / SKY_SECS).clamp(0.0, 1.0))
 }
 
+/// Humps along a ridge line at column `x`, 0..1: two hump widths `wl`
+/// mixed for irregular ridges.
+fn humps(x: f64, wl: (f64, f64), seed: f64) -> f64 {
+    let a = (PI * x / wl.0 + seed).sin().abs();
+    let b = (PI * x / wl.1 + seed * 1.7).sin().abs();
+    0.65 * a + 0.35 * b
+}
+
+/// How far the sky's underside hangs below its straight front, at most.
+const SKY_PEAKS: f64 = 8.0;
+
+/// The sky's underside at column `x`, `reveal` (0..=1) of the way down a
+/// screen `h` pixels tall: upside-down mountains, peaks pointing down —
+/// out of sight above the top at 0, below the bottom at 1.
+fn sky_edge(x: f64, reveal: f64, h: f64) -> f64 {
+    let front = (h + SKY_PEAKS) * reveal - SKY_PEAKS;
+    front + SKY_PEAKS * humps(x, (22.0, 37.0), 2.2)
+}
+
 /// Ease-out with a small overshoot past 1 before settling.
 fn back_out(p: f64) -> f64 {
     const C1: f64 = 1.70158;
@@ -166,9 +185,7 @@ fn ridge_lifted(
         let Some(dy) = drop() else { return };
         for sx in 0..c.width {
             let x = sx as f64 - c.offset;
-            let a = (PI * x / wl.0 + seed).sin().abs();
-            let b = (PI * x / wl.1 + seed * 1.7).sin().abs();
-            let top = base - amp * (0.65 * a + 0.35 * b) - lift(x) + dy;
+            let top = base - amp * humps(x, wl, seed) - lift(x) + dy;
             for y in (top.ceil().max(0.0) as usize)..c.height {
                 c.set(sx as i64, y as i64, dither(fill.0, fill.1, fill.2, sx, y));
             }
@@ -208,18 +225,19 @@ pub fn landscape(since: impl Fn() -> Option<f64> + Clone + Send + 'static) -> La
     ];
 
     // Sky: pastel blue, dithered toward periwinkle in the top rows,
-    // sliding down from the top as it comes in.
+    // sliding down from the top as it comes in, mountains hanging under it.
     let sky_since = since.clone();
     let sky = Layer::paint(move |c| {
         let Some(t) = sky_since() else { return };
-        let rows = (c.height as f64 * sky_reveal(t)).round() as usize;
-        for y in 0..rows {
-            let level = match y {
-                0..=1 => 2,
-                2..=3 => 1,
-                _ => 0,
-            };
-            for x in 0..c.width {
+        let reveal = sky_reveal(t);
+        for x in 0..c.width {
+            let rows = sky_edge(x as f64, reveal, c.height as f64).round().clamp(0.0, c.height as f64) as usize;
+            for y in 0..rows {
+                let level = match y {
+                    0..=1 => 2,
+                    2..=3 => 1,
+                    _ => 0,
+                };
                 c.set(x as i64, y as i64, dither(SKY, SKY_HAZE, level, x, y));
             }
         }
@@ -398,6 +416,24 @@ mod tests {
         assert_eq!(sky_reveal(0.0), 0.0);
         assert!(sky_reveal(0.3) > 0.0 && sky_reveal(0.3) < 1.0);
         assert_eq!(sky_reveal(SKY_SECS), 1.0);
+    }
+
+    #[test]
+    fn sky_comes_down_with_upside_down_mountains_under_it() {
+        let h = 100.0;
+        // Hidden before, all of the screen after.
+        assert!((0..400).all(|x| sky_edge(x as f64, 0.0, h) <= 0.0));
+        assert!((0..400).all(|x| sky_edge(x as f64, 1.0, h) >= h));
+        // On the way down its underside hangs in peaks, not a straight line.
+        let edge: Vec<f64> = (0..400).map(|x| sky_edge(x as f64, 0.5, h)).collect();
+        let (lo, hi) = edge.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &e| (lo.min(e), hi.max(e)));
+        assert!(hi - lo > 4.0, "flat underside: {lo}..{hi}");
+        let peaks = edge.windows(3).filter(|w| w[1] > w[0] && w[1] >= w[2]).count();
+        assert!(peaks >= 10, "{peaks} peaks");
+        // Rendered: some column has sky lower down than its neighbour.
+        let mid = render(Some(SKY_SECS * 0.3), 0);
+        let depth = |x| (0..ROWS * 2).take_while(|&y| px(&mid, x, y).is_some()).count();
+        assert!((0..59).any(|x| depth(x) != depth(x + 1)));
     }
 
     #[test]
