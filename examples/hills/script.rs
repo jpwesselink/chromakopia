@@ -10,6 +10,7 @@
 
 use chromakopia::animate::framebuffer::FPS;
 
+use super::looping;
 use super::scroller::{self, Font, Style};
 
 /// Scroll speed, pixels per second (one pixel per frame).
@@ -22,6 +23,8 @@ pub enum Code {
     Hills,
     /// CHROMAKOPIA drops in at the centre; the tagline types out under it.
     Logo,
+    /// The logo jumps away, making room — until the next `{logo}`.
+    LogoAway,
     /// The text stands still for this many seconds (the wave keeps going).
     Pause(f64),
     /// Half a screen of empty space — so what comes before has scrolled
@@ -34,6 +37,9 @@ pub enum Code {
     Style(Style),
     /// Everything after rides the wave (true) or a straight line (false).
     Wave(bool),
+    /// Everything after rides the loop-the-loop (true), until it's
+    /// switched off again (false).
+    Loop(bool),
     /// Everything leaves: the logo jumps away, the landscape takes
     /// itself down — before the text wraps and the show starts over.
     Bye,
@@ -68,6 +74,7 @@ pub fn parse(src: &str) -> Result<Script, String> {
         let mut words = body.split_whitespace();
         let code = match (words.next(), words.next(), words.next()) {
             (Some("logo"), None, _) => Code::Logo,
+            (Some("logo"), Some("away"), None) => Code::LogoAway,
             (Some("hills"), None, _) => Code::Hills,
             (Some("bye"), None, _) => Code::Bye,
             (Some("gap"), None, _) => Code::Gap,
@@ -76,6 +83,8 @@ pub fn parse(src: &str) -> Result<Script, String> {
             }
             (Some("wave"), Some("on"), None) => Code::Wave(true),
             (Some("wave"), Some("off"), None) => Code::Wave(false),
+            (Some("loop"), Some("on"), None) => Code::Loop(true),
+            (Some("loop"), Some("off"), None) => Code::Loop(false),
             (Some("style"), Some(name), None) => {
                 Code::Style(Style::named(name).ok_or_else(|| format!("unknown style {{{body}}}"))?)
             }
@@ -101,6 +110,8 @@ pub struct Glyph {
     pub style: Style,
     /// Rides the wave (terminal letters in whole rows).
     pub wave: bool,
+    /// Rides the loop-the-loop instead.
+    pub looped: bool,
 }
 
 /// The script laid out for one screen width: every visible letter with its
@@ -118,9 +129,11 @@ pub struct Placed {
 impl Script {
     /// Lay the text out for a screen `width` columns wide: each letter
     /// as wide as its font makes it, `{gap}` as half a screen of space.
-    /// A letter its font doesn't have is an error.
+    /// After a loop, what follows waits the length of the ride so the
+    /// loopers are out before it comes through. A letter its font doesn't
+    /// have is an error.
     pub fn place(&self, width: usize) -> Result<Placed, String> {
-        let (mut font, mut style, mut wave) = (Font::C64, Style::Candy, true);
+        let (mut font, mut style, mut wave, mut looped) = (Font::C64, Style::Candy, true, false);
         let (mut glyphs, mut events, mut x) = (Vec::new(), Vec::new(), 0.0);
         let mut codes = self.events.iter().peekable();
         let chars: Vec<char> = self.text.chars().collect();
@@ -135,6 +148,12 @@ impl Script {
                     Code::Font(f) => font = f,
                     Code::Style(st) => style = st,
                     Code::Wave(on) => wave = on,
+                    Code::Loop(on) => {
+                        if looped && !on {
+                            x += looping::LOOP_EXTRA;
+                        }
+                        looped = on;
+                    }
                     _ => events.push((x, code)),
                 }
             }
@@ -143,7 +162,7 @@ impl Script {
                 return Err(format!("font {font:?} has no {ch:?} (in {:?})", chars[i.saturating_sub(10)..(i + 10).min(chars.len())].iter().collect::<String>()));
             }
             if ch != ' ' {
-                glyphs.push(Glyph { ch, x, font, style, wave });
+                glyphs.push(Glyph { ch, x, font, style, wave, looped });
             }
             x += scroller::advance(font, ch) as f64;
         }
@@ -258,6 +277,19 @@ mod tests {
         let s = parse("Exel, {} and Hardbeat{logo}").unwrap();
         assert_eq!(s.text, "Exel, {} and Hardbeat");
         assert_eq!(s.events, vec![(21, Code::Logo)]);
+    }
+
+    #[test]
+    fn loop_marks_its_letters_and_leaves_room_for_the_ride() {
+        let s = parse("a{loop on}bc{loop off}d").unwrap();
+        assert!(parse("{loop sideways}").is_err());
+        assert_eq!(parse("{logo away}").unwrap().events, vec![(0, Code::LogoAway)]);
+        let p = s.place(100).unwrap();
+        let looped: Vec<bool> = p.glyphs.iter().map(|g| g.looped).collect();
+        assert_eq!(looped, [false, true, true, false]);
+        // What follows waits until the last looper is out.
+        assert_eq!(p.glyphs[3].x, 24.0 + looping::LOOP_EXTRA);
+        assert!(p.events.is_empty(), "nothing to fire: {:?}", p.events);
     }
 
     #[test]

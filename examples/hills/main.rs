@@ -15,6 +15,7 @@ mod glyphs;
 mod intro;
 mod landscape;
 mod layout;
+mod looping;
 mod panel;
 mod script;
 mod scroller;
@@ -70,14 +71,20 @@ struct View {
 /// What is on screen at script time `t`: the scroller, plus the landscape
 /// once `{hills}` and the wordmark once `{logo}` has fired.
 fn script_view(tl: &script::Timeline, intro_secs: f64, t: f64) -> View {
-    let mut logo = tl.since(script::Code::Logo, t).map_or(LogoPhase::Hidden, |at| LogoPhase::Enter(t - at));
+    // In with `{logo}`, away with `{logo away}` — whichever came last.
+    let away = |gone: f64| if gone < wordmark::EXIT_DONE { LogoPhase::Exit(gone) } else { LogoPhase::Hidden };
+    let mut logo = match (tl.since(script::Code::Logo, t), tl.since(script::Code::LogoAway, t)) {
+        (Some(came), Some(went)) if went > came => away(t - went),
+        (Some(came), _) => LogoPhase::Enter(t - came),
+        (None, _) => LogoPhase::Hidden,
+    };
     let mut hills = tl.since(script::Code::Hills, t).map(|at| t - at);
     // After `{bye}`: the logo jumps away, the landscape plays its
     // entrance backwards from wherever it had got to.
     if let Some(bye) = tl.since(script::Code::Bye, t) {
         let gone = t - bye;
-        if logo != LogoPhase::Hidden {
-            logo = if gone < wordmark::EXIT_DONE { LogoPhase::Exit(gone) } else { LogoPhase::Hidden };
+        if matches!(logo, LogoPhase::Enter(_)) {
+            logo = away(gone);
         }
         hills = hills
             .map(|h| (h - gone).min(landscape::ENTRANCE_SECS) - gone * landscape::EXIT_SPEED)
@@ -574,7 +581,7 @@ mod tests {
         }
         // The script: before {logo}, and with the logo in and the tagline typed.
         let stage = Stage::new(112);
-        let cue = stage.timeline.since(script::Code::Logo, f64::MAX).unwrap();
+        let cue = first_cue(&stage, script::Code::Logo);
         let hills = stage.timeline.since(script::Code::Hills, f64::MAX).unwrap();
         for (name, t) in [
             ("step1", 1.0),
@@ -611,6 +618,16 @@ mod tests {
             let mut b = FrameBuffer::new(112, ROWS);
             stage.render(&mut b, 0);
             out += &format!("\n=== {name} ===\n{}\n", b.to_ansi_string());
+        }
+        // The loop-the-loop: its first letter this far round.
+        let first = stage.glyphs.iter().find(|g| g.looped).unwrap();
+        for k in [40.0, 100.0, 200.0, 400.0] {
+            let target = first.x + 8.0 + 112.0 / 2.0 + k;
+            let t = (0..).map(|f| f as f64 / FPS).find(|&t| stage.timeline.scrolled(t) >= target).unwrap();
+            stage.seek_to(t);
+            let mut b = FrameBuffer::new(112, ROWS);
+            stage.render(&mut b, 0);
+            out += &format!("\n=== loop {k} ===\n{}\n", b.to_ansi_string());
         }
         std::fs::write("target/hills-blocks.ansi", out).unwrap();
     }
@@ -666,10 +683,42 @@ mod tests {
         assert!(lowest + 4 < ROWS - 1, "scroller reaches row {lowest} of {ROWS}");
     }
 
+    /// When `code` first fires.
+    fn first_cue(stage: &Stage, code: script::Code) -> f64 {
+        stage.timeline.cues.iter().find(|c| c.code == code).expect("pitch has the code").t
+    }
+
+    /// When the scroll has reached `px`.
+    fn when_scrolled(stage: &Stage, px: f64) -> f64 {
+        (0..).map(|f| f as f64 / FPS).find(|&t| stage.timeline.scrolled(t) >= px).unwrap()
+    }
+
+    #[test]
+    fn logo_steps_aside_for_the_loop_and_comes_back() {
+        let w = 112;
+        let stage = Stage::new(w);
+        let away = first_cue(&stage, script::Code::LogoAway);
+        let back = stage.timeline.cues.iter().find(|c| c.code == script::Code::Logo && c.t > away).expect("logo comes back").t;
+        let loopers: Vec<_> = stage.glyphs.iter().filter(|g| g.looped).collect();
+        // Out of the way before the first letter reaches the loop...
+        let first_in = when_scrolled(&stage, loopers[0].x + 8.0 + w as f64 / 2.0);
+        assert!(away + wordmark::EXIT_DONE <= first_in, "{away} + exit vs {first_in}");
+        // ...and back only once the last is out.
+        let last_out = when_scrolled(&stage, loopers.last().unwrap().x + 8.0 + w as f64 / 2.0 + looping::LOOP_EXTRA);
+        assert!(back >= last_out, "{back} vs {last_out}");
+        stage.seek_to(away + 0.3);
+        assert!(matches!(stage.view_at(0).logo, LogoPhase::Exit(_)));
+        stage.seek_to(away + wordmark::EXIT_DONE + 0.1);
+        assert_eq!(stage.view_at(0).logo, LogoPhase::Hidden);
+        stage.seek_to(back + 0.5);
+        let LogoPhase::Enter(t) = stage.view_at(0).logo else { panic!("logo not back") };
+        assert!((t - 0.5).abs() < 1e-9);
+    }
+
     #[test]
     fn logo_waits_for_its_code() {
         let stage = Stage::new(120);
-        let cue = stage.timeline.since(script::Code::Logo, f64::MAX).expect("pitch has a {logo}");
+        let cue = first_cue(&stage, script::Code::Logo);
         stage.seek_to(cue - 0.5);
         assert_eq!(stage.view_at(0).logo, LogoPhase::Hidden);
         stage.seek_to(cue + 1.0);
@@ -686,7 +735,7 @@ mod tests {
     fn screen_is_empty_of_text_when_the_logo_drops() {
         for w in [80, 112, 200] {
             let stage = Stage::new(w);
-            let cue = stage.timeline.since(script::Code::Logo, f64::MAX).unwrap();
+            let cue = first_cue(&stage, script::Code::Logo);
             let scrolled = stage.timeline.scrolled(cue);
             for g in &stage.glyphs {
                 let x = w as f64 - scrolled + g.x;
@@ -715,7 +764,7 @@ mod tests {
         for w in [80, 112, 200] {
             let stage = Stage::new(w);
             let hills = stage.timeline.since(script::Code::Hills, f64::MAX).unwrap();
-            let logo = stage.timeline.since(script::Code::Logo, f64::MAX).unwrap();
+            let logo = first_cue(&stage, script::Code::Logo);
             // The opening line is on screen when the landscape starts...
             let scrolled = stage.timeline.scrolled(hills);
             let on_screen = stage.glyphs.iter().any(|g| (0.0..w as f64).contains(&(w as f64 - scrolled + g.x)));

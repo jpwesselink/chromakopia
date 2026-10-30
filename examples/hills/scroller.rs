@@ -4,9 +4,11 @@
 use chromakopia::animate::framebuffer::FPS;
 use chromakopia::animate::Cell;
 use chromakopia::prelude::*;
+use std::collections::HashMap;
 use std::f64::consts::TAU;
 
-use super::glyphs::{c64, has_c64, has_mario, mario, stamp, LETTER_HIGHLIGHT, LETTER_UPPER};
+use super::glyphs::{c64, has_c64, has_mario, mario, shade, stamp, LETTER_HIGHLIGHT, LETTER_UPPER};
+use super::looping::{self, angle_index, track, ANGLES};
 #[cfg(test)]
 use super::glyphs::LETTER_LOWER;
 use super::script::Glyph;
@@ -20,7 +22,7 @@ const SCROLL_WAVE_PERIOD: f64 = 0.8;
 const BASE: i64 = 7;
 
 /// A scroller font, switched with `{font …}`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Font {
     /// The C64 character ROM, 8×8.
     C64,
@@ -108,15 +110,63 @@ pub fn pen(scrolled: f64) -> i64 {
     scrolled.round() as i64
 }
 
+/// A letter turned to each of the `ANGLES`, as `looping::turned` faces.
+type Turns = Vec<Vec<(i64, i64, Color)>>;
+
 /// The placed scroll text, scrolling right to left along the bottom.
 pub struct Scroller {
     glyphs: Vec<Glyph>,
     y0: i64,
+    /// Every looped letter at every angle, worked out once.
+    turns: HashMap<(char, Font), Turns>,
+}
+
+/// The pixel font `font` draws `ch` from, and at what scale — None for the
+/// fonts that can't loop.
+fn bitmap(font: Font, ch: char) -> Option<([u8; 8], i64)> {
+    match font {
+        Font::C64 => Some((c64(ch), 1)),
+        Font::Big => Some((c64(ch), 2)),
+        Font::Mario => Some((mario(ch), 2)),
+        Font::Tiny | Font::Term => None,
+    }
 }
 
 impl Scroller {
     pub fn new(glyphs: Vec<Glyph>, y0: i64) -> Self {
-        Self { glyphs, y0 }
+        let mut turns = HashMap::new();
+        for g in glyphs.iter().filter(|g| g.looped) {
+            let Some((rows, scale)) = bitmap(g.font, g.ch) else { continue };
+            turns.entry((g.ch, g.font)).or_insert_with(|| (0..ANGLES).map(|i| looping::turned(&rows, scale, i)).collect());
+        }
+        Self { glyphs, y0, turns }
+    }
+
+    /// Draw looped letter `g` wherever it is on the track, `scrolled`
+    /// pixels in. False when it isn't one (or its font can't loop).
+    fn paint_looped(&self, c: &mut Canvas, g: &Glyph, scrolled: f64, scratch: &mut Vec<(i64, i64, Color)>) -> bool {
+        let Some(turns) = self.turns.get(&(g.ch, g.font)) else { return false };
+        let adv = advance(g.font, g.ch);
+        let d = (pen(scrolled) - g.x as i64) as f64 - adv as f64 / 2.0;
+        let spot = track(d, c.width, (self.y0 + BASE) as f64);
+        if spot.x < -(adv as f64) - 4.0 || spot.x > c.width as f64 + adv as f64 {
+            return true;
+        }
+        // The letter's middle sits `rise` above the track, along its own up.
+        let rise = (baseline(g.font) - adv / 2) as f64;
+        let (sin, cos) = spot.angle.sin_cos();
+        let (cx, cy) = ((spot.x + rise * sin).round() as i64, (spot.y - rise * cos).round() as i64);
+        scratch.clear();
+        scratch.extend(turns[angle_index(spot.angle)].iter().map(|&(x, y, color)| (cx + x, cy + y, color)));
+        match g.style {
+            Style::Candy => shade(c, scratch, if g.font == Font::C64 { 1 } else { 2 }),
+            Style::Flat => {
+                for &(x, y, _) in scratch.iter() {
+                    c.set(x, y, LETTER_HIGHLIGHT);
+                }
+            }
+        }
+        true
     }
 
     /// Screen x and wave-shifted bottom line of `g`, `scrolled` pixels in,
@@ -136,6 +186,9 @@ impl Scroller {
         let t = c.frame as f64 / FPS;
         let mut face = Vec::new();
         for g in self.glyphs.iter().filter(|g| g.font != Font::Term) {
+            if g.looped && self.paint_looped(c, g, scrolled, &mut face) {
+                continue;
+            }
             let Some((x, base)) = self.spot(g, c.width, scrolled, t) else { continue };
             let top = base - baseline(g.font);
             match (g.font, g.style) {
@@ -195,8 +248,8 @@ pub const PITCH: &str = "{hills}{style flat}Welly well, what do we have here?{st
 ...and yes, before you ask: this is a TERMINAL. No browser, no video, no tricks you can see, just the good old terminal you have known and loved...   which you will now love a little bit more.   {font tiny}(psst... the small print: no pixels were harmed in the making of this demo - because there are no pixels, just text and ANSI escape codes!){font c64}   \
 Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 Clouds that drift and throw shadows on the land. Never shade. They're above that.   \
-A logo that will not sit still, bouncing every letter on its own little wave.   \
-And all of it at a silky 60 frames per second.   \
+A logo that will not sit still, bouncing every letter on its own little wave...   in fact,{logo away} it won't even stay.   \
+{font big}{loop on}And all of it at a silky 60 frames per second.{loop off}{font c64}   {logo}\
 How is it done?   Ha!   A magician never tells...   {font term}(this is your terminal's own font, by the way - blink and you miss it){font c64}   \
 ...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}{wave off}...ofc you should type it without the colours, just like we did in 1986...{wave on}{style candy}   \
 Greetings fly out to Exel, {} and Hardbeat - still sorry, Apache: no Microsoft BackOffice was harmed - Paradox - Pitr / Eindbazen - ISO - Danny Styles - Spidey - Humasect - Nightdead - Si-Goat - Stephen Parker - Koffiekop - Kevinjel - Sanity - \
@@ -209,6 +262,7 @@ Keys: space or arrows to skip, q to quit.   {bye}Text wraps... now!          ";
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f64::consts::PI;
 
     #[test]
     fn pitch_places_on_any_screen() {
@@ -220,7 +274,7 @@ mod tests {
     }
 
     fn one(font: Font, style: Style, ch: char) -> Scroller {
-        Scroller::new(vec![Glyph { ch, x: 0.0, font, style, wave: true }], 40)
+        Scroller::new(vec![Glyph { ch, x: 0.0, font, style, wave: true, looped: false }], 40)
     }
 
     /// Ink rows (pixel) and colours of `s` painted with its glyph at x = 10.
@@ -263,7 +317,7 @@ mod tests {
         let tops = |wave: bool| -> Vec<i64> {
             (0..48)
                 .map(|frame| {
-                    let s = Scroller::new(vec![Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave }], 40);
+                    let s = Scroller::new(vec![Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave, looped: false }], 40);
                     let layers = Layers::new(40).layer(Layer::paint(move |c| s.paint(c, (c.width - 10) as f64)));
                     let mut buf = FrameBuffer::new(60, 40);
                     layers.render(&mut buf, frame);
@@ -280,7 +334,7 @@ mod tests {
     #[test]
     fn term_letters_wave_in_whole_rows_unless_wave_is_off() {
         let rows = |wave: bool| -> Vec<usize> {
-            let s = Scroller::new(vec![Glyph { ch: 'Q', x: 0.0, font: Font::Term, style: Style::Candy, wave }], 40);
+            let s = Scroller::new(vec![Glyph { ch: 'Q', x: 0.0, font: Font::Term, style: Style::Candy, wave, looped: false }], 40);
             (0..48)
                 .map(|frame| {
                     let mut buf = FrameBuffer::new(60, 40);
@@ -293,6 +347,27 @@ mod tests {
         assert!(waving.iter().any(|&r| r != waving[0]), "{waving:?}");
         let straight = rows(false);
         assert!(straight.iter().all(|&r| r == straight[0]), "{straight:?}");
+    }
+
+    #[test]
+    fn looped_letters_ride_over_the_top_upside_down() {
+        let w = 200;
+        let g = Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave: true, looped: true };
+        let base = (40 + BASE) as f64;
+        // Scrolled so the letter's middle is halfway round the loop.
+        let scrolled = w as f64 / 2.0 + PI * looping::LOOP_R + 8.0;
+        let s = Scroller::new(vec![g], 40);
+        let layers = Layers::new(60).layer(Layer::paint(move |c| s.paint(c, scrolled)));
+        let mut buf = FrameBuffer::new(w, 60);
+        layers.render(&mut buf, 0);
+        let ink: Vec<usize> = (0..120).filter(|&y| (0..w).any(|x| {
+            let cell = buf.get(x, y / 2);
+            cell.ch != ' ' && if y % 2 == 0 { cell.color == LETTER_HIGHLIGHT } else { cell.bg == Some(LETTER_HIGHLIGHT) }
+        })).collect();
+        let top = base - 2.0 * looping::LOOP_R;
+        assert!(!ink.is_empty());
+        // Hanging from the top of the loop, feet up, head towards the middle.
+        assert!(ink.iter().all(|&y| (y as f64) >= top - 2.0 && (y as f64) <= top + 16.0), "{ink:?} vs top {top}");
     }
 
     #[test]

@@ -155,6 +155,12 @@ pub fn stamp(
             }
         }
     }
+    shade(c, face, extrude);
+}
+
+/// Put a letter's face pixels on with `extrude` steps of extrusion
+/// down-right and a one-pixel outline behind them.
+pub fn shade(c: &mut Canvas, face: &[(i64, i64, Color)], extrude: i64) {
     let shells = (1..=extrude).rev().map(|k| (k, LETTER_EXTRUDE)).chain([(0, LETTER_OUTLINE)]);
     for (shift, color) in shells {
         for &(x, y, _) in face.iter() {
