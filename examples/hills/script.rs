@@ -59,6 +59,12 @@ pub fn parse(src: &str) -> Result<Script, String> {
         text.push_str(&rest[..open]);
         let close = rest[open..].find('}').ok_or_else(|| format!("unclosed code: {}", &rest[open..]))? + open;
         let body = &rest[open + 1..close];
+        if body.is_empty() {
+            // `{}` is text — a handle, not a code.
+            text.push_str("{}");
+            rest = &rest[close + 1..];
+            continue;
+        }
         let mut words = body.split_whitespace();
         let code = match (words.next(), words.next(), words.next()) {
             (Some("logo"), None, _) => Code::Logo,
@@ -244,6 +250,14 @@ mod tests {
         let s = parse("ab{logo}cd{pause 2}e{hills}{bye}").unwrap();
         assert_eq!(s.text, "abcde");
         assert_eq!(s.events, vec![(2, Code::Logo), (4, Code::Pause(2.0)), (5, Code::Hills), (5, Code::Bye)]);
+    }
+
+    #[test]
+    fn empty_braces_are_text_not_a_code() {
+        // `{}` is a handle, not a code: it scrolls by as written.
+        let s = parse("Exel, {} and Hardbeat{logo}").unwrap();
+        assert_eq!(s.text, "Exel, {} and Hardbeat");
+        assert_eq!(s.events, vec![(21, Code::Logo)]);
     }
 
     #[test]
