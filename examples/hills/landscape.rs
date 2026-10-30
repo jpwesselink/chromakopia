@@ -115,8 +115,14 @@ fn puff(x: f64, grow: f64) -> Option<(f64, f64)> {
     let (dx, vary) = cloud_at(x, grow)?;
     let half = (16.0 + 5.0 * vary) * grow;
     let bottom = LAND_TOP + 4.0 + 2.0 * vary;
-    // (centre, radius) as fractions of the half width.
-    let height = [(0.0, 0.6), (-0.55, 0.45), (0.55, 0.45)]
+    // More fixed -1..1 per cloud, so no two clouds puff up alike.
+    let slot = (x / 64.0).floor();
+    let [v2, v3, v4] = [(5.1, 1.0), (7.7, 2.0), (3.7, 0.5)].map(|(k, p)| (slot * k + p).sin());
+    // (centre, radius) as fractions of the half width; the side puffs
+    // reach the cloud's ends. Varied just so much that each side puff still
+    // stands out from the middle one by a pixel or more.
+    let (left, right) = (0.45 + 0.05 * v2, 0.45 + 0.05 * v3);
+    let height = [(0.0, 0.6 + 0.03 * v4), (left - 1.0, left), (1.0 - right, right)]
         .iter()
         .map(|&(c, r): &(f64, f64)| (r * r - (dx - c).powi(2)).max(0.0).sqrt() * half)
         .fold(0.0, f64::max);
@@ -344,6 +350,31 @@ mod tests {
                 }
                 None => {}
             }
+        }
+    }
+
+    #[test]
+    fn every_cloud_has_its_own_puffs() {
+        // Each cloud's three puffs: heights relative to the cloud's tallest.
+        let mut shapes: Vec<Vec<f64>> = Vec::new();
+        let mut cloud: Vec<f64> = Vec::new();
+        for x in 0..1200 {
+            match puff(x as f64 + 0.5, 1.0) {
+                Some((top, bottom)) => cloud.push(bottom - top),
+                None if !cloud.is_empty() => {
+                    let peaks: Vec<f64> = cloud.windows(3).filter(|w| w[1] > w[0] && w[1] >= w[2]).map(|w| w[1]).collect();
+                    let tallest = peaks.iter().cloned().fold(0.0, f64::max);
+                    shapes.push(peaks.iter().map(|p| p / tallest).collect());
+                    cloud.clear();
+                }
+                None => {}
+            }
+        }
+        assert!(shapes.len() >= 10);
+        // (The middle one is always the tallest: the sides vary against it.)
+        for i in [0, 2] {
+            let (lo, hi) = shapes.iter().map(|s| s[i]).fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
+            assert!(hi - lo > 0.1, "puff {i} the same in every cloud: {lo}..{hi}");
         }
     }
 
