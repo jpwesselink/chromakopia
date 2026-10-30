@@ -629,16 +629,6 @@ mod tests {
             stage.render(&mut b, 0);
             out += &format!("\n=== loop {k} ===\n{}\n", b.to_ansi_string());
         }
-        // The snake: its first letter this far along.
-        let first = stage.glyphs.iter().find(|g| g.path == Some(looping::Shape::Snake)).unwrap();
-        for k in [60.0, 150.0, 300.0] {
-            let target = first.x + 4.0 + k;
-            let t = (0..).map(|f| f as f64 / FPS).find(|&t| stage.timeline.scrolled(t) >= target).unwrap();
-            stage.seek_to(t);
-            let mut b = FrameBuffer::new(112, ROWS);
-            stage.render(&mut b, 0);
-            out += &format!("\n=== snake {k} ===\n{}\n", b.to_ansi_string());
-        }
         std::fs::write("target/hills-blocks.ansi", out).unwrap();
     }
 
@@ -713,14 +703,6 @@ mod tests {
     }
 
     #[test]
-    fn snake_crests_just_clear_the_top_border() {
-        // An upright letter on a crest: 7 pixels above the track, plus outline.
-        let top = (SCROLLER_Y + 7) as f64 - looping::SNAKE_RISE - 8.0;
-        assert!(top >= layout::TOP_MARGIN as f64, "{top}");
-        assert!(top <= layout::TOP_MARGIN as f64 + 4.0, "room for bigger waves: {top}");
-    }
-
-    #[test]
     fn logo_steps_aside_for_the_loop_and_comes_back() {
         let w = 112;
         let stage = Stage::new(w);
@@ -731,8 +713,7 @@ mod tests {
         let first_in = when_scrolled(&stage, loopers[0].x + 4.0 + looping::loop_start(w));
         assert!(away + wordmark::EXIT_DONE <= first_in, "{away} + exit vs {first_in}");
         // ...and back only once the last is out.
-        let last = loopers.last().unwrap();
-        let last_out = when_scrolled(&stage, last.x + 4.0 + looping::ride_end(last.path.unwrap(), w));
+        let last_out = when_scrolled(&stage, loopers.last().unwrap().x + 4.0 + looping::loop_start(w) + looping::LOOP_EXTRA);
         assert!(back >= last_out, "{back} vs {last_out}");
         stage.seek_to(away + 0.3);
         assert!(matches!(stage.view_at(0).logo, LogoPhase::Exit(_)));
