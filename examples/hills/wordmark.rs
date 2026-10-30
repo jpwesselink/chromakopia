@@ -14,7 +14,7 @@ use super::ROWS;
 
 pub const WORD: &str = "CHROMAKOPIA";
 /// The line under the wordmark, typed out once the letters have landed.
-pub const TAGLINE: &str = "animations for rust";
+pub const TAGLINE: &str = "terminal eye candy";
 /// Characters per second the tagline types at.
 const TYPE_RATE: f64 = 24.0;
 /// When the tagline starts typing, seconds into the entrance.
