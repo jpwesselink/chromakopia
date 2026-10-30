@@ -357,7 +357,7 @@ mod tests {
         // On the real screen: the scroller's own line, full height.
         let base = (SCROLLER_Y + BASE) as f64;
         // Scrolled so the letter's middle is halfway round the loop.
-        let scrolled = looping::loop_start(w) + PI * looping::LOOP_R + 8.0;
+        let scrolled = looping::loop_start(w) + PI * looping::LOOP_R / looping::LOOP_SPREAD + 8.0;
         let s = Scroller::new(vec![g], SCROLLER_Y);
         let layers = Layers::new(ROWS).layer(Layer::paint(move |c| s.paint(c, scrolled)));
         let mut buf = FrameBuffer::new(w, ROWS);

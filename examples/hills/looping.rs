@@ -17,8 +17,11 @@ pub const LOOP_R: f64 = 36.0;
 /// How far left of where they went in the letters come out, so the way
 /// out doesn't run over the way in.
 pub const LOOP_SHIFT: f64 = 32.0;
-/// Track length the loop adds: once round.
-pub const LOOP_EXTRA: f64 = TAU * LOOP_R;
+/// How much further apart letters stand in the loop than on the straight:
+/// they speed up going round, so turned letters stand free.
+pub const LOOP_SPREAD: f64 = 1.4;
+/// Text the loop takes, in pixels: once round, at the loop's speed.
+pub const LOOP_EXTRA: f64 = TAU * LOOP_R / LOOP_SPREAD;
 /// Angles a letter can be turned to.
 pub const ANGLES: usize = 32;
 
@@ -89,7 +92,7 @@ fn loop_track(d: f64, width: usize, base: f64) -> Spot {
     }
     // Left along the bottom, up, back right over the top, down — drifting
     // left by the shift on the way round.
-    let phi = into / LOOP_R;
+    let phi = into * LOOP_SPREAD / LOOP_R;
     Spot {
         x: entry - LOOP_R * phi.sin() - LOOP_SHIFT * phi / TAU,
         y: base - LOOP_R + LOOP_R * phi.cos(),
@@ -190,7 +193,7 @@ mod tests {
     #[test]
     fn goes_round_once_upside_down_over_the_top() {
         let a = entry_d();
-        let top = track(Shape::Loop, a + PI * LOOP_R, W, BASE);
+        let top = track(Shape::Loop, a + PI * LOOP_R / LOOP_SPREAD, W, BASE);
         assert!((top.y - (BASE - 2.0 * LOOP_R)).abs() < 1e-9, "{top:?}");
         assert!((top.angle - PI).abs() < 1e-9);
         let lowest = (0..=1000).map(|k| track(Shape::Loop, a + TAU * LOOP_R * k as f64 / 1000.0, W, BASE).y).fold(f64::MIN, f64::max);
@@ -206,14 +209,23 @@ mod tests {
     }
 
     #[test]
-    fn letters_keep_their_spacing_round_the_loop() {
-        // One pixel along the track moves a letter about one pixel.
-        for k in 0..400 {
-            let d = entry_d() - 20.0 + k as f64 * 0.5;
+    fn letters_spread_out_in_the_loop_only() {
+        // On the straight, a pixel of text is a pixel of track; in the loop
+        // letters speed up, standing LOOP_SPREAD times further apart.
+        let step = |d: f64| {
             let (p, q) = (track(Shape::Loop, d, W, BASE), track(Shape::Loop, d + 1.0, W, BASE));
-            let step = ((q.x - p.x).powi(2) + (q.y - p.y).powi(2)).sqrt();
-            assert!((0.8..1.3).contains(&step), "d {d}: {step}");
+            ((q.x - p.x).powi(2) + (q.y - p.y).powi(2)).sqrt()
+        };
+        let (a, ride) = (entry_d(), LOOP_EXTRA);
+        for d in [a - 30.0, a - 2.0, a + ride + 1.0, a + ride + 30.0] {
+            assert!((step(d) - 1.0).abs() < 1e-9, "straight at {d}: {}", step(d));
         }
+        for k in 1..100 {
+            let d = a + ride * k as f64 / 100.0 - 0.5;
+            let s = step(d);
+            assert!((0.85 * LOOP_SPREAD..1.25 * LOOP_SPREAD).contains(&s), "loop at {d}: {s}");
+        }
+        assert!(LOOP_SPREAD >= 1.3, "far enough apart to stand free");
     }
 
     /// The pixel set of `face`.
