@@ -19,7 +19,7 @@ use super::tiny;
 const SCROLL_WAVE: f64 = 4.0;
 const SCROLL_WAVE_PERIOD: f64 = 0.8;
 /// Every font's baseline sits on `y0 + BASE` (plus the wave).
-const BASE: i64 = 7;
+pub const BASE: i64 = 7;
 
 /// A scroller font, switched with `{font …}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

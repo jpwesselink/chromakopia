@@ -6,8 +6,9 @@ use chromakopia::animate::framebuffer::FPS;
 use chromakopia::prelude::*;
 use std::f64::consts::TAU;
 
-use super::glyphs::{mario, stamp};
+use super::glyphs::{mario, stamp, stamp_sized};
 use super::layout::Layout;
+use super::looping;
 use super::tiny;
 use super::ROWS;
 
@@ -55,6 +56,13 @@ const EXIT_SECS: f64 = 0.6;
 /// Seconds until the last letter is gone.
 pub const EXIT_DONE: f64 = (WORD.len() - 1) as f64 * EXIT_STAGGER + EXIT_SECS;
 
+/// The C left behind by `{logo away}`: how many times its size it grows
+/// to in the middle of the loop, how long that takes, and how much of the
+/// full DYCP bob it keeps there.
+pub const BIG_C: i64 = 4;
+pub const MORPH_SECS: f64 = 1.0;
+const BIG_C_BOB: f64 = 0.3;
+
 /// Seconds to glide between the centre and the top.
 pub const RISE_SECS: f64 = super::stage::LOGO_RISE_SECS;
 /// Peak of the DYCP sine mix, as a multiple of DYCP_AMP.
@@ -91,13 +99,18 @@ pub enum LogoPhase {
     Fall(f64),
     /// Jumping off the top, letter by letter, from the centre.
     Exit(f64),
+    /// Stepping aside for the loop: every letter but the C jumps off; the
+    /// C glides into the middle of the loop and grows big there.
+    Away(f64),
+    /// Back after the loop: the C shrinks home while the rest drop in.
+    Return(f64),
 }
 
 impl LogoPhase {
     /// 0 = centre with full swing, 1 = top with calm swing.
     fn lift(self) -> f64 {
         match self {
-            LogoPhase::Hidden | LogoPhase::Enter(_) | LogoPhase::Exit(_) => 0.0,
+            LogoPhase::Hidden | LogoPhase::Enter(_) | LogoPhase::Exit(_) | LogoPhase::Away(_) | LogoPhase::Return(_) => 0.0,
             LogoPhase::Rise(t) => Easing::EaseInOut.apply(t / RISE_SECS),
             LogoPhase::Top => 1.0,
             LogoPhase::Fall(t) => 1.0 - Easing::EaseInOut.apply(t / RISE_SECS),
@@ -156,9 +169,9 @@ impl Wordmark {
             return;
         }
         let shown = match phase {
-            LogoPhase::Enter(t) => ((t - TYPE_START).max(0.0) * TYPE_RATE) as usize,
+            LogoPhase::Enter(t) | LogoPhase::Return(t) => ((t - TYPE_START).max(0.0) * TYPE_RATE) as usize,
             // Backspaced away, three times as fast as it was typed.
-            LogoPhase::Exit(t) => TAGLINE.len().saturating_sub((t * TYPE_RATE * 3.0) as usize),
+            LogoPhase::Exit(t) | LogoPhase::Away(t) => TAGLINE.len().saturating_sub((t * TYPE_RATE * 3.0) as usize),
             _ => TAGLINE.len(),
         };
         let lift = phase.lift();
@@ -180,11 +193,13 @@ impl Wordmark {
     /// which runs on wall time so it never jumps between phases.
     fn bob(&self, i: usize, wall: f64, phase: LogoPhase) -> i64 {
         let (shift, swell) = match phase {
-            LogoPhase::Enter(t) => {
+            // The C comes home from the loop rather than dropping in.
+            LogoPhase::Return(t) if i == 0 => (0.0, Easing::EaseInOut.apply((t - MORPH_SECS) / DYCP_RAMP)),
+            LogoPhase::Enter(t) | LogoPhase::Return(t) => {
                 let landed = t - (DROP_START + i as f64 * DROP_STAGGER) - DROP_SECS;
                 (drop_offset(i, t), Easing::EaseInOut.apply(landed / DYCP_RAMP))
             }
-            LogoPhase::Exit(t) => (exit_offset(i, t), 1.0),
+            LogoPhase::Exit(t) | LogoPhase::Away(t) => (exit_offset(i, t), 1.0),
             _ => (0.0, 1.0 + (self.calm - 1.0) * phase.lift()),
         };
         let i = i as f64;
@@ -209,14 +224,121 @@ impl Wordmark {
         let mut face = Vec::new();
         for (i, glyph) in self.glyphs.iter().enumerate() {
             let at = (x0 + (i * ADVANCE) as i64 * s, y0 + self.bob(i, wall, phase));
-            stamp(c, glyph, at, s, 2, &mut face);
+            // How far the C has grown into the loop's middle (0 = home).
+            let grown = match phase {
+                LogoPhase::Away(t) => Easing::EaseInOut.apply(t / MORPH_SECS),
+                LogoPhase::Return(t) => 1.0 - Easing::EaseInOut.apply(t / MORPH_SECS),
+                _ => 0.0,
+            };
+            if i == 0 && grown > 0.0 {
+                self.paint_big_c(c, glyph, at, grown, wall);
+            } else {
+                stamp(c, glyph, at, s, 2, &mut face);
+            }
         }
+    }
+
+    /// The C `grown` (0..=1) of the way from its place in the word, top-left
+    /// at `home`, to BIG_C times its size in the middle of the loop —
+    /// growing a pixel at a time as it glides.
+    fn paint_big_c(&self, c: &mut Canvas, glyph: &[u8; 8], home: (i64, i64), grown: f64, wall: f64) {
+        let (small, big) = (8.0 * self.scale as f64, 8.0 * BIG_C as f64);
+        let (cx, cy) = looping::loop_centre(c.width);
+        let bob = BIG_C_BOB * DYCP_AMP * (TAU * wall / DYCP_PERIOD).sin();
+        let lerp = |a: f64, b: f64| a + (b - a) * grown;
+        let size = lerp(small, big).round();
+        let mid = (lerp(home.0 as f64 + small / 2.0, cx), lerp(home.1 as f64 + small / 2.0, cy + bob));
+        let at = ((mid.0 - size / 2.0).round() as i64, (mid.1 - size / 2.0).round() as i64);
+        stamp_sized(c, glyph, at, size as i64, 2);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::looping;
+
+    /// Lit pixel rows/columns of the wordmark for `phase` at `frame`.
+    fn ink(screen_w: usize, phase: LogoPhase, frame: usize) -> Vec<(i64, i64)> {
+        let word = Wordmark::placed(screen_w);
+        let layers = Layers::new(ROWS).layer(Layer::paint(move |c| {
+            word.paint(c, phase);
+            word.paint_tagline(c, phase);
+        }));
+        let mut buf = FrameBuffer::new(screen_w, ROWS);
+        layers.render(&mut buf, frame);
+        let mut px = Vec::new();
+        for y in 0..ROWS {
+            for x in 0..screen_w {
+                let cell = buf.get(x, y);
+                let (top, low) = match cell.ch {
+                    '▀' => (true, cell.bg.is_some()),
+                    '▄' => (cell.bg.is_some(), true),
+                    _ => (false, cell.bg.is_some()),
+                };
+                if top { px.push((x as i64, 2 * y as i64)); }
+                if low { px.push((x as i64, 2 * y as i64 + 1)); }
+            }
+        }
+        px
+    }
+
+    fn bbox(px: &[(i64, i64)]) -> (i64, i64, i64, i64) {
+        let xs = px.iter().map(|p| p.0);
+        let ys = px.iter().map(|p| p.1);
+        (xs.clone().min().unwrap(), ys.clone().min().unwrap(), xs.max().unwrap(), ys.max().unwrap())
+    }
+
+    #[test]
+    fn away_leaves_a_big_c_in_the_middle_of_the_loop() {
+        let w = 200;
+        let (cx, cy) = looping::loop_centre(w);
+        for frame in [0, 20, 40] {
+            let px = ink(w, LogoPhase::Away(10.0), frame);
+            let (x0, y0, x1, y1) = bbox(&px);
+            // Only the C is left, BIG_C times its size, in the loop's middle.
+            assert!((y1 - y0 + 1 - 8 * BIG_C).abs() <= 4, "{} tall", y1 - y0 + 1);
+            assert!((((x0 + x1) as f64 / 2.0) - cx).abs() <= 3.0, "x {x0}..{x1} vs {cx}");
+            assert!((((y0 + y1) as f64 / 2.0) - cy).abs() <= 4.0, "y {y0}..{y1} vs {cy}");
+            // Clear of the letters riding the loop.
+            let reach = px.iter().map(|&(x, y)| ((x as f64 - cx).powi(2) + (y as f64 - cy).powi(2)).sqrt()).fold(0.0, f64::max);
+            assert!(reach < looping::LOOP_R - 8.0, "reaches {reach}");
+        }
+    }
+
+    #[test]
+    fn the_c_grows_smoothly() {
+        let w = 200;
+        // The C alone, frame by frame through the morph.
+        let heights: Vec<i64> = (0..=(MORPH_SECS * FPS) as usize)
+            .map(|f| {
+                let word = Wordmark::placed(w);
+                let grown = Easing::EaseInOut.apply(f as f64 / FPS / MORPH_SECS);
+                let layers = Layers::new(ROWS).layer(Layer::paint(move |c| word.paint_big_c(c, &mario('C'), (10, 10), grown, 0.0)));
+                let mut buf = FrameBuffer::new(w, ROWS);
+                layers.render(&mut buf, 0);
+                let lit = |y: usize| (0..w).any(|x| {
+                    let cell = buf.get(x, y / 2);
+                    match cell.ch {
+                        '▀' => y % 2 == 0 || cell.bg.is_some(),
+                        '▄' => y % 2 == 1 || cell.bg.is_some(),
+                        _ => cell.bg.is_some(),
+                    }
+                });
+                let rows: Vec<usize> = (0..ROWS * 2).filter(|&y| lit(y)).collect();
+                (rows.last().unwrap() - rows[0]) as i64
+            })
+            .collect();
+        assert!(heights.windows(2).all(|p| p[1] >= p[0] && p[1] - p[0] <= 2), "{heights:?}");
+        assert!(heights.last().unwrap() - heights[0] >= 8, "{heights:?}");
+    }
+
+    #[test]
+    fn return_starts_where_away_left_off_and_ends_home() {
+        let w = 200;
+        assert_eq!(ink(w, LogoPhase::Return(0.0), 7), ink(w, LogoPhase::Away(100.0), 7));
+        assert_eq!(ink(w, LogoPhase::Return(10.0), 7), ink(w, LogoPhase::Enter(10.0), 7));
+    }
 
     #[test]
     fn drop_starts_off_screen_and_lands() {

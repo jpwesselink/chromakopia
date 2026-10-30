@@ -158,6 +158,35 @@ pub fn stamp(
     shade(c, face, extrude);
 }
 
+/// `stamp`, but `size` pixels square at any size — not just whole
+/// multiples of 8 — so a letter can grow a pixel at a time. Each pixel takes
+/// the glyph pixel under it; colours as `stamp`.
+pub fn stamp_sized(c: &mut Canvas, glyph: &[u8; 8], (ox, oy): (i64, i64), size: i64, extrude: i64) {
+    let lit = |gx: i64, gy: i64| (0..8).contains(&gy) && (0..8).contains(&gx) && glyph[gy as usize] & (0x80 >> gx) != 0;
+    let at = |p: i64| p * 8 / size;
+    let mut face = Vec::new();
+    for py in 0..size {
+        let gy = at(py);
+        // The first pixel row of a glyph row, under an unlit one: cream.
+        let edge = py == 0 || at(py - 1) != gy;
+        for px in 0..size {
+            let gx = at(px);
+            if !lit(gx, gy) {
+                continue;
+            }
+            let color = if edge && !lit(gx, gy - 1) {
+                LETTER_HIGHLIGHT
+            } else if gy < 4 {
+                LETTER_UPPER
+            } else {
+                LETTER_LOWER
+            };
+            face.push((ox + px, oy + py, color));
+        }
+    }
+    shade(c, &face, extrude);
+}
+
 /// Put a letter's face pixels on with `extrude` steps of extrusion
 /// down-right and a one-pixel outline behind them.
 pub fn shade(c: &mut Canvas, face: &[(i64, i64, Color)], extrude: i64) {
@@ -221,6 +250,47 @@ pub fn block_text(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every pixel `paint` puts on a canvas, with its colour.
+    fn painted(paint: impl Fn(&mut Canvas) + Send + 'static) -> Vec<(i64, i64, Color)> {
+        let layers = Layers::new(40).layer(Layer::paint(paint));
+        let mut buf = FrameBuffer::new(80, 40);
+        layers.render(&mut buf, 0);
+        let mut px = Vec::new();
+        for y in 0..40 {
+            for x in 0..80 {
+                let cell = buf.get(x, y);
+                let (top, low) = match cell.ch {
+                    '▀' => (Some(cell.color), cell.bg),
+                    '▄' => (cell.bg, Some(cell.color)),
+                    _ => (None, cell.bg),
+                };
+                if let Some(c) = top { px.push((x as i64, 2 * y as i64, c)); }
+                if let Some(c) = low { px.push((x as i64, 2 * y as i64 + 1, c)); }
+            }
+        }
+        px
+    }
+
+    #[test]
+    fn sized_stamp_matches_the_scaled_stamp_at_whole_sizes() {
+        for s in 1..=3 {
+            let a = painted(move |c| stamp(c, &mario('C'), (3, 4), s, 2, &mut Vec::new()));
+            let b = painted(move |c| stamp_sized(c, &mario('C'), (3, 4), 8 * s, 2));
+            assert_eq!(a, b, "scale {s}");
+        }
+    }
+
+    #[test]
+    fn sized_stamp_grows_one_pixel_at_a_time() {
+        let height = |n: i64| {
+            let px = painted(move |c| stamp_sized(c, &mario('C'), (3, 4), n, 0));
+            px.iter().map(|p| p.1).max().unwrap() - px.iter().map(|p| p.1).min().unwrap()
+        };
+        for n in 8..32 {
+            assert_eq!(height(n + 1) - height(n), 1, "size {n}");
+        }
+    }
 
     #[test]
     fn rom_upper_and_lower_case() {

@@ -74,8 +74,9 @@ fn script_view(tl: &script::Timeline, intro_secs: f64, t: f64) -> View {
     // In with `{logo}`, away with `{logo away}` — whichever came last.
     let away = |gone: f64| if gone < wordmark::EXIT_DONE { LogoPhase::Exit(gone) } else { LogoPhase::Hidden };
     let mut logo = match (tl.since(script::Code::Logo, t), tl.since(script::Code::LogoAway, t)) {
-        (Some(came), Some(went)) if went > came => away(t - went),
-        (Some(came), _) => LogoPhase::Enter(t - came),
+        (Some(came), Some(went)) if went > came => LogoPhase::Away(t - went),
+        (Some(came), Some(_)) => LogoPhase::Return(t - came),
+        (Some(came), None) => LogoPhase::Enter(t - came),
         (None, _) => LogoPhase::Hidden,
     };
     let mut hills = tl.since(script::Code::Hills, t).map(|at| t - at);
@@ -83,7 +84,7 @@ fn script_view(tl: &script::Timeline, intro_secs: f64, t: f64) -> View {
     // entrance backwards from wherever it had got to.
     if let Some(bye) = tl.since(script::Code::Bye, t) {
         let gone = t - bye;
-        if matches!(logo, LogoPhase::Enter(_)) {
+        if matches!(logo, LogoPhase::Enter(_) | LogoPhase::Return(_)) {
             logo = away(gone);
         }
         hills = hills
@@ -716,11 +717,12 @@ mod tests {
         let last_out = when_scrolled(&stage, loopers.last().unwrap().x + 4.0 + looping::loop_start(w) + looping::LOOP_EXTRA);
         assert!(back >= last_out, "{back} vs {last_out}");
         stage.seek_to(away + 0.3);
-        assert!(matches!(stage.view_at(0).logo, LogoPhase::Exit(_)));
-        stage.seek_to(away + wordmark::EXIT_DONE + 0.1);
-        assert_eq!(stage.view_at(0).logo, LogoPhase::Hidden);
+        let LogoPhase::Away(t) = stage.view_at(0).logo else { panic!("logo not stepping aside") };
+        assert!((t - 0.3).abs() < 1e-9);
+        stage.seek_to(back - 0.1);
+        assert!(matches!(stage.view_at(0).logo, LogoPhase::Away(_)), "the big C stays for the whole ride");
         stage.seek_to(back + 0.5);
-        let LogoPhase::Enter(t) = stage.view_at(0).logo else { panic!("logo not back") };
+        let LogoPhase::Return(t) = stage.view_at(0).logo else { panic!("logo not back") };
         assert!((t - 0.5).abs() < 1e-9);
     }
 
@@ -818,7 +820,7 @@ mod tests {
         let bye = stage.timeline.since(script::Code::Bye, f64::MAX).expect("pitch has a {bye}");
         stage.seek_to(bye - 0.1);
         let v = stage.view_at(0);
-        assert!(matches!(v.logo, LogoPhase::Enter(_)) && v.hills.is_some());
+        assert!(matches!(v.logo, LogoPhase::Enter(_) | LogoPhase::Return(_)) && v.hills.is_some());
         // Leaving: the logo jumps away, the landscape plays its entrance backwards.
         stage.seek_to(bye + 0.5);
         let v = stage.view_at(0);

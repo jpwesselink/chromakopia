@@ -116,6 +116,13 @@ fn loop_track(d: f64, width: usize, base: f64) -> Spot {
     }
 }
 
+/// The middle of the loop on a screen `width` wide, in pixels.
+pub fn loop_centre(width: usize) -> (f64, f64) {
+    // The loop drifts left by the shift as it goes round, from half a
+    // shift right of the middle: it turns about the middle.
+    (width as f64 / 2.0, (super::SCROLLER_Y + super::scroller::BASE) as f64 - LOOP_R)
+}
+
 /// The nearest of the `ANGLES` turns to `angle`.
 pub fn angle_index(angle: f64) -> usize {
     (angle.rem_euclid(TAU) / TAU * ANGLES as f64).round() as usize % ANGLES
