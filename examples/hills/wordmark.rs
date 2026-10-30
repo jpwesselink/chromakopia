@@ -59,9 +59,14 @@ pub const EXIT_DONE: f64 = (WORD.len() - 1) as f64 * EXIT_STAGGER + EXIT_SECS;
 /// The C left behind by `{logo away}`: how many times its size it grows
 /// to in the middle of the loop, how long that takes, and how much of the
 /// full DYCP bob it keeps there.
-pub const BIG_C: i64 = 4;
+pub const BIG_C: i64 = 3;
 pub const MORPH_SECS: f64 = 1.0;
 const BIG_C_BOB: f64 = 0.3;
+/// When the C leaves for the loop: as the last of the others (H) jumps.
+const C_LEAVES: f64 = (WORD.len() - 2) as f64 * EXIT_STAGGER;
+/// Seconds until the others are gone and the C is big in the loop.
+#[cfg(test)]
+pub const AWAY_DONE: f64 = C_LEAVES + MORPH_SECS;
 
 /// Seconds to glide between the centre and the top.
 pub const RISE_SECS: f64 = super::stage::LOGO_RISE_SECS;
@@ -99,8 +104,9 @@ pub enum LogoPhase {
     Fall(f64),
     /// Jumping off the top, letter by letter, from the centre.
     Exit(f64),
-    /// Stepping aside for the loop: every letter but the C jumps off; the
-    /// C glides into the middle of the loop and grows big there.
+    /// Stepping aside for the loop: every letter but the C jumps off, from
+    /// the end of the word back; then the C glides into the middle of the
+    /// loop and grows big there.
     Away(f64),
     /// Back after the loop: the C shrinks home while the rest drop in.
     Return(f64),
@@ -121,6 +127,21 @@ impl LogoPhase {
 /// Letter `i`'s lift `t` seconds into the exit (0 → −FALL).
 fn exit_offset(i: usize, t: f64) -> f64 {
     -FALL * Easing::EaseIn.apply(((t - i as f64 * EXIT_STAGGER) / EXIT_SECS).clamp(0.0, 1.0))
+}
+
+/// Letter `i`'s lift `t` seconds into stepping aside: the exit, but from
+/// the end of the word back, so the A goes first and the H last.
+fn away_offset(i: usize, t: f64) -> f64 {
+    exit_offset(WORD.len() - 1 - i, t)
+}
+
+/// How far the C has grown into the loop's middle in `phase` (0 = home).
+fn c_grown(phase: LogoPhase) -> f64 {
+    match phase {
+        LogoPhase::Away(t) => Easing::EaseInOut.apply(((t - C_LEAVES) / MORPH_SECS).clamp(0.0, 1.0)),
+        LogoPhase::Return(t) => 1.0 - Easing::EaseInOut.apply((t / MORPH_SECS).clamp(0.0, 1.0)),
+        _ => 0.0,
+    }
 }
 
 /// Letter `i`'s drop-in offset `t` seconds into the entrance (−FALL → 0).
@@ -199,7 +220,10 @@ impl Wordmark {
                 let landed = t - (DROP_START + i as f64 * DROP_STAGGER) - DROP_SECS;
                 (drop_offset(i, t), Easing::EaseInOut.apply(landed / DYCP_RAMP))
             }
-            LogoPhase::Exit(t) | LogoPhase::Away(t) => (exit_offset(i, t), 1.0),
+            LogoPhase::Exit(t) => (exit_offset(i, t), 1.0),
+            // The C stays put: it leaves by gliding into the loop instead.
+            LogoPhase::Away(_) if i == 0 => (0.0, 1.0),
+            LogoPhase::Away(t) => (away_offset(i, t), 1.0),
             _ => (0.0, 1.0 + (self.calm - 1.0) * phase.lift()),
         };
         let i = i as f64;
@@ -224,12 +248,7 @@ impl Wordmark {
         let mut face = Vec::new();
         for (i, glyph) in self.glyphs.iter().enumerate() {
             let at = (x0 + (i * ADVANCE) as i64 * s, y0 + self.bob(i, wall, phase));
-            // How far the C has grown into the loop's middle (0 = home).
-            let grown = match phase {
-                LogoPhase::Away(t) => Easing::EaseInOut.apply(t / MORPH_SECS),
-                LogoPhase::Return(t) => 1.0 - Easing::EaseInOut.apply(t / MORPH_SECS),
-                _ => 0.0,
-            };
+            let grown = c_grown(phase);
             if i == 0 && grown > 0.0 {
                 self.paint_big_c(c, glyph, at, grown, wall);
             } else {
@@ -303,6 +322,28 @@ mod tests {
             // Clear of the letters riding the loop.
             let reach = px.iter().map(|&(x, y)| ((x as f64 - cx).powi(2) + (y as f64 - cy).powi(2)).sqrt()).fold(0.0, f64::max);
             assert!(reach < looping::LOOP_R - 8.0, "reaches {reach}");
+        }
+    }
+
+    #[test]
+    fn away_clears_from_the_end_and_the_c_goes_last() {
+        let n = WORD.len();
+        // A jumps first, H last of the jumpers...
+        let lift = |i: usize, t: f64| away_offset(i, t);
+        assert!(lift(n - 1, 0.3) < lift(n - 2, 0.3) && lift(2, 0.3) <= lift(1, 0.3));
+        assert_eq!(lift(1, 0.3), 0.0, "H still home");
+        // ...and only then does the C leave.
+        let h_leaves = (n - 2) as f64 * EXIT_STAGGER;
+        assert_eq!(c_grown(LogoPhase::Away(h_leaves)), 0.0);
+        assert!(c_grown(LogoPhase::Away(h_leaves + 0.2)) > 0.0);
+        assert_eq!(c_grown(LogoPhase::Away(AWAY_DONE)), 1.0);
+        for i in 1..n {
+            assert!((lift(i, AWAY_DONE) + FALL).abs() < 1e-9, "letter {i} still on screen");
+        }
+        // The C never jumps: it bobs at home until it glides off.
+        let word = Wordmark::placed(200);
+        for t in [0.0, C_LEAVES, C_LEAVES + 0.5, AWAY_DONE] {
+            assert_eq!(word.bob(0, 3.0, LogoPhase::Away(t)), word.bob(0, 3.0, LogoPhase::Enter(100.0)), "at {t}");
         }
     }
 

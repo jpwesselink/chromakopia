@@ -712,7 +712,7 @@ mod tests {
         let loopers: Vec<_> = stage.glyphs.iter().filter(|g| g.path.is_some()).collect();
         // Out of the way before the first letter reaches the loop...
         let first_in = when_scrolled(&stage, loopers[0].x + 4.0 + looping::loop_start(w));
-        assert!(away + wordmark::EXIT_DONE <= first_in, "{away} + exit vs {first_in}");
+        assert!(away + wordmark::AWAY_DONE <= first_in, "{away} + away vs {first_in}");
         // ...and back only once the last is out.
         let last_out = when_scrolled(&stage, loopers.last().unwrap().x + 4.0 + looping::loop_start(w) + looping::LOOP_EXTRA);
         assert!(back >= last_out, "{back} vs {last_out}");
