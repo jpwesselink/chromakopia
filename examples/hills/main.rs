@@ -701,10 +701,10 @@ mod tests {
         let back = stage.timeline.cues.iter().find(|c| c.code == script::Code::Logo && c.t > away).expect("logo comes back").t;
         let loopers: Vec<_> = stage.glyphs.iter().filter(|g| g.looped).collect();
         // Out of the way before the first letter reaches the loop...
-        let first_in = when_scrolled(&stage, loopers[0].x + 8.0 + w as f64 / 2.0);
+        let first_in = when_scrolled(&stage, loopers[0].x + 4.0 + looping::loop_start(w));
         assert!(away + wordmark::EXIT_DONE <= first_in, "{away} + exit vs {first_in}");
         // ...and back only once the last is out.
-        let last_out = when_scrolled(&stage, loopers.last().unwrap().x + 8.0 + w as f64 / 2.0 + looping::LOOP_EXTRA);
+        let last_out = when_scrolled(&stage, loopers.last().unwrap().x + 4.0 + looping::loop_start(w) + looping::LOOP_EXTRA);
         assert!(back >= last_out, "{back} vs {last_out}");
         stage.seek_to(away + 0.3);
         assert!(matches!(stage.view_at(0).logo, LogoPhase::Exit(_)));

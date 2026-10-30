@@ -249,7 +249,7 @@ pub const PITCH: &str = "{hills}{style flat}Welly well, what do we have here?{st
 Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 Clouds that drift and throw shadows on the land. Never shade. They're above that.   \
 A logo that will not sit still, bouncing every letter on its own little wave...   in fact,{logo away} it won't even stay.   \
-{font big}{loop on}And all of it at a silky 60 frames per second.{loop off}{font c64}   {logo}\
+{loop on}And all of it at a silky 60 frames per second.{loop off}   {logo}\
 How is it done?   Ha!   A magician never tells...   {font term}(this is your terminal's own font, by the way - blink and you miss it){font c64}   \
 ...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}{wave off}...ofc you should type it without the colours, just like we did in 1986...{wave on}{style candy}   \
 Greetings fly out to Exel, {} and Hardbeat - still sorry, Apache: no Microsoft BackOffice was harmed - Paradox - Pitr / Eindbazen - ISO - Danny Styles - Spidey - Humasect - Nightdead - Si-Goat - Stephen Parker - Koffiekop - Kevinjel - Sanity - \
@@ -355,7 +355,7 @@ mod tests {
         let g = Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave: true, looped: true };
         let base = (40 + BASE) as f64;
         // Scrolled so the letter's middle is halfway round the loop.
-        let scrolled = w as f64 / 2.0 + PI * looping::LOOP_R + 8.0;
+        let scrolled = looping::loop_start(w) + PI * looping::LOOP_R + 8.0;
         let s = Scroller::new(vec![g], 40);
         let layers = Layers::new(60).layer(Layer::paint(move |c| s.paint(c, scrolled)));
         let mut buf = FrameBuffer::new(w, 60);
