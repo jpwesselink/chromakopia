@@ -11,6 +11,8 @@ use chromakopia::prelude::*;
 use std::f64::consts::TAU;
 
 use super::glyphs::{LETTER_HIGHLIGHT, LETTER_LOWER, LETTER_UPPER};
+use super::script::Glyph;
+use super::scroller;
 
 /// Radius of the loop, in pixels.
 pub const LOOP_R: f64 = 36.0;
@@ -121,6 +123,30 @@ pub fn loop_centre(width: usize) -> (f64, f64) {
     // The loop drifts left by the shift as it goes round, from half a
     // shift right of the middle: it turns about the middle.
     (width as f64 / 2.0, (super::SCROLLER_Y + super::scroller::BASE) as f64 - LOOP_R)
+}
+
+/// The loop's ride on a screen `width` wide: how far the text has
+/// scrolled when the first looping letter enters the loop, and when the
+/// last one leaves it. None when nothing loops.
+pub fn ride(glyphs: &[Glyph], width: usize) -> Option<(f64, f64)> {
+    let mut loopers = glyphs.iter().filter(|g| g.path == Some(Shape::Loop));
+    let at = |g: &Glyph| g.x + scroller::advance(g.font, g.ch) as f64 / 2.0 + loop_start(width);
+    let first = loopers.next()?;
+    let last = loopers.last().unwrap_or(first);
+    Some((at(first), at(last) + LOOP_EXTRA))
+}
+
+/// Which way is down for something riding along with the loop, `scrolled`
+/// pixels in: turned as a looping letter would be (radians, clockwise), a
+/// lap per letter's lap, from when the first letter goes in until a whole
+/// lap after the last comes out — so it lands upright. 0 otherwise.
+pub fn tilt(scrolled: f64, ride: Option<(f64, f64)>) -> f64 {
+    let Some((start, last)) = ride else { return 0.0 };
+    let laps = ((last - start) / LOOP_EXTRA).ceil().max(1.0);
+    if scrolled < start || scrolled >= start + laps * LOOP_EXTRA {
+        return 0.0;
+    }
+    TAU * ((scrolled - start) / LOOP_EXTRA).fract()
 }
 
 /// The nearest of the `ANGLES` turns to `angle`.
@@ -333,6 +359,22 @@ mod tests {
             let d = a - 50.0 + k as f64;
             assert!((w(d + 1.0) - w(d)).abs() <= 1.0 / WAVE_FADE + 1e-9, "at {d}");
         }
+    }
+
+    #[test]
+    fn tilt_turns_like_a_rider_while_letters_loop() {
+        let ride = (100.0, 100.0 + 2.5 * LOOP_EXTRA);
+        assert_eq!(tilt(50.0, Some(ride)), 0.0, "upright before");
+        assert_eq!(tilt(500.0, None), 0.0, "no loop, no tilt");
+        // One turn per lap, as a letter goes round.
+        let quarter = tilt(100.0 + LOOP_EXTRA / 4.0, Some(ride));
+        assert!((quarter - TAU / 4.0).abs() < 1e-9, "{quarter}");
+        // Keeps turning to the end of a whole lap past the last letter...
+        let end = 100.0 + 3.0 * LOOP_EXTRA;
+        assert!(tilt(end - 1.0, Some(ride)) > 0.0);
+        assert!(TAU - tilt(end - 0.01, Some(ride)) < 0.01, "lands upright, no jump");
+        // ...then rests upright.
+        assert_eq!(tilt(end + 1.0, Some(ride)), 0.0);
     }
 
     #[test]

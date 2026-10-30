@@ -160,8 +160,17 @@ pub fn stamp(
 
 /// `stamp`, but `size` pixels square at any size — not just whole
 /// multiples of 8 — so a letter can grow a pixel at a time. Each pixel takes
-/// the glyph pixel under it; colours as `stamp`.
-pub fn stamp_sized(c: &mut Canvas, glyph: &[u8; 8], (ox, oy): (i64, i64), size: i64, extrude: i64) {
+/// the glyph pixel under it; colours as `stamp`, except that below its
+/// cream edges `tint` may colour the face — given each pixel's offset from
+/// the letter's middle.
+pub fn stamp_tinted(
+    c: &mut Canvas,
+    glyph: &[u8; 8],
+    (ox, oy): (i64, i64),
+    size: i64,
+    extrude: i64,
+    tint: impl Fn(f64, f64) -> Option<Color>,
+) {
     let lit = |gx: i64, gy: i64| (0..8).contains(&gy) && (0..8).contains(&gx) && glyph[gy as usize] & (0x80 >> gx) != 0;
     let at = |p: i64| p * 8 / size;
     let mut face = Vec::new();
@@ -174,8 +183,11 @@ pub fn stamp_sized(c: &mut Canvas, glyph: &[u8; 8], (ox, oy): (i64, i64), size: 
             if !lit(gx, gy) {
                 continue;
             }
+            let mid = size as f64 / 2.0;
             let color = if edge && !lit(gx, gy - 1) {
                 LETTER_HIGHLIGHT
+            } else if let Some(color) = tint(px as f64 + 0.5 - mid, py as f64 + 0.5 - mid) {
+                color
             } else if gy < 4 {
                 LETTER_UPPER
             } else {
@@ -276,7 +288,7 @@ mod tests {
     fn sized_stamp_matches_the_scaled_stamp_at_whole_sizes() {
         for s in 1..=3 {
             let a = painted(move |c| stamp(c, &mario('C'), (3, 4), s, 2, &mut Vec::new()));
-            let b = painted(move |c| stamp_sized(c, &mario('C'), (3, 4), 8 * s, 2));
+            let b = painted(move |c| stamp_tinted(c, &mario('C'), (3, 4), 8 * s, 2, |_, _| None));
             assert_eq!(a, b, "scale {s}");
         }
     }
@@ -284,7 +296,7 @@ mod tests {
     #[test]
     fn sized_stamp_grows_one_pixel_at_a_time() {
         let height = |n: i64| {
-            let px = painted(move |c| stamp_sized(c, &mario('C'), (3, 4), n, 0));
+            let px = painted(move |c| stamp_tinted(c, &mario('C'), (3, 4), n, 0, |_, _| None));
             px.iter().map(|p| p.1).max().unwrap() - px.iter().map(|p| p.1).min().unwrap()
         };
         for n in 8..32 {

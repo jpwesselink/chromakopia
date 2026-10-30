@@ -6,7 +6,7 @@ use chromakopia::animate::framebuffer::FPS;
 use chromakopia::prelude::*;
 use std::f64::consts::TAU;
 
-use super::glyphs::{mario, stamp, stamp_sized};
+use super::glyphs::{mario, stamp, stamp_tinted, LETTER_LOWER, LETTER_UPPER};
 use super::layout::Layout;
 use super::looping;
 use super::tiny;
@@ -62,6 +62,8 @@ pub const EXIT_DONE: f64 = (WORD.len() - 1) as f64 * EXIT_STAGGER + EXIT_SECS;
 pub const BIG_C: i64 = 3;
 pub const MORPH_SECS: f64 = 1.0;
 const BIG_C_BOB: f64 = 0.3;
+/// The liquid in the big C: how high its waves slosh, in pixels.
+const SLOSH: f64 = 1.5;
 /// When the C leaves for the loop: as the last of the others (H) jumps.
 const C_LEAVES: f64 = (WORD.len() - 2) as f64 * EXIT_STAGGER;
 /// Seconds until the others are gone and the C is big in the loop.
@@ -236,8 +238,9 @@ impl Wordmark {
 
     /// Paint the word for `phase`. Letters go left to right, each fully
     /// (extrusion, outline, face) before the next, so every letter covers
-    /// its left neighbour's extrusion.
-    pub fn paint(&self, c: &mut Canvas, phase: LogoPhase) {
+    /// its left neighbour's extrusion. `tilt` is which way is down in the
+    /// big C, if it's out (see `looping::tilt`).
+    pub fn paint(&self, c: &mut Canvas, phase: LogoPhase, tilt: f64) {
         if phase == LogoPhase::Hidden {
             return;
         }
@@ -250,7 +253,7 @@ impl Wordmark {
             let at = (x0 + (i * ADVANCE) as i64 * s, y0 + self.bob(i, wall, phase));
             let grown = c_grown(phase);
             if i == 0 && grown > 0.0 {
-                self.paint_big_c(c, glyph, at, grown, wall);
+                self.paint_big_c(c, glyph, at, grown, wall, tilt);
             } else {
                 stamp(c, glyph, at, s, 2, &mut face);
             }
@@ -259,8 +262,10 @@ impl Wordmark {
 
     /// The C `grown` (0..=1) of the way from its place in the word, top-left
     /// at `home`, to BIG_C times its size in the middle of the loop —
-    /// growing a pixel at a time as it glides.
-    fn paint_big_c(&self, c: &mut Canvas, glyph: &[u8; 8], home: (i64, i64), grown: f64, wall: f64) {
+    /// growing a pixel at a time as it glides. It's half full: lavender
+    /// liquid under pink air, sloshing, its surface level across `tilt` —
+    /// down turning with the letters riding the loop.
+    fn paint_big_c(&self, c: &mut Canvas, glyph: &[u8; 8], home: (i64, i64), grown: f64, wall: f64, tilt: f64) {
         let (small, big) = (8.0 * self.scale as f64, 8.0 * BIG_C as f64);
         let (cx, cy) = looping::loop_centre(c.width);
         let bob = BIG_C_BOB * DYCP_AMP * (TAU * wall / DYCP_PERIOD).sin();
@@ -268,20 +273,31 @@ impl Wordmark {
         let size = lerp(small, big).round();
         let mid = (lerp(home.0 as f64 + small / 2.0, cx), lerp(home.1 as f64 + small / 2.0, cy + bob));
         let at = ((mid.0 - size / 2.0).round() as i64, (mid.1 - size / 2.0).round() as i64);
-        stamp_sized(c, glyph, at, size as i64, 2);
+        // Down, for a rider turned by `tilt`, is (−sin, cos); the surface
+        // runs across it, through the middle, with two waves running along.
+        let (sin, cos) = tilt.sin_cos();
+        let slosh = SLOSH * size / big;
+        let liquid = move |x: f64, y: f64| {
+            let (up, along) = (x * sin - y * cos, x * cos + y * sin);
+            let wave = slosh * ((along * 0.35 - 3.0 * wall).sin() + 0.6 * (along * 0.6 + 2.1 * wall).sin());
+            Some(if up < wave { LETTER_LOWER } else { LETTER_UPPER })
+        };
+        stamp_tinted(c, glyph, at, size as i64, 2, liquid);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::glyphs::{LETTER_LOWER, LETTER_UPPER};
     use super::super::looping;
+    use std::f64::consts::PI;
 
     /// Lit pixel rows/columns of the wordmark for `phase` at `frame`.
     fn ink(screen_w: usize, phase: LogoPhase, frame: usize) -> Vec<(i64, i64)> {
         let word = Wordmark::placed(screen_w);
         let layers = Layers::new(ROWS).layer(Layer::paint(move |c| {
-            word.paint(c, phase);
+            word.paint(c, phase, 0.0);
             word.paint_tagline(c, phase);
         }));
         let mut buf = FrameBuffer::new(screen_w, ROWS);
@@ -347,6 +363,51 @@ mod tests {
         }
     }
 
+    /// (pink, lavender) pixel counts of the big C above and below its middle
+    /// row, turned to `tilt`, at wall time `wall`.
+    fn liquid(tilt: f64, wall: f64) -> ((usize, usize), (usize, usize)) {
+        let w = 200;
+        let word = Wordmark::placed(w);
+        let layers = Layers::new(ROWS).layer(Layer::paint(move |c| word.paint_big_c(c, &mario('C'), (10, 10), 1.0, wall, tilt)));
+        let mut buf = FrameBuffer::new(w, ROWS);
+        layers.render(&mut buf, 0);
+        let (_, cy) = looping::loop_centre(w);
+        let (mut above, mut below) = ((0, 0), (0, 0));
+        for y in 0..ROWS * 2 {
+            for x in 0..w {
+                let cell = buf.get(x, y / 2);
+                let color = match cell.ch {
+                    '▀' if y % 2 == 0 => Some(cell.color),
+                    '▄' if y % 2 == 1 => Some(cell.color),
+                    _ => cell.bg,
+                };
+                let half = if (y as f64) < cy { &mut above } else { &mut below };
+                match color {
+                    Some(c) if c == LETTER_UPPER => half.0 += 1,
+                    Some(c) if c == LETTER_LOWER => half.1 += 1,
+                    _ => {}
+                }
+            }
+        }
+        (above, below)
+    }
+
+    #[test]
+    fn liquid_settles_where_gravity_points() {
+        // Upright: lavender liquid at the bottom, pink air on top.
+        let (above, below) = liquid(0.0, 0.0);
+        assert!(above.0 > 3 * above.1 && below.1 > 3 * below.0, "{above:?} {below:?}");
+        // Upside down, riding over the top of the loop: the other way round.
+        let (above, below) = liquid(PI, 0.0);
+        assert!(above.1 > 3 * above.0 && below.0 > 3 * below.1, "{above:?} {below:?}");
+    }
+
+    #[test]
+    fn liquid_sloshes() {
+        let a = liquid(0.0, 0.0);
+        assert!((1..30).any(|k| liquid(0.0, k as f64 * 0.1) != a), "surface never moves");
+    }
+
     #[test]
     fn the_c_grows_smoothly() {
         let w = 200;
@@ -355,7 +416,7 @@ mod tests {
             .map(|f| {
                 let word = Wordmark::placed(w);
                 let grown = Easing::EaseInOut.apply(f as f64 / FPS / MORPH_SECS);
-                let layers = Layers::new(ROWS).layer(Layer::paint(move |c| word.paint_big_c(c, &mario('C'), (10, 10), grown, 0.0)));
+                let layers = Layers::new(ROWS).layer(Layer::paint(move |c| word.paint_big_c(c, &mario('C'), (10, 10), grown, 0.0, 0.0)));
                 let mut buf = FrameBuffer::new(w, ROWS);
                 layers.render(&mut buf, 0);
                 let lit = |y: usize| (0..w).any(|x| {
@@ -392,7 +453,7 @@ mod tests {
         for screen_w in [80, 120, 200, 300] {
             let word = Wordmark::placed(screen_w);
             let bottom = Layout::for_width(screen_w).logo_last();
-            let layers = Layers::new(ROWS).layer(Layer::paint(move |c| word.paint(c, LogoPhase::Top)));
+            let layers = Layers::new(ROWS).layer(Layer::paint(move |c| word.paint(c, LogoPhase::Top, 0.0)));
             let (mut lowest, mut highest) = (0, i64::MAX);
             for frame in (0..600).step_by(3) {
                 let mut buf = FrameBuffer::new(screen_w, ROWS);

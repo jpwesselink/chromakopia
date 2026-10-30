@@ -197,7 +197,8 @@ impl Stage {
         let timeline = script::Timeline::new(&placed, screen_w).with_lead(cold_open.secs, &cold_open.marks);
         let view = Arc::new(Mutex::new(script_view(&timeline, cold_open.secs, 0.0)));
         let scroller = Arc::new(scroller::Scroller::new(placed.glyphs.clone(), SCROLLER_Y));
-        let layers = build_layers(screen_w, view.clone(), steps.clone(), scroller.clone());
+        let ride = looping::ride(&placed.glyphs, screen_w);
+        let layers = build_layers(screen_w, view.clone(), steps.clone(), scroller.clone(), ride);
         let heading = build_heading(view.clone());
         Self {
             steps,
@@ -366,7 +367,13 @@ fn put_band(buf: &mut FrameBuffer, row: usize, text: &str) {
     }
 }
 
-fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>, scroller: Arc<scroller::Scroller>) -> Layers {
+fn build_layers(
+    screen_w: usize,
+    view: Arc<Mutex<View>>,
+    steps: Vec<Step>,
+    scroller: Arc<scroller::Scroller>,
+    ride: Option<(f64, f64)>,
+) -> Layers {
     let word = wordmark::Wordmark::placed(screen_w);
     // Baseline high enough that the scroller's wave plus extrusion stays on screen.
 
@@ -378,8 +385,9 @@ fn build_layers(screen_w: usize, view: Arc<Mutex<View>>, steps: Vec<Step>, scrol
 
     landscape::landscape(move || hills_view.lock().unwrap().hills)
         .layer(Layer::paint(move |c| {
-            let phase = logo_view.lock().unwrap().logo;
-            word.paint(c, phase);
+            let view = *logo_view.lock().unwrap();
+            word.paint(c, view.logo, looping::tilt(view.scroll, ride));
+            let phase = view.logo;
             word.paint_tagline(c, phase);
         }))
         // Panel boxes (fill, edge, extrusion).
