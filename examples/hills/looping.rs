@@ -77,8 +77,9 @@ pub fn angle_index(angle: f64) -> usize {
 /// its lit pixels as (x, y, face colour) around (0, 0) — the pixel right
 /// and below the middle is (0, 0). Each pixel samples the glyph 4×4 times
 /// and lights when over 40% of it is ink, so strokes stay whole at odd
-/// angles. Face colours turn with the letter: cream along each top edge,
-/// pink upper half, lavender lower.
+/// angles. Face colours stay lit from above on screen whatever the angle,
+/// like the upright letters: cream along each top edge, pink upper half,
+/// lavender lower.
 pub fn turned(glyph: &[u8; 8], scale: i64, index: usize) -> Vec<(i64, i64, Color)> {
     const SUB: usize = 4;
     let n = 8 * scale;
@@ -90,7 +91,7 @@ pub fn turned(glyph: &[u8; 8], scale: i64, index: usize) -> Vec<(i64, i64, Color
     // Back from screen to glyph: turn the other way, about the middle.
     let back = |px: f64, py: f64| (cos * px + sin * py + half, -sin * px + cos * py + half);
     let reach = (half * std::f64::consts::SQRT_2).ceil() as i64 + 1;
-    let mut face = Vec::new();
+    let mut ink_at = std::collections::HashSet::new();
     for y in -reach..reach {
         for x in -reach..reach {
             let hits = (0..SUB * SUB)
@@ -100,21 +101,26 @@ pub fn turned(glyph: &[u8; 8], scale: i64, index: usize) -> Vec<(i64, i64, Color
                     ink(u, v)
                 })
                 .count();
-            if hits * 5 <= SUB * SUB * 2 {
-                continue;
+            if hits * 5 > SUB * SUB * 2 {
+                ink_at.insert((x, y));
             }
-            let (u, v) = back(x as f64 + 0.5, y as f64 + 0.5);
-            let (gx, gy) = (u.max(0.0) as i64 / scale, v.max(0.0) as i64 / scale);
-            let color = if (v.max(0.0) as i64) % scale == 0 && !lit(gx, gy - 1) {
+        }
+    }
+    // Shaded on screen, not on the letter: the light stays put as it turns.
+    let mut face: Vec<_> = ink_at
+        .iter()
+        .map(|&(x, y)| {
+            let color = if !ink_at.contains(&(x, y - 1)) {
                 LETTER_HIGHLIGHT
-            } else if gy < 4 {
+            } else if y < 0 {
                 LETTER_UPPER
             } else {
                 LETTER_LOWER
             };
-            face.push((x, y, color));
-        }
-    }
+            (x, y, color)
+        })
+        .collect();
+    face.sort_by_key(|&(x, y, _)| (y, x));
     face
 }
 
@@ -204,6 +210,27 @@ mod tests {
         }
         want.sort();
         assert_eq!(pixels(&face), want);
+    }
+
+    #[test]
+    fn light_stays_put_as_letters_turn() {
+        // Lit from above on screen at every angle, like the upright letters:
+        // cream wherever nothing is directly above, pink in the upper half,
+        // lavender in the lower — however the letter is turned.
+        for i in 0..ANGLES {
+            let face = turned(&W_GLYPH, 2, i);
+            let lit: std::collections::HashSet<(i64, i64)> = face.iter().map(|&(x, y, _)| (x, y)).collect();
+            for &(x, y, color) in &face {
+                let want = if !lit.contains(&(x, y - 1)) {
+                    LETTER_HIGHLIGHT
+                } else if y < 0 {
+                    LETTER_UPPER
+                } else {
+                    LETTER_LOWER
+                };
+                assert_eq!(color, want, "angle {i} at ({x}, {y})");
+            }
+        }
     }
 
     #[test]
