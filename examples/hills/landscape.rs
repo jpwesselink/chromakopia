@@ -1,7 +1,7 @@
 //! The pastel landscape: sky, clouds, hills, ground and cloud shadows —
 //! hidden until the `{hills}` code, then built up layer by layer: the sky
-//! slides down, the ridges rise from below back to front, the cloud
-//! shadows grow in.
+//! slides down, the ridges rise from below back to front, the sky clouds
+//! and their shadows grow in.
 
 use chromakopia::animate::dither;
 use chromakopia::prelude::*;
@@ -84,6 +84,47 @@ fn shadow_grow(t: f64) -> f64 {
     Easing::EaseOut.apply(((t - SHADOW_START) / SHADOW_SECS).clamp(0.0, 1.0))
 }
 
+/// Pixel row where the landscape starts, and how tall it is.
+const LAND_TOP: f64 = (TOP_PAD * 2) as f64;
+const LAND_H: f64 = ((ROWS - TOP_PAD) * 2) as f64;
+
+/// Highest the cloud banks reach: the front bank's base, less its humps
+/// and the tallest cumulus. Sky clouds stay above it.
+fn sky_floor() -> f64 {
+    LAND_TOP + LAND_H * 0.38 - 8.0 - 15.0
+}
+
+/// Cloud number `slot` (one every 64 pixels): where across it `x` is
+/// (-1..1), and a fixed -1..1 that varies its size and height. None
+/// outside it.
+fn cloud_at(x: f64, grow: f64) -> Option<(f64, f64)> {
+    if grow <= 0.0 {
+        return None;
+    }
+    let slot = (x / 64.0).floor();
+    let vary = (slot * 2.3).sin();
+    let dx = (x - slot * 64.0 - 32.0) / ((16.0 + 5.0 * vary) * grow);
+    (dx.abs() < 1.0).then_some((dx, vary))
+}
+
+/// The cloud at column `x`, high in the open sky: its top and flat
+/// bottom in pixel rows, puffed up with a scalloped top.
+fn puff(x: f64, grow: f64) -> Option<(f64, f64)> {
+    let (dx, vary) = cloud_at(x, grow)?;
+    let bottom = LAND_TOP + 4.0 + 2.0 * vary;
+    let height = 5.0 * grow * (1.0 - dx * dx).sqrt() * (0.8 + 0.2 * (PI * x / 6.0).sin().abs());
+    Some((bottom - height, bottom))
+}
+
+/// The cloud's shadow at column `x`, straight below it on the land: an
+/// oval's top and bottom in pixel rows.
+fn shadow(x: f64, grow: f64) -> Option<(f64, f64)> {
+    let (dx, vary) = cloud_at(x, grow)?;
+    let centre = LAND_TOP + LAND_H * (0.72 + 0.06 * vary);
+    let half = 6.0 * grow * (1.0 - dx * dx).sqrt();
+    Some((centre - half, centre + half))
+}
+
 /// A hump-ridged layer: everything below the ridge line is filled with
 /// a dither of `fill.0`/`fill.1` at level `fill.2`.
 /// `base` = valley floor (pixel row), `amp` = hump height, `wl` = two
@@ -140,8 +181,7 @@ pub fn landscape(since: impl Fn() -> Option<f64> + Clone + Send + 'static) -> La
         Box::new(move || since().map(|t| rise(i, t, h_px)))
     };
     // Landscape fills everything below the TOP_PAD sky rows.
-    let top = (TOP_PAD * 2) as f64;
-    let h = ((ROWS - TOP_PAD) * 2) as f64;
+    let (top, h) = (LAND_TOP, LAND_H);
     // Back to front: clouds, greens, then ground.
     let ridges = [
         ridge(top + h * 0.28, 8.0, (23.0, 41.0), 0.3, (CLOUD_LILAC, CLOUD_PINK, 2), drop(0)),
@@ -172,30 +212,34 @@ pub fn landscape(since: impl Fn() -> Option<f64> + Clone + Send + 'static) -> La
         }
     });
 
-    // Cloud shadows: ovals over the land, one every 64 pixels, each a
-    // bit different in size and height — multiplied with NES blue so they
-    // cool whatever they pass over. Slower and wider than the ridges, on
-    // their own swing. They grow in once the land is there.
+    // Sky clouds and their shadows: one every 64 pixels, each a bit
+    // different in size and height, the shadow straight below its cloud.
+    // Shadows multiply with NES blue so they cool whatever they pass
+    // over. Both on one slow, wide swing of their own, so each pair drifts
+    // together; they grow in once the land is there.
+    let cloud_since = since.clone();
+    let clouds = Layer::paint(move |c| {
+        let Some(t) = cloud_since() else { return };
+        let grow = shadow_grow(t);
+        for sx in 0..c.width {
+            let Some((top, bottom)) = puff(sx as f64 - c.offset, grow) else { continue };
+            for y in top.round() as i64..bottom.round() as i64 {
+                // A pink underside under the blush.
+                let fill = if y + 1 == bottom.round() as i64 { CLOUD_PINK } else { CLOUD_BLUSH };
+                c.set(sx as i64, y, fill);
+            }
+        }
+    })
+    .swing(30.0, 9.0, Easing::EaseInOut)
+    .opacity(0.9);
     let shadow_since = since;
     let shadows = Layer::paint(move |c| {
         let Some(t) = shadow_since() else { return };
         let grow = shadow_grow(t);
-        if grow <= 0.0 {
-            return;
-        }
         for sx in 0..c.width {
-            let x = sx as f64 - c.offset;
-            let slot = (x / 64.0).floor();
-            let vary = (slot * 2.3).sin(); // -1..1, fixed per oval
-            let dx = (x - slot * 64.0 - 32.0) / ((16.0 + 5.0 * vary) * grow);
-            if dx.abs() >= 1.0 {
-                continue;
-            }
-            for y in 0..c.height {
-                let dy = (y as f64 - top - h * (0.72 + 0.06 * vary)) / (6.0 * grow);
-                if dx * dx + dy * dy < 1.0 {
-                    c.set(sx as i64, y as i64, SHADOW);
-                }
+            let Some((top, bottom)) = shadow(sx as f64 - c.offset, grow) else { continue };
+            for y in top.ceil() as i64..bottom.ceil() as i64 {
+                c.set(sx as i64, y, SHADOW);
             }
         }
     })
@@ -203,7 +247,7 @@ pub fn landscape(since: impl Fn() -> Option<f64> + Clone + Send + 'static) -> La
     .blend(BlendMode::Multiply)
     .opacity(0.3);
 
-    let mut layers = Layers::new(ROWS).layer(sky);
+    let mut layers = Layers::new(ROWS).layer(sky).layer(clouds);
     for (i, r) in ridges.into_iter().enumerate() {
         let r = r
             .swing(SWING * (1.0 + DEPTH * i as f64), PERIOD, Easing::EaseInOut)
@@ -237,6 +281,56 @@ mod tests {
         // Once everything has landed, the entrance makes no difference.
         assert_eq!(render(Some(ENTRANCE_SECS), 30).to_ansi_string(), render(Some(1000.0), 30).to_ansi_string());
         assert!(render(Some(1000.0), 30).to_ansi_string().contains('▀'));
+    }
+
+    /// Pixel (x, y) of a half-block frame.
+    fn px(buf: &FrameBuffer, x: usize, y: usize) -> Option<Color> {
+        let cell = buf.get(x, y / 2);
+        if cell.ch == ' ' {
+            return cell.bg;
+        }
+        if y % 2 == 0 { Some(cell.color) } else { cell.bg }
+    }
+
+    #[test]
+    fn every_shadow_has_its_cloud_overhead() {
+        // Same columns: a cloud casts each shadow, straight down.
+        for grow in [0.3, 1.0] {
+            for x in -400..400 {
+                let x = x as f64 + 0.5;
+                assert_eq!(puff(x, grow).is_some(), shadow(x, grow).is_some(), "x {x}, grow {grow}");
+            }
+        }
+        // And there are some.
+        assert!((0..400).any(|x| puff(x as f64, 1.0).is_some()));
+    }
+
+    #[test]
+    fn clouds_hang_in_the_open_sky_above_their_shadows() {
+        for x in 0..400 {
+            let x = x as f64 + 0.5;
+            if let (Some((cloud_top, cloud_bottom)), Some((shadow_top, _))) = (puff(x, 1.0), shadow(x, 1.0)) {
+                assert!(cloud_top >= 2.0, "under the top border: {cloud_top}");
+                assert!(cloud_top < cloud_bottom);
+                assert!(cloud_bottom < sky_floor(), "{cloud_bottom} not above the cloud banks");
+                assert!(cloud_bottom < shadow_top);
+            }
+        }
+    }
+
+    #[test]
+    fn clouds_grow_in_with_their_shadows() {
+        assert!((0..400).all(|x| puff(x as f64, 0.0).is_none()));
+        let width = |grow| (0..400).filter(|&x| puff(x as f64, grow).is_some()).count();
+        assert!(width(0.5) < width(1.0));
+        // On screen: something not sky in the open sky once they're in.
+        let sky_rows = 2..sky_floor() as usize;
+        // (The sky dithers between exactly SKY and SKY_HAZE.)
+        let sky = |c: Color| c == SKY || c == SKY_HAZE;
+        let full = render(Some(1000.0), 0);
+        assert!(sky_rows.clone().any(|y| (0..60).any(|x| px(&full, x, y).is_some_and(|c| !sky(c)))));
+        let early = render(Some(SHADOW_START - 0.1), 0);
+        assert!(sky_rows.clone().all(|y| (0..60).all(|x| px(&early, x, y).is_none_or(sky))));
     }
 
     #[test]
