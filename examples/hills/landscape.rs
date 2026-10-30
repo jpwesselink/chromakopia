@@ -109,11 +109,17 @@ fn cloud_at(x: f64, grow: f64) -> Option<(f64, f64)> {
 }
 
 /// The cloud at column `x`, high in the open sky: its top and flat
-/// bottom in pixel rows, puffed up with a scalloped top.
+/// bottom in pixel rows. A cumulus: a big round puff in the middle, a
+/// smaller one either side, as wide together as the shadow below.
 fn puff(x: f64, grow: f64) -> Option<(f64, f64)> {
     let (dx, vary) = cloud_at(x, grow)?;
+    let half = (16.0 + 5.0 * vary) * grow;
     let bottom = LAND_TOP + 4.0 + 2.0 * vary;
-    let height = 5.0 * grow * (1.0 - dx * dx).sqrt() * (0.8 + 0.2 * (PI * x / 6.0).sin().abs());
+    // (centre, radius) as fractions of the half width.
+    let height = [(0.0, 0.6), (-0.55, 0.45), (0.55, 0.45)]
+        .iter()
+        .map(|&(c, r): &(f64, f64)| (r * r - (dx - c).powi(2)).max(0.0).sqrt() * half)
+        .fold(0.0, f64::max);
     Some((bottom - height, bottom))
 }
 
@@ -315,6 +321,28 @@ mod tests {
                 assert!(cloud_top < cloud_bottom);
                 assert!(cloud_bottom < sky_floor(), "{cloud_bottom} not above the cloud banks");
                 assert!(cloud_bottom < shadow_top);
+            }
+        }
+    }
+
+    #[test]
+    fn clouds_are_puffy_on_top() {
+        // Per cloud: tall for its width, with a lump either side of a big
+        // middle one.
+        let mut cloud: Vec<(f64, f64)> = Vec::new();
+        for x in 0..400 {
+            let x = x as f64 + 0.5;
+            match puff(x, 1.0) {
+                Some((top, bottom)) => cloud.push((top, bottom)),
+                None if !cloud.is_empty() => {
+                    let tallest = cloud.iter().map(|(t, b)| b - t).fold(0.0, f64::max);
+                    assert!(tallest >= 0.25 * cloud.len() as f64, "{tallest} tall, {} wide", cloud.len());
+                    let tops: Vec<f64> = cloud.iter().map(|c| c.0).collect();
+                    let peaks = tops.windows(3).filter(|w| w[1] < w[0] && w[1] <= w[2]).count();
+                    assert_eq!(peaks, 3, "{tops:?}");
+                    cloud.clear();
+                }
+                None => {}
             }
         }
     }
