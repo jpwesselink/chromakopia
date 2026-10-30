@@ -256,7 +256,7 @@ pub const PITCH: &str = "{hills}{style flat}Welly well, what do we have here?{st
 Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 Clouds that drift and throw shadows on the land. Never shade. They're above that.   \
 A logo that will not sit still, bouncing every letter on its own little wave...   in fact,{logo away} it won't even stay.   \
-{path loop}And all of it at a silky 60 frames per second.{path off}   {font big}TWIS{pause 1}TED!{font c64}   {logo}\
+{path loop}And all of it at a silky 60 frames per second.{path off}   {font big}BENDING THE RULES{font c64}   {logo}\
 How is it done?   Ha!   A magician never tells...   {font term}(this is your terminal's own font, by the way - blink and you miss it){font c64}   \
 ...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}{wave off}...ofc you should type it without the colours, just like we did in 1986...{wave on}{style candy}   \
 Greetings fly out to Exel, {} and Hardbeat - still sorry, Apache: no Microsoft BackOffice was harmed - Paradox - Pitr / Eindbazen - ISO - Danny Styles - Spidey - Humasect - Nightdead - Si-Goat - Stephen Parker - Koffiekop - Kevinjel - Sanity - \
