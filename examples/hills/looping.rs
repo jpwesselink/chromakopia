@@ -8,7 +8,9 @@
 //! up per frame.
 
 use chromakopia::prelude::*;
-use std::f64::consts::TAU;
+use std::collections::HashMap;
+use std::f64::consts::{PI, TAU};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::glyphs::{LETTER_HIGHLIGHT, LETTER_LOWER, LETTER_UPPER};
 
@@ -19,6 +21,12 @@ pub const LOOP_R: f64 = 36.0;
 pub const LOOP_SHIFT: f64 = 32.0;
 /// Track length the loop adds: once round.
 pub const LOOP_EXTRA: f64 = TAU * LOOP_R;
+/// How high the snake's waves rise above the scroller's line, in pixels:
+/// an upright letter on a crest just clears the top border.
+pub const SNAKE_RISE: f64 = 69.0;
+/// Screen pixels per snake wave.
+pub const SNAKE_WAVE: f64 = 90.0;
+
 /// Extra room between looping letters, in pixels: turned, a letter
 /// reaches further than upright, so they'd touch at their usual spacing.
 pub const LETTER_GAP: f64 = 3.0;
@@ -31,12 +39,16 @@ pub enum Shape {
     /// In from the right, once round a vertical loop in the middle of the
     /// screen, out to the left.
     Loop,
+    /// Big waves across the whole screen, from the scroller's line up to
+    /// near the top and back — never crossing itself.
+    Snake,
 }
 
 impl Shape {
     pub fn named(name: &str) -> Option<Shape> {
         match name {
             "loop" => Some(Shape::Loop),
+            "snake" => Some(Shape::Snake),
             _ => None,
         }
     }
@@ -44,9 +56,21 @@ impl Shape {
 
 /// Track length `shape` adds over riding straight across a screen `width`
 /// wide — what follows waits that much longer.
-pub fn extra(shape: Shape, _width: usize) -> f64 {
+pub fn extra(shape: Shape, width: usize) -> f64 {
     match shape {
         Shape::Loop => LOOP_EXTRA,
+        // Its length is the same on any line.
+        Shape::Snake => snake(width, 0.0).last().map_or(0.0, |p| p.0) - width as f64,
+    }
+}
+
+/// Track distance where `shape`'s ride is over: back on the line, or
+/// off the screen.
+#[cfg(test)]
+pub fn ride_end(shape: Shape, width: usize) -> f64 {
+    match shape {
+        Shape::Loop => loop_start(width) + LOOP_EXTRA,
+        Shape::Snake => width as f64 + extra(shape, width),
     }
 }
 
@@ -76,7 +100,48 @@ pub fn loop_start(width: usize) -> f64 {
 pub fn track(shape: Shape, d: f64, width: usize, base: f64) -> Spot {
     match shape {
         Shape::Loop => loop_track(d, width, base),
+        Shape::Snake => snake_track(d, width, base),
     }
+}
+
+/// The snake across a screen `width` wide, as (track distance, x, y)
+/// every quarter pixel along it — worked out once per screen.
+fn snake(width: usize, base: f64) -> Arc<Vec<(f64, f64, f64)>> {
+    static TABLES: OnceLock<Mutex<HashMap<(usize, u64), Arc<Vec<(f64, f64, f64)>>>>> = OnceLock::new();
+    let mut tables = TABLES.get_or_init(Default::default).lock().unwrap();
+    tables
+        .entry((width, base.to_bits()))
+        .or_insert_with(|| {
+            let w = width as f64;
+            let waves = (w / SNAKE_WAVE).round().max(1.0);
+            let at = |u: f64| (w - u, base - SNAKE_RISE * (PI * waves * u / w).sin().powi(2));
+            let mut table = vec![(0.0, w, base)];
+            let steps = width * 16;
+            for k in 1..=steps {
+                let (x, y) = at(w * k as f64 / steps as f64);
+                let &(s, px, py) = table.last().unwrap();
+                table.push((s + ((x - px).powi(2) + (y - py).powi(2)).sqrt(), x, y));
+            }
+            Arc::new(table)
+        })
+        .clone()
+}
+
+/// The snake's track: on it from the right edge, straight on off the left.
+fn snake_track(d: f64, width: usize, base: f64) -> Spot {
+    if d <= 0.0 {
+        return Spot { x: width as f64 - d, y: base, angle: 0.0 };
+    }
+    let table = snake(width, base);
+    let &(len, ..) = table.last().unwrap();
+    if d >= len {
+        return Spot { x: -(d - len), y: base, angle: 0.0 };
+    }
+    let i = table.partition_point(|p| p.0 <= d).max(1);
+    let ((s0, x0, y0), (s1, x1, y1)) = (table[i - 1], table[i]);
+    let f = (d - s0) / (s1 - s0);
+    // Upright moving left; leaning back as it climbs, forward as it dives.
+    Spot { x: x0 + (x1 - x0) * f, y: y0 + (y1 - y0) * f, angle: (y0 - y1).atan2(x0 - x1) }
 }
 
 /// The loop's track: the straight parts on row `base`, round the loop in
@@ -229,6 +294,12 @@ mod tests {
     const W_GLYPH: [u8; 8] = [0x63, 0x63, 0x63, 0x6B, 0x7F, 0x77, 0x63, 0x00];
 
     #[test]
+    fn shapes_by_name() {
+        assert_eq!(Shape::named("snake"), Some(Shape::Snake));
+        assert_eq!(Shape::named("loop"), Some(Shape::Loop));
+    }
+
+    #[test]
     fn upright_is_the_letter_as_drawn() {
         // Turned by 0: every lit pixel of the 2× glyph, centred on (0, 0).
         let face = turned(&W_GLYPH, 2, 0);
@@ -284,6 +355,58 @@ mod tests {
             let n = turned(&W_GLYPH, 2, i).len() as f64;
             assert!((0.75 * ink..1.25 * ink).contains(&n), "angle {i}: {n} vs {ink}");
         }
+    }
+
+    #[test]
+    fn snake_starts_and_ends_on_the_line() {
+        let start = track(Shape::Snake, 0.0, W, BASE);
+        assert_eq!((start.x, start.y), (W as f64, BASE));
+        assert!(start.angle.abs() < 0.05, "{start:?}");
+        let len = W as f64 + extra(Shape::Snake, W);
+        let end = track(Shape::Snake, len, W, BASE);
+        assert!(end.x.abs() < 0.5 && (end.y - BASE).abs() < 0.5, "{end:?}");
+        // Then straight on, off to the left.
+        let off = track(Shape::Snake, len + 5.0, W, BASE);
+        assert!((off.x + 5.0).abs() < 1e-6 && (off.y, off.angle) == (BASE, 0.0), "{off:?}");
+    }
+
+    #[test]
+    fn snake_climbs_to_the_crest_in_big_waves() {
+        let len = W as f64 + extra(Shape::Snake, W);
+        let ys: Vec<f64> = (0..=1000).map(|k| track(Shape::Snake, len * k as f64 / 1000.0, W, BASE).y).collect();
+        let top = ys.iter().cloned().fold(f64::MAX, f64::min);
+        assert!((top - (BASE - SNAKE_RISE)).abs() < 0.5, "{top}");
+        // A wave per SNAKE_WAVE pixels of screen, at least one.
+        let crests = ys.windows(3).filter(|w| w[1] < w[0] && w[1] <= w[2] && w[1] < BASE - SNAKE_RISE + 1.0).count();
+        assert_eq!(crests, (W as f64 / SNAKE_WAVE).round().max(1.0) as usize);
+    }
+
+    #[test]
+    fn snake_never_doubles_back() {
+        let len = W as f64 + extra(Shape::Snake, W);
+        let xs: Vec<f64> = (0..=2000).map(|k| track(Shape::Snake, len * k as f64 / 2000.0, W, BASE).x).collect();
+        assert!(xs.windows(2).all(|w| w[1] < w[0]), "always leftward");
+    }
+
+    #[test]
+    fn snake_letters_keep_their_spacing() {
+        let len = W as f64 + extra(Shape::Snake, W);
+        for k in 0..(len as usize) {
+            let (p, q) = (track(Shape::Snake, k as f64, W, BASE), track(Shape::Snake, k as f64 + 1.0, W, BASE));
+            let step = ((q.x - p.x).powi(2) + (q.y - p.y).powi(2)).sqrt();
+            assert!((0.95..1.05).contains(&step), "d {k}: {step}");
+        }
+    }
+
+    #[test]
+    fn snake_letters_lean_with_the_slope() {
+        // Climbing (moving up and left): turned clockwise; diving: back.
+        let len = W as f64 + extra(Shape::Snake, W);
+        let climbing = track(Shape::Snake, len * 0.1, W, BASE);
+        assert!(climbing.angle > 0.3, "{climbing:?}");
+        let crest_d = (0..1000).map(|k| len * k as f64 / 1000.0).min_by(|&a, &b| track(Shape::Snake, a, W, BASE).y.total_cmp(&track(Shape::Snake, b, W, BASE).y)).unwrap();
+        assert!(track(Shape::Snake, crest_d, W, BASE).angle.abs() < 0.1);
+        assert!(track(Shape::Snake, crest_d + 20.0, W, BASE).angle < -0.3);
     }
 
     #[test]
