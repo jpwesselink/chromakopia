@@ -11,6 +11,7 @@ use super::glyphs::{
     c64, has_c64, has_mario, mario, shade, stamp, stamp_tinted, LETTER_HIGHLIGHT, LETTER_LOWER, LETTER_OUTLINE, LETTER_UPPER,
 };
 use super::looping::{self, angle_index, track, ANGLES};
+use super::dive;
 use super::script::{Glyph, Wave};
 use super::tiny;
 
@@ -36,7 +37,8 @@ fn long_lift(x: f64, t: f64, width: usize) -> f64 {
 fn lift(g: &Glyph, x: f64, t: f64, width: usize) -> f64 {
     let ripple = || SCROLL_WAVE * (TAU * t / SCROLL_WAVE_PERIOD + x * 0.05).sin();
     match g.wave {
-        Wave::Off => 0.0,
+        // (Water letters ride the surface instead: see `Scroller::base`.)
+        Wave::Off | Wave::Water => 0.0,
         Wave::On => ripple(),
         // The ripple hands over to the long wave as it swells in.
         Wave::Long(swell) => (1.0 - swell) * ripple() + swell * long_lift(x, t, width),
@@ -269,12 +271,24 @@ impl Scroller {
 
     /// Screen x and wave-shifted bottom line of `g`, `scrolled` pixels in,
     /// or None when it's off screen.
-    fn spot(&self, g: &Glyph, width: usize, scrolled: f64, t: f64) -> Option<(i64, i64)> {
+    fn spot(&self, g: &Glyph, (width, height): (usize, usize), scrolled: f64, t: f64, dive: f64) -> Option<(i64, i64)> {
         let x = width as i64 - pen(scrolled) + g.x as i64;
         if x < -(advance(g.font, g.ch) + 4) || x > width as i64 {
             return None;
         }
-        Some((x, self.y0 + BASE + lift(g, x as f64, t, width).round() as i64))
+        Some((x, self.base(g, x as f64 + advance(g.font, g.ch) as f64 / 2.0, (width, height), t, dive)))
+    }
+
+    /// `g`'s bottom line with its middle at screen `x`: on the wave — or,
+    /// riding the water, moving from the straight line onto the surface
+    /// as the camera dives in.
+    fn base(&self, g: &Glyph, x: f64, (width, height): (usize, usize), t: f64, dive: f64) -> i64 {
+        let line = (self.y0 + BASE) as f64;
+        if g.wave != Wave::Water || dive <= 0.0 {
+            return (line + lift(g, x, t, width)).round() as i64;
+        }
+        let surface = dive::Camera::new(width, height, dive, t).surface_y(x, t);
+        (line + (surface - line) * Easing::EaseInOut.apply(dive.min(1.0))).round() as i64
     }
 
     /// Paint a run of zoomed letters, tight against each other, each
@@ -305,6 +319,11 @@ impl Scroller {
     /// Paint the pixel-font letters `scrolled` pixels in (0 = just off the
     /// right edge). Terminal-font letters go on in `paint_cells`.
     pub fn paint(&self, c: &mut Canvas, scrolled: f64) {
+        self.paint_dived(c, scrolled, 0.0);
+    }
+
+    /// `paint`, with the camera `dive` (0..=1) of the way into the big C.
+    pub fn paint_dived(&self, c: &mut Canvas, scrolled: f64, dive: f64) {
         let t = c.frame as f64 / FPS;
         let mut face = Vec::new();
         for run in &self.runs {
@@ -314,7 +333,7 @@ impl Scroller {
             if self.paint_on_path(c, g, scrolled, &mut face) {
                 continue;
             }
-            let Some((x, base)) = self.spot(g, c.width, scrolled, t) else { continue };
+            let Some((x, base)) = self.spot(g, (c.width, c.height), scrolled, t, dive) else { continue };
             if g.ch == ' ' {
                 continue;
             }
@@ -339,7 +358,7 @@ impl Scroller {
     pub fn paint_cells(&self, buf: &mut FrameBuffer, scrolled: f64, frame: usize) {
         let t = frame as f64 / FPS;
         for g in self.glyphs.iter().filter(|g| g.font == Font::Term && g.ch != ' ') {
-            let Some((x, base)) = self.spot(g, buf.width, scrolled, t) else { continue };
+            let Some((x, base)) = self.spot(g, (buf.width, buf.height * 2), scrolled, t, 0.0) else { continue };
             let row = (base - 4).div_euclid(2);
             if x < 0 || x as usize >= buf.width || row < 0 || row as usize >= buf.height {
                 continue;
@@ -377,7 +396,7 @@ pub const PITCH: &str = "{hills}{style flat}Welly well, what do we have here?{st
 Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 Clouds that drift and throw shadows on the land. Never shade. They're above that.   \
 A logo that will not sit still, bouncing every letter on its own little wave...   in fact, it won't{logo away} even stay.    \
-{path loop}And all of it at a silky 60 frames per second.{path off}   {font big}BENDING THE RULES{font c64}   {logo}{zoom on}Zoom in, zoom out...{zoom off}   \
+{path loop}And all of it at a silky 60 frames per second.{path off}{dive in}{gap}Dive in, the water's fine...   making waves since 1986!{dive out}{gap}{font big}BENDING THE RULES{font c64}   {logo}{zoom on}Zoom in, zoom out...{zoom off}   \
 How is it done?   Ha!   A magician never tells...   {font term}(this is your terminal's own font, by the way - blink and you miss it){font c64}   \
 ...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}{wave off}...ofc you should type it{logo out} without the colours, just like we did in 1986...{wave on}{style candy}   \
 {wave long}Greetings fly out to Exel, {} and Hardbeat - still sorry, Apache: no Microsoft BackOffice was harmed - Paradox - Pitr / Eindbazen - ISO - Danny Styles - Spidey - Humasect - Nightdead - Si-Goat - Stephen Parker - Koffiekop - Kevinjel - Sanity - \
@@ -458,6 +477,30 @@ mod tests {
         assert!(straight.iter().all(|&t| t == straight[0]), "{straight:?}");
         let waving = tops(true);
         assert!(waving.iter().any(|&t| t != waving[0]), "flat letters should still wave");
+    }
+
+    #[test]
+    fn letters_ride_the_water_once_dived_in() {
+        let wall = 0.4;
+        let g = Glyph { ch: 'M', x: 0.0, font: Font::C64, style: Style::Candy, wave: Wave::Water, path: None, zoom: false };
+        let bottom = |dive: f64| {
+            let s = Scroller::new(vec![g], SCROLLER_Y);
+            let layers = Layers::new(ROWS).layer(Layer::paint(move |c| s.paint_dived(c, (c.width - 50) as f64, dive)));
+            let mut buf = FrameBuffer::new(112, ROWS);
+            layers.render(&mut buf, (wall * FPS) as usize);
+            // Lowest pixel row with ink (outline/extrusion included).
+            (0..ROWS * 2).rev().find(|&y| (50..60).any(|x| {
+                let cell = buf.get(x, y / 2);
+                if y % 2 == 0 { cell.ch != ' ' } else { cell.bg.is_some() || cell.ch == '▄' }
+            })).unwrap() as f64
+        };
+        // Dived in: sitting on the surface under it (outline and extrusion
+        // a pixel or two into the water)...
+        let cam = dive::Camera::new(112, ROWS * 2, 1.0, wall);
+        let surface = cam.surface_y(54.0, wall);
+        assert!((bottom(1.0) - (surface + 1.0)).abs() <= 1.5, "{} vs surface {surface}", bottom(1.0));
+        // ...not dived: on the scroller's line.
+        assert!((bottom(0.0) - (SCROLLER_Y + BASE + 1) as f64).abs() <= 1.0, "{}", bottom(0.0));
     }
 
     #[test]

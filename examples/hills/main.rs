@@ -10,6 +10,7 @@
 //! Run: `cargo run --release --example hills`
 //! Keys: → n space next code · ← p previous code · q quit
 
+mod dive;
 mod figlet;
 mod glyphs;
 mod intro;
@@ -66,6 +67,8 @@ struct View {
     hills: Option<f64>,
     /// Seconds into the cold open, while it plays.
     intro: Option<f64>,
+    /// How far into the big C the camera has dived (0..=1).
+    dive: f64,
 }
 
 /// What is on screen at script time `t`: the scroller, plus the landscape
@@ -100,8 +103,16 @@ fn script_view(tl: &script::Timeline, intro_secs: f64, t: f64) -> View {
             .map(|h| (h - gone).min(landscape::ENTRANCE_SECS) - gone * landscape::EXIT_SPEED)
             .filter(|&h| h > 0.0);
     }
+    // In over DIVE_SECS from `{dive in}`, back out from `{dive out}`.
+    let (dive_in, dive_out) = (tl.since(script::Code::Dive(true), t), tl.since(script::Code::Dive(false), t));
+    let dive = match (dive_in, dive_out) {
+        (Some(a), b) if b.is_none_or(|b| a > b) => (t - a) / dive::DIVE_SECS,
+        (_, Some(b)) => 1.0 - (t - b) / dive::DIVE_SECS,
+        _ => 0.0,
+    }
+    .clamp(0.0, 1.0);
     let intro = (t < intro_secs).then_some(t);
-    View { logo, heading: None, panel: None, pushed: None, scroll: tl.scrolled(t), hills, intro }
+    View { logo, heading: None, panel: None, pushed: None, scroll: tl.scrolled(t), hills, intro, dive }
 }
 
 /// What is on screen `local` seconds into storyboard step `i`. The
@@ -128,7 +139,7 @@ fn view_for(steps: &[Step], i: usize, local: f64) -> View {
     let pushed = panel
         .filter(|pv| !pv.slide.first && local < panel::ENTER_SECS)
         .map(|_| PanelView { step: i - 1, local: steps[i - 1].secs + local, slide: slide_of(steps, i - 1) });
-    View { logo, heading, panel, pushed, scroll: 0.0, hills: Some(f64::INFINITY), intro: None }
+    View { logo, heading, panel, pushed, scroll: 0.0, hills: Some(f64::INFINITY), intro: None, dive: 0.0 }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -395,7 +406,7 @@ fn build_layers(
     landscape::landscape(move || hills_view.lock().unwrap().hills)
         .layer(Layer::paint(move |c| {
             let view = *logo_view.lock().unwrap();
-            word.paint(c, view.logo, looping::tilt(view.scroll, ride));
+            word.paint(c, view.logo, looping::tilt(view.scroll, ride), view.dive);
             let phase = view.logo;
             word.paint_tagline(c, phase);
         }))
@@ -406,7 +417,10 @@ fn build_layers(
                 panel::paint_frame(c, &geo);
             }
         }))
-        .layer(Layer::paint(move |c| scroller.paint(c, scroll_view.lock().unwrap().scroll)))
+        .layer(Layer::paint(move |c| {
+            let view = *scroll_view.lock().unwrap();
+            scroller.paint_dived(c, view.scroll, view.dive)
+        }))
 }
 
 /// The block heading under the panel in the small font, popping up with
@@ -655,6 +669,15 @@ mod tests {
             stage.render(&mut b, 0);
             out += &format!("\n=== {name} ===\n{}\n", b.to_ansi_string());
         }
+        // The dive into the big C: on the way in, in, letters on the water, on the way out.
+        let dive_in = first_cue(&stage, script::Code::Dive(true));
+        let dive_out = first_cue(&stage, script::Code::Dive(false));
+        for (name, t) in [("dive 0.6", dive_in + 0.6), ("dive in", dive_in + 1.6), ("dive ride", dive_in + 3.5), ("dive out", dive_out + 0.8)] {
+            stage.seek_to(t);
+            let mut b = FrameBuffer::new(112, ROWS);
+            stage.render(&mut b, 30);
+            out += &format!("\n=== {name} ===\n{}\n", b.to_ansi_string());
+        }
         // The long wave over the greetings, a few seconds apart.
         let first = stage.glyphs.iter().find(|g| matches!(g.wave, script::Wave::Long(_))).unwrap();
         stage.seek_to(when_scrolled(&stage, first.x + 400.0));
@@ -725,6 +748,40 @@ mod tests {
     /// When the scroll has reached `px`.
     fn when_scrolled(stage: &Stage, px: f64) -> f64 {
         (0..).map(|f| f as f64 / FPS).find(|&t| stage.timeline.scrolled(t) >= px).unwrap()
+    }
+
+    #[test]
+    fn the_camera_dives_in_and_comes_back_out() {
+        let w = 100;
+        let placed = script::parse("{dive in}{gap}{gap}abc{dive out}{gap}def").unwrap().place(w).unwrap();
+        let tl = script::Timeline::new(&placed, w);
+        let at = |on| tl.cues.iter().find(|c| c.code == script::Code::Dive(on)).unwrap().t;
+        let dive = |t| script_view(&tl, 0.0, t).dive;
+        assert_eq!(dive(at(true) - 0.1), 0.0);
+        assert!(dive(at(true) + 0.5) > 0.0 && dive(at(true) + 0.5) < 1.0);
+        assert_eq!(dive(at(true) + dive::DIVE_SECS), 1.0);
+        assert_eq!(dive(at(false) - 0.1), 1.0);
+        assert!(dive(at(false) + 0.5) < 1.0);
+        assert_eq!(dive(at(false) + dive::DIVE_SECS), 0.0);
+    }
+
+    #[test]
+    fn the_pitch_dives_into_the_big_c_after_the_loop() {
+        let w = 112;
+        let stage = Stage::new(w);
+        let dive_in = first_cue(&stage, script::Code::Dive(true));
+        let dive_out = first_cue(&stage, script::Code::Dive(false));
+        // Once the last rider is out of the loop, while the C is big in it...
+        let loopers: Vec<_> = stage.glyphs.iter().filter(|g| g.path.is_some()).collect();
+        let last_out = when_scrolled(&stage, loopers.last().unwrap().x + 4.0 + looping::loop_start(w) + looping::LOOP_EXTRA);
+        assert!(dive_in >= last_out, "{dive_in} vs {last_out}");
+        stage.seek_to(dive_in);
+        assert!(matches!(stage.view_at(0).logo, LogoPhase::Away(t) if t >= wordmark::AWAY_DONE));
+        // ...and back out, all the way, before the logo comes home.
+        let back = stage.timeline.cues.iter().find(|c| c.code == script::Code::Logo && c.t > dive_in).unwrap().t;
+        assert!(dive_out + dive::DIVE_SECS <= back, "{dive_out} vs {back}");
+        // Some letters ride the water.
+        assert!(stage.glyphs.iter().any(|g| g.wave == script::Wave::Water));
     }
 
     #[test]

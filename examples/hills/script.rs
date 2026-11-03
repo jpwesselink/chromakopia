@@ -46,6 +46,9 @@ pub enum Code {
     /// Everything after rides this path across the screen (None: back on
     /// the scroller's line).
     Path(Option<Shape>),
+    /// The camera dives into the big C (true) — what follows rides its
+    /// liquid's surface — or comes back out (false).
+    Dive(bool),
     /// Everything leaves: the logo jumps away, the landscape takes
     /// itself down — before the text wraps and the show starts over.
     Bye,
@@ -64,6 +67,8 @@ pub enum Wave {
     /// swelled in this much (0..=1) — it grows in after the code and dies
     /// away before the next.
     Long(f64),
+    /// The surface of the liquid in the big C, once the camera dives in.
+    Water,
 }
 
 /// Text pixels a long wave takes to swell in, and to die away.
@@ -98,6 +103,8 @@ pub fn parse(src: &str) -> Result<Script, String> {
             (Some("logo"), None, _) => Code::Logo,
             (Some("logo"), Some("away"), None) => Code::LogoAway,
             (Some("logo"), Some("out"), None) => Code::LogoOut,
+            (Some("dive"), Some("in"), None) => Code::Dive(true),
+            (Some("dive"), Some("out"), None) => Code::Dive(false),
             (Some("hills"), None, _) => Code::Hills,
             (Some("bye"), None, _) => Code::Bye,
             (Some("gap"), None, _) => Code::Gap,
@@ -166,6 +173,7 @@ impl Script {
         let (mut font, mut style, mut wave, mut path, mut zoom) = (Font::C64, Style::Candy, Wave::On, None, false);
         // Where each long wave starts and ends, in text pixels.
         let mut longs: Vec<(f64, f64)> = Vec::new();
+        let mut dived = false;
         let (mut glyphs, mut events, mut x) = (Vec::new(), Vec::new(), 0.0);
         let mut codes = self.events.iter().peekable();
         let chars: Vec<char> = self.text.chars().collect();
@@ -189,6 +197,10 @@ impl Script {
                         wave = next;
                     }
                     Code::Zoom(on) => zoom = on,
+                    Code::Dive(on) => {
+                        dived = on;
+                        events.push((x, code));
+                    }
                     Code::Path(next) => {
                         if let Some(shape) = path.filter(|&p| Some(p) != next) {
                             x += looping::extra(shape, width);
@@ -202,7 +214,7 @@ impl Script {
             if !scroller::has(font, ch) {
                 return Err(format!("font {font:?} has no {ch:?} (in {:?})", chars[i.saturating_sub(10)..(i + 10).min(chars.len())].iter().collect::<String>()));
             }
-            let g = Glyph { ch, x, font, style, wave, path, zoom };
+            let g = Glyph { ch, x, font, style, wave: if dived { Wave::Water } else { wave }, path, zoom };
             let zooms = scroller::zooms(&g);
             if ch != ' ' || zooms {
                 glyphs.push(g);
@@ -377,6 +389,16 @@ mod tests {
         assert_eq!(p.glyphs.iter().map(|g| g.wave).collect::<Vec<_>>(), vec![Wave::On, Wave::On, Wave::Off]);
         assert!(parse("{font comic-sans}").unwrap_err().contains("comic-sans"));
         assert!(parse("{style}").is_err());
+    }
+
+    #[test]
+    fn letters_in_a_dive_ride_the_water() {
+        let s = parse("a{dive in}bc{dive out}d").unwrap();
+        assert_eq!(s.events, vec![(1, Code::Dive(true)), (3, Code::Dive(false))]);
+        assert!(parse("{dive deep}").is_err());
+        let p = s.place(100).unwrap();
+        assert_eq!(p.glyphs.iter().map(|g| g.wave).collect::<Vec<_>>(), vec![Wave::On, Wave::Water, Wave::Water, Wave::On]);
+        assert_eq!(p.events.iter().map(|e| e.1).collect::<Vec<_>>(), vec![Code::Dive(true), Code::Dive(false)]);
     }
 
     #[test]

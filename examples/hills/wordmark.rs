@@ -8,6 +8,7 @@ use std::f64::consts::TAU;
 
 use super::glyphs::{mario, stamp, stamp_tinted, LETTER_LOWER, LETTER_UPPER};
 use super::layout::Layout;
+use super::dive;
 use super::looping;
 use super::tiny;
 use super::ROWS;
@@ -63,7 +64,7 @@ pub const BIG_C: i64 = 3;
 pub const MORPH_SECS: f64 = 1.0;
 const BIG_C_BOB: f64 = 0.3;
 /// The liquid in the big C: how high its waves slosh, in pixels.
-const SLOSH: f64 = 1.5;
+pub const SLOSH: f64 = 1.5;
 /// When the C leaves for the loop: as the last of the others (H) jumps.
 const C_LEAVES: f64 = (WORD.len() - 2) as f64 * EXIT_STAGGER;
 /// Seconds until the others are gone and the C is big in the loop.
@@ -138,6 +139,11 @@ fn away_offset(i: usize, t: f64) -> f64 {
 }
 
 /// How far the C has grown into the loop's middle in `phase` (0 = home).
+/// How far the big C bobs up and down in the loop, `wall` seconds in.
+pub fn big_c_bob(wall: f64) -> f64 {
+    BIG_C_BOB * DYCP_AMP * (TAU * wall / DYCP_PERIOD).sin()
+}
+
 fn c_grown(phase: LogoPhase) -> f64 {
     match phase {
         LogoPhase::Away(t) => Easing::EaseInOut.apply(((t - C_LEAVES) / MORPH_SECS).clamp(0.0, 1.0)),
@@ -239,8 +245,9 @@ impl Wordmark {
     /// Paint the word for `phase`. Letters go left to right, each fully
     /// (extrusion, outline, face) before the next, so every letter covers
     /// its left neighbour's extrusion. `tilt` is which way is down in the
-    /// big C, if it's out (see `looping::tilt`).
-    pub fn paint(&self, c: &mut Canvas, phase: LogoPhase, tilt: f64) {
+    /// big C, if it's out (see `looping::tilt`); `dive` how far the camera
+    /// has gone into it (see `dive`).
+    pub fn paint(&self, c: &mut Canvas, phase: LogoPhase, tilt: f64, dive: f64) {
         if phase == LogoPhase::Hidden {
             return;
         }
@@ -252,7 +259,9 @@ impl Wordmark {
         for (i, glyph) in self.glyphs.iter().enumerate() {
             let at = (x0 + (i * ADVANCE) as i64 * s, y0 + self.bob(i, wall, phase));
             let grown = c_grown(phase);
-            if i == 0 && grown > 0.0 {
+            if i == 0 && grown >= 1.0 && dive > 0.0 {
+                dive::Camera::new(c.width, c.height, dive, wall).paint(c, glyph, wall);
+            } else if i == 0 && grown > 0.0 {
                 self.paint_big_c(c, glyph, at, grown, wall, tilt);
             } else {
                 stamp(c, glyph, at, s, 2, &mut face);
@@ -268,7 +277,7 @@ impl Wordmark {
     fn paint_big_c(&self, c: &mut Canvas, glyph: &[u8; 8], home: (i64, i64), grown: f64, wall: f64, tilt: f64) {
         let (small, big) = (8.0 * self.scale as f64, 8.0 * BIG_C as f64);
         let (cx, cy) = looping::loop_centre(c.width);
-        let bob = BIG_C_BOB * DYCP_AMP * (TAU * wall / DYCP_PERIOD).sin();
+        let bob = big_c_bob(wall);
         let lerp = |a: f64, b: f64| a + (b - a) * grown;
         let size = lerp(small, big).round();
         let mid = (lerp(home.0 as f64 + small / 2.0, cx), lerp(home.1 as f64 + small / 2.0, cy + bob));
@@ -276,11 +285,9 @@ impl Wordmark {
         // Down, for a rider turned by `tilt`, is (−sin, cos); the surface
         // runs across it, through the middle, with two waves running along.
         let (sin, cos) = tilt.sin_cos();
-        let slosh = SLOSH * size / big;
         let liquid = move |x: f64, y: f64| {
             let (up, along) = (x * sin - y * cos, x * cos + y * sin);
-            let wave = slosh * ((along * 0.35 - 3.0 * wall).sin() + 0.6 * (along * 0.6 + 2.1 * wall).sin());
-            Some(if up < wave { LETTER_LOWER } else { LETTER_UPPER })
+            Some(if up < dive::wave(along, wall) * size / big { LETTER_LOWER } else { LETTER_UPPER })
         };
         stamp_tinted(c, glyph, at, size as i64, 2, liquid);
     }
@@ -297,7 +304,7 @@ mod tests {
     fn ink(screen_w: usize, phase: LogoPhase, frame: usize) -> Vec<(i64, i64)> {
         let word = Wordmark::placed(screen_w);
         let layers = Layers::new(ROWS).layer(Layer::paint(move |c| {
-            word.paint(c, phase, 0.0);
+            word.paint(c, phase, 0.0, 0.0);
             word.paint_tagline(c, phase);
         }));
         let mut buf = FrameBuffer::new(screen_w, ROWS);
@@ -453,7 +460,7 @@ mod tests {
         for screen_w in [80, 120, 200, 300] {
             let word = Wordmark::placed(screen_w);
             let bottom = Layout::for_width(screen_w).logo_last();
-            let layers = Layers::new(ROWS).layer(Layer::paint(move |c| word.paint(c, LogoPhase::Top, 0.0)));
+            let layers = Layers::new(ROWS).layer(Layer::paint(move |c| word.paint(c, LogoPhase::Top, 0.0, 0.0)));
             let (mut lowest, mut highest) = (0, i64::MAX);
             for frame in (0..600).step_by(3) {
                 let mut buf = FrameBuffer::new(screen_w, ROWS);
