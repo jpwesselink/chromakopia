@@ -60,9 +60,9 @@ pub enum Wave {
     Off,
     /// The scroller's ripple.
     On,
-    /// The ripple on a long, slow wave from corner to corner, swelled in
-    /// this much (0..=1) — it grows in after the code and dies away before
-    /// the next.
+    /// A long, slow wave from corner to corner instead of the ripple,
+    /// swelled in this much (0..=1) — it grows in after the code and dies
+    /// away before the next.
     Long(f64),
 }
 

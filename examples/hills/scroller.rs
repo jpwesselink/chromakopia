@@ -38,7 +38,8 @@ fn lift(g: &Glyph, x: f64, t: f64, width: usize) -> f64 {
     match g.wave {
         Wave::Off => 0.0,
         Wave::On => ripple(),
-        Wave::Long(swell) => ripple() + swell * long_lift(x, t, width),
+        // The ripple hands over to the long wave as it swells in.
+        Wave::Long(swell) => (1.0 - swell) * ripple() + swell * long_lift(x, t, width),
     }
 }
 /// Every font's baseline sits on `y0 + BASE` (plus the wave).
@@ -457,6 +458,17 @@ mod tests {
         assert!(straight.iter().all(|&t| t == straight[0]), "{straight:?}");
         let waving = tops(true);
         assert!(waving.iter().any(|&t| t != waving[0]), "flat letters should still wave");
+    }
+
+    #[test]
+    fn long_waves_ride_without_the_ripple() {
+        let g = |wave| Glyph { ch: 'A', x: 0.0, font: Font::C64, style: Style::Candy, wave, path: None, zoom: false };
+        for (x, t) in [(10.0, 0.0), (55.0, 0.3), (90.0, 1.7)] {
+            // Swelled in: just the long wave.
+            assert_eq!(lift(&g(Wave::Long(1.0)), x, t, 112), long_lift(x, t, 112));
+            // Not yet: just the ripple, so it flows on from the plain wave.
+            assert_eq!(lift(&g(Wave::Long(0.0)), x, t, 112), lift(&g(Wave::On), x, t, 112));
+        }
     }
 
     #[test]
