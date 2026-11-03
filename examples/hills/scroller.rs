@@ -26,12 +26,28 @@ const SCROLL_WAVE_PERIOD: f64 = 0.8;
 pub const LONG_UP: f64 = 50.0;
 pub const LONG_DOWN: f64 = 12.0;
 const LONG_PERIOD: f64 = 8.0;
+/// How many pixels long-wave letters grow down low (and shrink up high).
+const LONG_ZOOM: f64 = 2.0;
+
+/// Where the long wave is at screen `x`, `t` seconds in: -1 at its top, 1 at its bottom.
+fn long_phase(x: f64, t: f64, width: usize) -> f64 {
+    (TAU * (x / (2.0 * width as f64) - t / LONG_PERIOD)).sin()
+}
 
 /// How far the long wave lifts (negative) or drops a letter at screen `x`,
 /// `t` seconds in, on a screen `width` wide.
 fn long_lift(x: f64, t: f64, width: usize) -> f64 {
-    let s = (TAU * (x / (2.0 * width as f64) - t / LONG_PERIOD)).sin();
+    let s = long_phase(x, t, width);
     if s < 0.0 { s * LONG_UP } else { s * LONG_DOWN }
+}
+
+/// How big `g` is drawn at screen `x`, `t` seconds in: the C64's 8 pixels,
+/// or on the long wave a little smaller up high and bigger down low —
+/// further off and closer by.
+fn long_size(g: &Glyph, x: f64, t: f64, width: usize) -> i64 {
+    let Wave::Long(swell) = g.wave else { return 8 };
+    let s = long_phase(x, t, width);
+    (8.0 + LONG_ZOOM * s * swell).round() as i64
 }
 
 /// How far `g` rides off its line at screen `x`, `t` seconds in.
@@ -338,6 +354,14 @@ impl Scroller {
             if g.ch == ' ' {
                 continue;
             }
+            let size = long_size(g, x as f64 + 4.0, t, c.width);
+            if g.font == Font::C64 && size != 8 {
+                // Grown about its middle, standing on its baseline.
+                let (left, top) = (x + 4 - size / 2, base - (7 * size + 4) / 8);
+                let flat = g.style == Style::Flat;
+                stamp_tinted(c, &c64(g.ch), (left, top), size, if flat { 0 } else { 1 }, |_, _| flat.then_some(LETTER_HIGHLIGHT));
+                continue;
+            }
             let top = base - baseline(g.font);
             match (g.font, g.style) {
                 (Font::C64, Style::Candy) => stamp(c, &c64(g.ch), (x, top), 1, 1, &mut face),
@@ -513,6 +537,32 @@ mod tests {
             // Not yet: just the ripple, so it flows on from the plain wave.
             assert_eq!(lift(&g(Wave::Long(0.0)), x, t, 112), lift(&g(Wave::On), x, t, 112));
         }
+    }
+
+    #[test]
+    fn long_wave_letters_shrink_up_high_and_grow_down_low() {
+        let w = 112;
+        let g = |wave| Glyph { ch: 'A', x: 0.0, font: Font::C64, style: Style::Candy, wave, path: None, zoom: false };
+        // Off the long wave: the C64's own 8 pixels.
+        assert_eq!(long_size(&g(Wave::On), 30.0, 0.0, w), 8);
+        assert_eq!(long_size(&g(Wave::Long(0.0)), 30.0, 0.0, w), 8);
+        // On it: higher up, smaller — subtly, 6 to 10.
+        let on = g(Wave::Long(1.0));
+        let spots: Vec<(f64, i64)> = (0..w).map(|x| (long_lift(x as f64, 1.0, w), long_size(&on, x as f64, 1.0, w))).collect();
+        assert!(spots.iter().all(|&(_, size)| (6..=10).contains(&size)), "{spots:?}");
+        let highest = spots.iter().min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
+        let lowest = spots.iter().max_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
+        assert!(highest.1 < lowest.1, "{highest:?} vs {lowest:?}");
+        // And drawn that size: as the wave rolls under it, the letter on
+        // screen grows and shrinks.
+        let heights: std::collections::BTreeSet<usize> = (0..480)
+            .step_by(20)
+            .map(|frame| {
+                let px = painted(vec![on], w, frame);
+                px.iter().map(|p| p.1).max().unwrap() - px.iter().map(|p| p.1).min().unwrap()
+            })
+            .collect();
+        assert!(heights.len() >= 3, "{heights:?}");
     }
 
     #[test]
