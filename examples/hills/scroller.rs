@@ -11,13 +11,36 @@ use super::glyphs::{
     c64, has_c64, has_mario, mario, shade, stamp, stamp_tinted, LETTER_HIGHLIGHT, LETTER_LOWER, LETTER_OUTLINE, LETTER_UPPER,
 };
 use super::looping::{self, angle_index, track, ANGLES};
-use super::script::Glyph;
+use super::script::{Glyph, Wave};
 use super::tiny;
 
 // Scroller: riding a gentle sine through screen x — classic cracktro
 // bottom scroller. Its speed lives in the script's timeline.
-const SCROLL_WAVE: f64 = 4.0;
+pub const SCROLL_WAVE: f64 = 4.0;
 const SCROLL_WAVE_PERIOD: f64 = 0.8;
+/// `{wave long}`: half a wave across the screen, rolling by once every
+/// `LONG_PERIOD` seconds, reaching this far up and down (the logo steps
+/// off for it); down is as far as the bottom leaves room for.
+pub const LONG_UP: f64 = 50.0;
+pub const LONG_DOWN: f64 = 12.0;
+const LONG_PERIOD: f64 = 8.0;
+
+/// How far the long wave lifts (negative) or drops a letter at screen `x`,
+/// `t` seconds in, on a screen `width` wide.
+fn long_lift(x: f64, t: f64, width: usize) -> f64 {
+    let s = (TAU * (t / LONG_PERIOD + x / (2.0 * width as f64))).sin();
+    if s < 0.0 { s * LONG_UP } else { s * LONG_DOWN }
+}
+
+/// How far `g` rides off its line at screen `x`, `t` seconds in.
+fn lift(g: &Glyph, x: f64, t: f64, width: usize) -> f64 {
+    let ripple = || SCROLL_WAVE * (TAU * t / SCROLL_WAVE_PERIOD + x * 0.05).sin();
+    match g.wave {
+        Wave::Off => 0.0,
+        Wave::On => ripple(),
+        Wave::Long(swell) => ripple() + swell * long_lift(x, t, width),
+    }
+}
 /// Every font's baseline sits on `y0 + BASE` (plus the wave).
 pub const BASE: i64 = 7;
 /// Zoomed letters grow from `ZOOM_MIN` to `ZOOM_MAX` pixels and back,
@@ -221,11 +244,8 @@ impl Scroller {
         let mut spot = track(shape, d, c.width, (self.y0 + BASE) as f64);
         // On the straight it rides the wave like any letter (same phase, by
         // its left edge), calming down for the loop.
-        if g.wave {
-            let left = spot.x - adv as f64 / 2.0;
-            let wave = (TAU * c.frame as f64 / FPS / SCROLL_WAVE_PERIOD + left * 0.05).sin();
-            spot.y += (SCROLL_WAVE * wave * looping::wave_weight(shape, d, c.width)).round();
-        }
+        let left = spot.x - adv as f64 / 2.0;
+        spot.y += (lift(g, left, c.frame as f64 / FPS, c.width) * looping::wave_weight(shape, d, c.width)).round();
         if spot.x < -(adv as f64) - 4.0 || spot.x > c.width as f64 + adv as f64 {
             return true;
         }
@@ -253,8 +273,7 @@ impl Scroller {
         if x < -(advance(g.font, g.ch) + 4) || x > width as i64 {
             return None;
         }
-        let wave = if g.wave { (TAU * t / SCROLL_WAVE_PERIOD + x as f64 * 0.05).sin() } else { 0.0 };
-        Some((x, self.y0 + BASE + (SCROLL_WAVE * wave).round() as i64))
+        Some((x, self.y0 + BASE + lift(g, x as f64, t, width).round() as i64))
     }
 
     /// Paint a run of zoomed letters, tight against each other, each
@@ -272,8 +291,7 @@ impl Scroller {
             if g.ch == ' ' || x > c.width as i64 || x + size < -4 {
                 continue;
             }
-            let wave = if g.wave { (TAU * t / SCROLL_WAVE_PERIOD + x as f64 * 0.05).sin() } else { 0.0 };
-            let base = self.y0 + BASE + (SCROLL_WAVE * wave).round() as i64;
+            let base = self.y0 + BASE + lift(g, x as f64, t, c.width).round() as i64;
             let flat = g.style == Style::Flat;
             // The face's own colours (pink over lavender), darker the deeper it lies.
             let face = |_: f64, y: f64| {
@@ -360,12 +378,12 @@ Clouds that drift and throw shadows on the land. Never shade. They're above that
 A logo that will not sit still, bouncing every letter on its own little wave...   in fact, it won't{logo away} even stay.    \
 {path loop}And all of it at a silky 60 frames per second.{path off}   {font big}BENDING THE RULES{font c64}   {logo}{zoom on}Zoom in, zoom out...{zoom off}   \
 How is it done?   Ha!   A magician never tells...   {font term}(this is your terminal's own font, by the way - blink and you miss it){font c64}   \
-...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}{wave off}...ofc you should type it without the colours, just like we did in 1986...{wave on}{style candy}   \
-Greetings fly out to Exel, {} and Hardbeat - still sorry, Apache: no Microsoft BackOffice was harmed - Paradox - Pitr / Eindbazen - ISO - Danny Styles - Spidey - Humasect - Nightdead - Si-Goat - Stephen Parker - Koffiekop - Kevinjel - Sanity - \
+...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}{wave off}...ofc you should type it{logo out} without the colours, just like we did in 1986...{wave on}{style candy}   \
+{wave long}Greetings fly out to Exel, {} and Hardbeat - still sorry, Apache: no Microsoft BackOffice was harmed - Paradox - Pitr / Eindbazen - ISO - Danny Styles - Spidey - Humasect - Nightdead - Si-Goat - Stephen Parker - Koffiekop - Kevinjel - Sanity - \
 Quaddepos - Janglad - KVE - Aftertwelve and the rest of DMKC - Matteo Collina - Luca Maraschi - Heapwolf - \
-Ashley Williams (you were right about Rust) - Steve Klabnik - \
+Ashley Williams (you were right about Rust) - Steve Klabnik - {wave on}\
 and to everyone who still believes a terminal can be beautiful, \
-to all the coders, pixel pushers and scrollers of the past, and to YOU for reading this far!   {font mario}CHROMAKOPIA{font c64}   \
+to all the coders, pixel pushers and scrollers of the past, {logo}and to YOU for reading this far!   {font mario}CHROMAKOPIA{font c64}   \
 Keys: space or arrows to skip, q to quit.   {bye}Text wraps... now!          ";
 
 #[cfg(test)]
@@ -384,7 +402,7 @@ mod tests {
     }
 
     fn one(font: Font, style: Style, ch: char) -> Scroller {
-        Scroller::new(vec![Glyph { ch, x: 0.0, font, style, wave: true, path: None, zoom: false }], 40)
+        Scroller::new(vec![Glyph { ch, x: 0.0, font, style, wave: Wave::On, path: None, zoom: false }], 40)
     }
 
     /// Ink rows (pixel) and colours of `s` painted with its glyph at x = 10.
@@ -427,7 +445,7 @@ mod tests {
         let tops = |wave: bool| -> Vec<i64> {
             (0..48)
                 .map(|frame| {
-                    let s = Scroller::new(vec![Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave, path: None, zoom: false }], 40);
+                    let s = Scroller::new(vec![Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave: if wave { Wave::On } else { Wave::Off }, path: None, zoom: false }], 40);
                     let layers = Layers::new(40).layer(Layer::paint(move |c| s.paint(c, (c.width - 10) as f64)));
                     let mut buf = FrameBuffer::new(60, 40);
                     layers.render(&mut buf, frame);
@@ -442,9 +460,25 @@ mod tests {
     }
 
     #[test]
+    fn long_waves_run_corner_to_corner_and_roll() {
+        let w = 112;
+        // Lift at the right edge less at the left: negative is the right end higher.
+        let slope = |t: f64| long_lift(w as f64, t, w) - long_lift(0.0, t, w);
+        let ts: Vec<f64> = (0..100).map(|k| k as f64 * 0.1).collect();
+        assert!(ts.iter().any(|&t| slope(t) < -30.0), "never top right to bottom left");
+        assert!(ts.iter().any(|&t| slope(t) > 30.0), "never rolls the other way");
+        for &t in &ts {
+            for x in 0..w {
+                let l = long_lift(x as f64, t, w);
+                assert!(l >= -LONG_UP && l <= LONG_DOWN, "{l} at x {x}, t {t}");
+            }
+        }
+    }
+
+    #[test]
     fn term_letters_wave_in_whole_rows_unless_wave_is_off() {
         let rows = |wave: bool| -> Vec<usize> {
-            let s = Scroller::new(vec![Glyph { ch: 'Q', x: 0.0, font: Font::Term, style: Style::Candy, wave, path: None, zoom: false }], 40);
+            let s = Scroller::new(vec![Glyph { ch: 'Q', x: 0.0, font: Font::Term, style: Style::Candy, wave: if wave { Wave::On } else { Wave::Off }, path: None, zoom: false }], 40);
             (0..48)
                 .map(|frame| {
                     let mut buf = FrameBuffer::new(60, 40);
@@ -462,7 +496,7 @@ mod tests {
     #[test]
     fn looped_letters_ride_over_the_top_upside_down() {
         let w = 200;
-        let g = Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave: true, path: Some(looping::Shape::Loop), zoom: false };
+        let g = Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave: Wave::On, path: Some(looping::Shape::Loop), zoom: false };
         // On the real screen: the scroller's own line, full height.
         let base = (SCROLLER_Y + BASE) as f64;
         // Scrolled so the letter's middle is halfway round the loop.
@@ -488,7 +522,7 @@ mod tests {
         let tops = |d: f64| -> Vec<usize> {
             (0..48)
                 .map(|frame| {
-                    let g = Glyph { ch: 'M', x: 0.0, font: Font::C64, style: Style::Flat, wave: true, path: Some(looping::Shape::Loop), zoom: false };
+                    let g = Glyph { ch: 'M', x: 0.0, font: Font::C64, style: Style::Flat, wave: Wave::On, path: Some(looping::Shape::Loop), zoom: false };
                     let s = Scroller::new(vec![g], SCROLLER_Y);
                     let layers = Layers::new(ROWS).layer(Layer::paint(move |c| s.paint(c, d + 4.0)));
                     let mut buf = FrameBuffer::new(w, ROWS);
@@ -509,7 +543,7 @@ mod tests {
         let mut x = x0;
         text.chars()
             .map(|ch| {
-                let g = Glyph { ch, x, font: Font::C64, style: Style::Candy, wave: false, path: None, zoom: true };
+                let g = Glyph { ch, x, font: Font::C64, style: Style::Candy, wave: Wave::Off, path: None, zoom: true };
                 x += zoom_advance(ch) as f64;
                 g
             })

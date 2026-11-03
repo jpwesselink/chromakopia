@@ -25,6 +25,9 @@ pub enum Code {
     Logo,
     /// The logo jumps away, making room — until the next `{logo}`.
     LogoAway,
+    /// The whole logo jumps off, C and all, as at `{bye}` — the next
+    /// `{logo}` drops it in afresh.
+    LogoOut,
     /// The text stands still for this many seconds (the wave keeps going).
     Pause(f64),
     /// Half a screen of empty space — so what comes before has scrolled
@@ -35,8 +38,8 @@ pub enum Code {
     Font(Font),
     /// Everything after is drawn in this style.
     Style(Style),
-    /// Everything after rides the wave (true) or a straight line (false).
-    Wave(bool),
+    /// What everything after rides.
+    Wave(Wave),
     /// Everything after zooms (true): each letter grows and shrinks on a
     /// wave of its own, in a slot as wide as its biggest.
     Zoom(bool),
@@ -49,6 +52,22 @@ pub enum Code {
     /// A skip stop with nothing attached (set by `with_lead`, not typed).
     Mark,
 }
+
+/// What a letter rides, switched with `{wave on|off|long}`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Wave {
+    /// A straight line.
+    Off,
+    /// The scroller's ripple.
+    On,
+    /// The ripple on a long, slow wave from corner to corner, swelled in
+    /// this much (0..=1) — it grows in after the code and dies away before
+    /// the next.
+    Long(f64),
+}
+
+/// Text pixels a long wave takes to swell in, and to die away.
+const LONG_RAMP: f64 = 48.0;
 
 /// The scroll text without its codes, and where each code sits.
 #[derive(Debug, Clone, PartialEq)]
@@ -78,14 +97,16 @@ pub fn parse(src: &str) -> Result<Script, String> {
         let code = match (words.next(), words.next(), words.next()) {
             (Some("logo"), None, _) => Code::Logo,
             (Some("logo"), Some("away"), None) => Code::LogoAway,
+            (Some("logo"), Some("out"), None) => Code::LogoOut,
             (Some("hills"), None, _) => Code::Hills,
             (Some("bye"), None, _) => Code::Bye,
             (Some("gap"), None, _) => Code::Gap,
             (Some("font"), Some(name), None) => {
                 Code::Font(Font::named(name).ok_or_else(|| format!("unknown font {{{body}}}"))?)
             }
-            (Some("wave"), Some("on"), None) => Code::Wave(true),
-            (Some("wave"), Some("off"), None) => Code::Wave(false),
+            (Some("wave"), Some("on"), None) => Code::Wave(Wave::On),
+            (Some("wave"), Some("off"), None) => Code::Wave(Wave::Off),
+            (Some("wave"), Some("long"), None) => Code::Wave(Wave::Long(1.0)),
             (Some("zoom"), Some("on"), None) => Code::Zoom(true),
             (Some("zoom"), Some("off"), None) => Code::Zoom(false),
             (Some("path"), Some("off"), None) => Code::Path(None),
@@ -115,8 +136,8 @@ pub struct Glyph {
     pub x: f64,
     pub font: Font,
     pub style: Style,
-    /// Rides the wave (terminal letters in whole rows).
-    pub wave: bool,
+    /// What it rides (terminal letters in whole rows).
+    pub wave: Wave,
     /// Rides this path across the screen instead.
     pub path: Option<Shape>,
     /// Grows and shrinks (`{zoom on}`).
@@ -142,7 +163,9 @@ impl Script {
     /// riders are out before it comes through. A letter its font doesn't
     /// have is an error.
     pub fn place(&self, width: usize) -> Result<Placed, String> {
-        let (mut font, mut style, mut wave, mut path, mut zoom) = (Font::C64, Style::Candy, true, None, false);
+        let (mut font, mut style, mut wave, mut path, mut zoom) = (Font::C64, Style::Candy, Wave::On, None, false);
+        // Where each long wave starts and ends, in text pixels.
+        let mut longs: Vec<(f64, f64)> = Vec::new();
         let (mut glyphs, mut events, mut x) = (Vec::new(), Vec::new(), 0.0);
         let mut codes = self.events.iter().peekable();
         let chars: Vec<char> = self.text.chars().collect();
@@ -156,7 +179,15 @@ impl Script {
                     Code::Gap => x += width as f64 / 2.0,
                     Code::Font(f) => font = f,
                     Code::Style(st) => style = st,
-                    Code::Wave(on) => wave = on,
+                    Code::Wave(next) => {
+                        match (wave, next) {
+                            (Wave::Long(_), Wave::Long(_)) => {}
+                            (Wave::Long(_), _) => longs.last_mut().unwrap().1 = x,
+                            (_, Wave::Long(_)) => longs.push((x, f64::INFINITY)),
+                            _ => {}
+                        }
+                        wave = next;
+                    }
                     Code::Zoom(on) => zoom = on,
                     Code::Path(next) => {
                         if let Some(shape) = path.filter(|&p| Some(p) != next) {
@@ -177,6 +208,17 @@ impl Script {
                 glyphs.push(g);
             }
             x += if zooms { scroller::zoom_advance(ch) } else { scroller::advance(font, ch) } as f64;
+        }
+        if let Some(last) = longs.last_mut().filter(|l| l.1.is_infinite()) {
+            last.1 = x;
+        }
+        for g in &mut glyphs {
+            if let Wave::Long(_) = g.wave {
+                let &(start, end) = longs.iter().find(|&&(a, b)| (a..b).contains(&g.x)).unwrap();
+                let right = g.x + scroller::advance(g.font, g.ch) as f64;
+                let p = ((g.x - start).min(end - right) / LONG_RAMP).clamp(0.0, 1.0);
+                g.wave = Wave::Long(p * p * (3.0 - 2.0 * p));
+            }
         }
         Ok(Placed { glyphs, events, length: x })
     }
@@ -296,6 +338,7 @@ mod tests {
         let s = parse("a{path loop}bc{path off}d").unwrap();
         assert!(parse("{path sideways}").is_err());
         assert_eq!(parse("{logo away}").unwrap().events, vec![(0, Code::LogoAway)]);
+        assert_eq!(parse("{logo out}").unwrap().events, vec![(0, Code::LogoOut)]);
         let p = s.place(100).unwrap();
         let paths: Vec<_> = p.glyphs.iter().map(|g| g.path).collect();
         assert_eq!(paths, [None, Some(Shape::Loop), Some(Shape::Loop), None]);
@@ -325,15 +368,30 @@ mod tests {
                 (0, Code::Font(Font::Tiny)),
                 (1, Code::Style(Style::Flat)),
                 (2, Code::Font(Font::Term)),
-                (2, Code::Wave(false)),
-                (3, Code::Wave(true)),
+                (2, Code::Wave(Wave::Off)),
+                (3, Code::Wave(Wave::On)),
             ]
         );
         assert!(parse("{wave sideways}").is_err());
         let p = s.place(100).unwrap();
-        assert_eq!(p.glyphs.iter().map(|g| g.wave).collect::<Vec<_>>(), vec![true, true, false]);
+        assert_eq!(p.glyphs.iter().map(|g| g.wave).collect::<Vec<_>>(), vec![Wave::On, Wave::On, Wave::Off]);
         assert!(parse("{font comic-sans}").unwrap_err().contains("comic-sans"));
         assert!(parse("{style}").is_err());
+    }
+
+    #[test]
+    fn long_waves_swell_in_and_out() {
+        let s = parse("ab{wave long}cdefghijklmnopqrstuvwxy{wave on}z").unwrap();
+        assert_eq!(s.events[0], (2, Code::Wave(Wave::Long(1.0))));
+        let p = s.place(100).unwrap();
+        let w: Vec<f64> = p.glyphs.iter().map(|g| if let Wave::Long(w) = g.wave { w } else { -1.0 }).collect();
+        assert_eq!(&w[..2], &[-1.0, -1.0]);
+        assert_eq!(*w.last().unwrap(), -1.0);
+        // From the plain wave into the long one and back, not with a jump.
+        let long = &w[2..w.len() - 1];
+        assert!(long[0] < 0.2 && long[long.len() - 1] < 0.2, "{long:?}");
+        assert!(long.iter().any(|&v| v == 1.0), "{long:?}");
+        assert!(long.windows(2).take(4).all(|p| p[0] < p[1]), "{long:?}");
     }
 
     #[test]

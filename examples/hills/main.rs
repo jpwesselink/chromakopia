@@ -71,13 +71,22 @@ struct View {
 /// What is on screen at script time `t`: the scroller, plus the landscape
 /// once `{hills}` and the wordmark once `{logo}` has fired.
 fn script_view(tl: &script::Timeline, intro_secs: f64, t: f64) -> View {
-    // In with `{logo}`, away with `{logo away}` — whichever came last.
+    // In with `{logo}`, aside with `{logo away}`, off with `{logo out}` —
+    // whichever came last. Back from aside, the big C shrinks home; back
+    // from off, the logo drops in afresh.
     let away = |gone: f64| if gone < wordmark::EXIT_DONE { LogoPhase::Exit(gone) } else { LogoPhase::Hidden };
-    let mut logo = match (tl.since(script::Code::Logo, t), tl.since(script::Code::LogoAway, t)) {
-        (Some(came), Some(went)) if went > came => LogoPhase::Away(t - went),
-        (Some(came), Some(_)) => LogoPhase::Return(t - came),
-        (Some(came), None) => LogoPhase::Enter(t - came),
-        (None, _) => LogoPhase::Hidden,
+    let at = |code| tl.since(code, t).unwrap_or(f64::NEG_INFINITY);
+    let (came, aside, out) = (at(script::Code::Logo), at(script::Code::LogoAway), at(script::Code::LogoOut));
+    let mut logo = if came.max(aside).max(out) == f64::NEG_INFINITY {
+        LogoPhase::Hidden
+    } else if out > came.max(aside) {
+        away(t - out)
+    } else if aside > came {
+        LogoPhase::Away(t - aside)
+    } else if aside > out {
+        LogoPhase::Return(t - came)
+    } else {
+        LogoPhase::Enter(t - came)
     };
     let mut hills = tl.since(script::Code::Hills, t).map(|at| t - at);
     // After `{bye}`: the logo jumps away, the landscape plays its
@@ -646,6 +655,14 @@ mod tests {
             stage.render(&mut b, 0);
             out += &format!("\n=== {name} ===\n{}\n", b.to_ansi_string());
         }
+        // The long wave over the greetings, a few seconds apart.
+        let first = stage.glyphs.iter().find(|g| matches!(g.wave, script::Wave::Long(_))).unwrap();
+        stage.seek_to(when_scrolled(&stage, first.x + 400.0));
+        for frame in [120, 240, 360] {
+            let mut b = FrameBuffer::new(112, ROWS);
+            stage.render(&mut b, frame);
+            out += &format!("\n=== long {frame} ===\n{}\n", b.to_ansi_string());
+        }
         std::fs::write("target/hills-blocks.ansi", out).unwrap();
     }
 
@@ -708,6 +725,39 @@ mod tests {
     /// When the scroll has reached `px`.
     fn when_scrolled(stage: &Stage, px: f64) -> f64 {
         (0..).map(|f| f as f64 / FPS).find(|&t| stage.timeline.scrolled(t) >= px).unwrap()
+    }
+
+    #[test]
+    fn long_waves_stay_on_screen() {
+        // A C64 letter at the top of the long wave, plus the ripple and its
+        // outline, under the top border; at the bottom, its extrusion still
+        // on screen.
+        let up = (scroller::LONG_UP + scroller::SCROLL_WAVE).ceil() as i64;
+        let down = (scroller::LONG_DOWN + scroller::SCROLL_WAVE).ceil() as i64;
+        let top = SCROLLER_Y + scroller::BASE - 7 - up - 1;
+        assert!(top >= 3, "{top}");
+        let bottom = SCROLLER_Y + scroller::BASE + down + 2;
+        assert!(bottom < (ROWS * 2) as i64, "{bottom}");
+    }
+
+    #[test]
+    fn logo_clears_the_sky_for_the_long_wave_and_drops_back_in() {
+        let w = 112;
+        let stage = Stage::new(w);
+        let long: Vec<_> = stage.glyphs.iter().filter(|g| matches!(g.wave, script::Wave::Long(_))).collect();
+        // Gone, C and all, by the time the first long-wave letter comes on.
+        stage.seek_to(when_scrolled(&stage, long[0].x));
+        assert_eq!(stage.view_at(0).logo, LogoPhase::Hidden);
+        // Still gone while the last one has swelled out and scrolled past the middle.
+        let last = long.last().unwrap();
+        stage.seek_to(when_scrolled(&stage, last.x + w as f64 / 2.0));
+        assert_eq!(stage.view_at(0).logo, LogoPhase::Hidden);
+        // Then in again like the first time — not the big C shrinking home.
+        let out = first_cue(&stage, script::Code::LogoOut);
+        let back = stage.timeline.cues.iter().find(|c| c.code == script::Code::Logo && c.t > out).expect("logo comes back").t;
+        stage.seek_to(back + 0.5);
+        let LogoPhase::Enter(t) = stage.view_at(0).logo else { panic!("{:?}", stage.view_at(0).logo) };
+        assert!((t - 0.5).abs() < 1e-9);
     }
 
     #[test]
