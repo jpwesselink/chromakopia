@@ -27,7 +27,7 @@ pub const LONG_UP: f64 = 50.0;
 pub const LONG_DOWN: f64 = 12.0;
 const LONG_PERIOD: f64 = 8.0;
 /// How many pixels long-wave letters grow down low (and shrink up high).
-const LONG_ZOOM: f64 = 2.0;
+const LONG_ZOOM: f64 = 3.5;
 
 /// Where the long wave is at screen `x`, `t` seconds in: -1 at its top, 1 at its bottom.
 fn long_phase(x: f64, t: f64, width: usize) -> f64 {
@@ -359,7 +359,10 @@ impl Scroller {
             let size = long_size(g, x as f64 + 4.0, t, c.width);
             if g.font == Font::C64 && size != 8 {
                 // Grown about its middle, standing on its baseline.
-                let (left, top) = (x + 4 - size / 2, base - (7 * size + 4) / 8);
+                // (Rounded from the middle, so it doesn't hop a pixel sideways
+                // each time it changes size.)
+                let left = (x as f64 + 4.0 - size as f64 / 2.0).round() as i64;
+                let top = (base as f64 - 7.0 * size as f64 / 8.0).round() as i64;
                 let flat = g.style == Style::Flat;
                 stamp_tinted(c, &c64(g.ch), (left, top), size, if flat { 0 } else { 1 }, |_, _| flat.then_some(LETTER_HIGHLIGHT));
                 continue;
@@ -548,10 +551,11 @@ mod tests {
         // Off the long wave: the C64's own 8 pixels.
         assert_eq!(long_size(&g(Wave::On), 30.0, 0.0, w), 8);
         assert_eq!(long_size(&g(Wave::Long(0.0)), 30.0, 0.0, w), 8);
-        // On it: higher up, smaller — subtly, 6 to 10.
+        // On it: higher up, smaller — 5 to 12, every size between coming by.
         let on = g(Wave::Long(1.0));
         let spots: Vec<(f64, i64)> = (0..w).map(|x| (long_lift(x as f64, 1.0, w), long_size(&on, x as f64, 1.0, w))).collect();
-        assert!(spots.iter().all(|&(_, size)| (6..=10).contains(&size)), "{spots:?}");
+        let sizes: std::collections::BTreeSet<i64> = (0..2 * w).map(|x| long_size(&on, x as f64, 1.0, w)).collect();
+        assert_eq!(sizes, (5..=12).collect(), "{spots:?}");
         let highest = spots.iter().min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
         let lowest = spots.iter().max_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
         assert!(highest.1 < lowest.1, "{highest:?} vs {lowest:?}");
@@ -564,7 +568,7 @@ mod tests {
                 px.iter().map(|p| p.1).max().unwrap() - px.iter().map(|p| p.1).min().unwrap()
             })
             .collect();
-        assert!(heights.len() >= 3, "{heights:?}");
+        assert!(heights.len() >= 6, "{heights:?}");
     }
 
     #[test]
