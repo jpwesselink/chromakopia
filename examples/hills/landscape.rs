@@ -27,6 +27,19 @@ const SAGE_DEEP: Color = Color { r: 0x76, g: 0xBF, b: 0x93 };
 const PEACH: Color = Color { r: 0xFF, g: 0xD4, b: 0xB8 };
 const CORAL: Color = Color { r: 0xF7, g: 0xB0, b: 0x98 };
 const ROSE: Color = Color { r: 0xDE, g: 0x98, b: 0x92 };
+/// The sky's fill as a dither (colour, colour, level) — level 0, just sky —
+/// and the ridges', back to front: the cloud banks, the greens, the ground.
+pub const SKY_FILL: (Color, Color, u8) = (SKY, SKY_HAZE, 0);
+pub const RIDGE_FILLS: [(Color, Color, u8); 8] = [
+    (CLOUD_LILAC, CLOUD_PINK, 2),
+    (CLOUD_BLUSH, CLOUD_BLUSH, 0),
+    (MINT_MIST, MINT_PALE, 2),
+    (MINT, PISTACHIO, 1),
+    (SAGE, MINT, 1),
+    (SAGE_DEEP, SAGE, 2),
+    (CORAL, PEACH, 1),
+    (ROSE, CORAL, 2),
+];
 /// Seconds for one full left→right→left swing.
 const PERIOD: f64 = 4.5;
 /// Peak horizontal displacement of the back layer, in pixels (= cells)
@@ -214,14 +227,14 @@ pub fn landscape(since: impl Fn() -> Option<f64> + Clone + Send + 'static) -> La
     let (top, h) = (LAND_TOP, LAND_H);
     // Back to front: clouds, greens, then ground.
     let ridges = [
-        ridge(top + h * 0.28, 8.0, (23.0, 41.0), 0.3, (CLOUD_LILAC, CLOUD_PINK, 2), drop(0)),
-        ridge_lifted(top + h * 0.38, 8.0, (19.0, 37.0), 1.9, (CLOUD_BLUSH, CLOUD_BLUSH, 0), cumulus, drop(1)),
-        ridge(top + h * 0.49, 8.0, (21.0, 33.0), 4.1, (MINT_MIST, MINT_PALE, 2), drop(2)),
-        ridge(top + h * 0.59, 7.0, (25.0, 43.0), 2.6, (MINT, PISTACHIO, 1), drop(3)),
-        ridge(top + h * 0.69, 7.0, (18.0, 31.0), 5.2, (SAGE, MINT, 1), drop(4)),
-        ridge(top + h * 0.79, 6.0, (22.0, 39.0), 0.9, (SAGE_DEEP, SAGE, 2), drop(5)),
-        ridge(top + h * 0.91, 6.0, (20.0, 35.0), 3.3, (CORAL, PEACH, 1), drop(6)),
-        ridge(top + h * 1.03, 5.0, (24.0, 45.0), 6.0, (ROSE, CORAL, 2), drop(7)),
+        ridge(top + h * 0.28, 8.0, (23.0, 41.0), 0.3, RIDGE_FILLS[0], drop(0)),
+        ridge_lifted(top + h * 0.38, 8.0, (19.0, 37.0), 1.9, RIDGE_FILLS[1], cumulus, drop(1)),
+        ridge(top + h * 0.49, 8.0, (21.0, 33.0), 4.1, RIDGE_FILLS[2], drop(2)),
+        ridge(top + h * 0.59, 7.0, (25.0, 43.0), 2.6, RIDGE_FILLS[3], drop(3)),
+        ridge(top + h * 0.69, 7.0, (18.0, 31.0), 5.2, RIDGE_FILLS[4], drop(4)),
+        ridge(top + h * 0.79, 6.0, (22.0, 39.0), 0.9, RIDGE_FILLS[5], drop(5)),
+        ridge(top + h * 0.91, 6.0, (20.0, 35.0), 3.3, RIDGE_FILLS[6], drop(6)),
+        ridge(top + h * 1.03, 5.0, (24.0, 45.0), 6.0, RIDGE_FILLS[7], drop(7)),
     ];
 
     // Sky: pastel blue, dithered toward periwinkle in the top rows,

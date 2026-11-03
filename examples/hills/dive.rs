@@ -6,7 +6,10 @@
 
 use chromakopia::prelude::*;
 
+use chromakopia::animate::dither;
+
 use super::glyphs::{LETTER_EXTRUDE, LETTER_HIGHLIGHT, LETTER_LOWER, LETTER_OUTLINE, LETTER_UPPER};
+use super::landscape::{RIDGE_FILLS, SKY_FILL};
 use super::looping;
 use super::wordmark::{self, BIG_C};
 
@@ -32,6 +35,9 @@ pub struct Dive {
 /// against the middle one's, and how high they slosh next to it.
 const EXTRA: [(f64, f64, f64); 4] = [(0.7, 1.3, 2.1), (1.4, 0.8, 4.4), (0.85, 1.6, 0.9), (1.2, 1.1, 5.3)];
 const EXTRA_SLOSH: f64 = 0.5;
+/// The six layers of liquid once the waves are out, top to bottom: the
+/// landscape's own fills — sky, cloud bank, the greens, the ground.
+const LAYERS: [(Color, Color, u8); 6] = [SKY_FILL, RIDGE_FILLS[0], RIDGE_FILLS[2], RIDGE_FILLS[3], RIDGE_FILLS[5], RIDGE_FILLS[6]];
 /// The big C's size in pixels, before the dive.
 const BIG: f64 = 8.0 * BIG_C as f64;
 /// Where the camera ends up, in glyph pixels (0..8): in the middle of the
@@ -115,11 +121,11 @@ impl Camera {
     }
 
     /// Paint the C through the camera: pink above the surface, lavender
-    /// below — with `waves` of the way to five surfaces, pink through
-    /// lavender in six layers, each surface catching the light — a cream
-    /// edge on top of each run of ink, a dark outline round it.
+    /// below — turning, `waves` of the way to five surfaces, into six
+    /// layers in the landscape's colours — a cream edge on top of each run
+    /// of ink, a dark outline round it.
     pub fn paint(&self, c: &mut Canvas, glyph: &[u8; 8], wall: f64, waves: f64) {
-        let shine = 0.5 * Easing::EaseInOut.apply(waves.clamp(0.0, 1.0));
+        let e = Easing::EaseInOut.apply(waves.clamp(0.0, 1.0));
         let lit = |(gx, gy): (f64, f64)| {
             (0.0..8.0).contains(&gx) && (0.0..8.0).contains(&gy) && glyph[gy as usize] & (0x80 >> gx as usize) != 0
         };
@@ -137,10 +143,9 @@ impl Camera {
                         // The layer: how many surfaces are above here.
                         let py = y as f64 + 0.5;
                         let under = surfaces.iter().filter(|&&s| s <= py).count();
-                        let layer = Color::lerp_rgb(LETTER_UPPER, LETTER_LOWER, under as f64 / 5.0);
-                        // The row just under a surface catches the light.
-                        let wet = surfaces.iter().any(|&s| s <= py && py < s + 1.0);
-                        if wet { Color::lerp_rgb(layer, LETTER_HIGHLIGHT, shine) } else { layer }
+                        let liquid = Color::lerp_rgb(LETTER_UPPER, LETTER_LOWER, under as f64 / 5.0);
+                        let (a, b, level) = LAYERS[under];
+                        Color::lerp_rgb(liquid, dither(a, b, level, x, y), e)
                     }
                 } else if near(0.0) {
                     LETTER_OUTLINE
@@ -236,20 +241,24 @@ mod tests {
     }
 
     #[test]
-    fn once_in_the_screen_fills_with_waves() {
+    fn once_in_the_screen_fills_with_waves_in_the_landscape_colours() {
         let w = 112;
         let px = water(w, 1.0, 0.7);
-        // Down every column: six layers, pink to lavender, each wave's
-        // surface catching the light.
+        // Which of the water's landscape fills a colour belongs to.
+        let fill_of = |c: Color| LAYERS.iter().position(|&(a, b, _)| c == a || c == b);
+        // Down every column: all six layers, top to bottom, nothing but
+        // the landscape's own colours — no shine lines.
         for x in (0..w).step_by(9) {
-            let column: Vec<Color> = (0..H).filter_map(|y| px(x, y)).collect();
-            let mut layers: Vec<Color> = column.iter().copied().filter(|&c| c != LETTER_HIGHLIGHT).collect();
-            layers.dedup();
-            assert!(layers.len() >= 6, "x {x}: {} layers", layers.len());
-            assert_eq!(layers[0], LETTER_UPPER);
-            assert_eq!(*layers.last().unwrap(), LETTER_LOWER);
-            let palette: Vec<Color> = (0..=5).map(|i| Color::lerp_rgb(LETTER_UPPER, LETTER_LOWER, i as f64 / 5.0)).collect();
-            assert!(column.iter().any(|c| *c != LETTER_HIGHLIGHT && !palette.contains(c)), "x {x}: no shine");
+            let mut fills: Vec<usize> = (0..H)
+                .map(|y| {
+                    let c = px(x, y).expect("water everywhere");
+                    fill_of(c).unwrap_or_else(|| panic!("({x}, {y}): {c:?} isn't a landscape colour"))
+                })
+                .collect();
+            fills.dedup();
+            assert_eq!(fills.first(), Some(&0), "x {x}: {fills:?}");
+            assert_eq!(fills.last(), Some(&5), "x {x}: {fills:?}");
+            assert!(fills.len() >= 6, "x {x}: {fills:?}");
         }
         // Each its own wave: the surfaces aren't just the middle one shifted.
         let cam = Camera::new(w, H, 1.0, 0.7);
