@@ -37,8 +37,10 @@ fn long_phase(x: f64, t: f64, width: usize) -> f64 {
 /// How far the long wave lifts (negative) or drops a letter at screen `x`,
 /// `t` seconds in, on a screen `width` wide.
 fn long_lift(x: f64, t: f64, width: usize) -> f64 {
-    let s = long_phase(x, t, width);
-    if s < 0.0 { s * LONG_UP } else { s * LONG_DOWN }
+    // One plain sine from LONG_UP above to LONG_DOWN below, round the
+    // middle of that — no kink where it crosses the line.
+    let (middle, swing) = ((LONG_DOWN - LONG_UP) / 2.0, (LONG_UP + LONG_DOWN) / 2.0);
+    middle + swing * long_phase(x, t, width)
 }
 
 /// How big `g` is drawn at screen `x`, `t` seconds in: the C64's 8 pixels,
@@ -563,6 +565,19 @@ mod tests {
             })
             .collect();
         assert!(heights.len() >= 3, "{heights:?}");
+    }
+
+    #[test]
+    fn long_waves_bend_smoothly() {
+        // No kinks: the slope changes only a little from pixel to pixel,
+        // and never gets so steep that neighbours stand far apart.
+        let w = 112;
+        for t in [0.0, 1.3, 2.9, 5.1] {
+            let ys: Vec<f64> = (0..=w).map(|x| long_lift(x as f64, t, w)).collect();
+            let slopes: Vec<f64> = ys.windows(2).map(|p| p[1] - p[0]).collect();
+            assert!(slopes.windows(2).all(|p| (p[1] - p[0]).abs() < 0.05), "kinked at t {t}");
+            assert!(slopes.iter().all(|s| s.abs() < 0.9), "too steep at t {t}");
+        }
     }
 
     #[test]
