@@ -19,7 +19,8 @@ use super::tiny;
 // bottom scroller. Its speed lives in the script's timeline.
 pub const SCROLL_WAVE: f64 = 4.0;
 const SCROLL_WAVE_PERIOD: f64 = 0.8;
-/// `{wave long}`: half a wave across the screen, rolling by once every
+/// `{wave long}`: half a wave across the screen, rolling left to right —
+/// against the text — once every
 /// `LONG_PERIOD` seconds, reaching this far up and down (the logo steps
 /// off for it); down is as far as the bottom leaves room for.
 pub const LONG_UP: f64 = 50.0;
@@ -29,7 +30,7 @@ const LONG_PERIOD: f64 = 8.0;
 /// How far the long wave lifts (negative) or drops a letter at screen `x`,
 /// `t` seconds in, on a screen `width` wide.
 fn long_lift(x: f64, t: f64, width: usize) -> f64 {
-    let s = (TAU * (t / LONG_PERIOD + x / (2.0 * width as f64))).sin();
+    let s = (TAU * (x / (2.0 * width as f64) - t / LONG_PERIOD)).sin();
     if s < 0.0 { s * LONG_UP } else { s * LONG_DOWN }
 }
 
@@ -511,6 +512,16 @@ mod tests {
             assert_eq!(lift(&g(Wave::Long(1.0)), x, t, 112), long_lift(x, t, 112));
             // Not yet: just the ripple, so it flows on from the plain wave.
             assert_eq!(lift(&g(Wave::Long(0.0)), x, t, 112), lift(&g(Wave::On), x, t, 112));
+        }
+    }
+
+    #[test]
+    fn long_waves_roll_left_to_right_against_the_text() {
+        // The same shape a moment later, further right.
+        let w = 112;
+        let (dt, dx) = (0.5, 2.0 * w as f64 * 0.5 / LONG_PERIOD);
+        for x in [0.0, 30.0, 70.0] {
+            assert!((long_lift(x + dx, 1.0 + dt, w) - long_lift(x, 1.0, w)).abs() < 1e-9, "x {x}");
         }
     }
 
