@@ -37,6 +37,9 @@ pub enum Code {
     Style(Style),
     /// Everything after rides the wave (true) or a straight line (false).
     Wave(bool),
+    /// Everything after zooms (true): each letter grows and shrinks on a
+    /// wave of its own, in a slot as wide as its biggest.
+    Zoom(bool),
     /// Everything after rides this path across the screen (None: back on
     /// the scroller's line).
     Path(Option<Shape>),
@@ -83,6 +86,8 @@ pub fn parse(src: &str) -> Result<Script, String> {
             }
             (Some("wave"), Some("on"), None) => Code::Wave(true),
             (Some("wave"), Some("off"), None) => Code::Wave(false),
+            (Some("zoom"), Some("on"), None) => Code::Zoom(true),
+            (Some("zoom"), Some("off"), None) => Code::Zoom(false),
             (Some("path"), Some("off"), None) => Code::Path(None),
             (Some("path"), Some(name), None) => {
                 Code::Path(Some(Shape::named(name).ok_or_else(|| format!("unknown path {{{body}}}"))?))
@@ -114,6 +119,8 @@ pub struct Glyph {
     pub wave: bool,
     /// Rides this path across the screen instead.
     pub path: Option<Shape>,
+    /// Grows and shrinks (`{zoom on}`).
+    pub zoom: bool,
 }
 
 /// The script laid out for one screen width: every visible letter with its
@@ -135,7 +142,7 @@ impl Script {
     /// riders are out before it comes through. A letter its font doesn't
     /// have is an error.
     pub fn place(&self, width: usize) -> Result<Placed, String> {
-        let (mut font, mut style, mut wave, mut path) = (Font::C64, Style::Candy, true, None);
+        let (mut font, mut style, mut wave, mut path, mut zoom) = (Font::C64, Style::Candy, true, None, false);
         let (mut glyphs, mut events, mut x) = (Vec::new(), Vec::new(), 0.0);
         let mut codes = self.events.iter().peekable();
         let chars: Vec<char> = self.text.chars().collect();
@@ -150,6 +157,7 @@ impl Script {
                     Code::Font(f) => font = f,
                     Code::Style(st) => style = st,
                     Code::Wave(on) => wave = on,
+                    Code::Zoom(on) => zoom = on,
                     Code::Path(next) => {
                         if let Some(shape) = path.filter(|&p| Some(p) != next) {
                             x += looping::extra(shape, width);
@@ -164,9 +172,9 @@ impl Script {
                 return Err(format!("font {font:?} has no {ch:?} (in {:?})", chars[i.saturating_sub(10)..(i + 10).min(chars.len())].iter().collect::<String>()));
             }
             if ch != ' ' {
-                glyphs.push(Glyph { ch, x, font, style, wave, path });
+                glyphs.push(Glyph { ch, x, font, style, wave, path, zoom });
             }
-            x += scroller::advance(font, ch) as f64;
+            x += if zoom { scroller::ZOOM_SLOT } else { scroller::advance(font, ch) } as f64;
         }
         Ok(Placed { glyphs, events, length: x })
     }
@@ -334,6 +342,20 @@ mod tests {
         assert_eq!(xs, vec![('a', 0.0), ('b', 8.0), ('c', 16.0), ('d', 32.0), ('e', 48.0), ('f', 48.0 + e), ('g', 49.0 + e)]);
         assert_eq!(p.glyphs[4].font, Font::Tiny);
         assert_eq!(p.length, 50.0 + e);
+    }
+
+    #[test]
+    fn zoomed_letters_get_room_to_grow() {
+        let s = parse("ab{zoom on}c d{zoom off}e").unwrap();
+        assert_eq!(s.events, vec![(2, Code::Zoom(true)), (5, Code::Zoom(false))]);
+        assert!(parse("{zoom sideways}").is_err());
+        let p = s.place(100).unwrap();
+        assert_eq!(p.glyphs.iter().map(|g| g.zoom).collect::<Vec<_>>(), vec![false, false, true, true, false]);
+        // Each zoomed letter, and the space, takes a slot as wide as the
+        // biggest it gets.
+        let slot = scroller::ZOOM_SLOT as f64;
+        let xs: Vec<f64> = p.glyphs.iter().map(|g| g.x).collect();
+        assert_eq!(xs, vec![0.0, 8.0, 16.0, 16.0 + 2.0 * slot, 16.0 + 3.0 * slot]);
     }
 
     #[test]

@@ -638,6 +638,12 @@ mod tests {
             stage.render(&mut b, 0);
             out += &format!("\n=== loop {k} ===\n{}\n", b.to_ansi_string());
         }
+        // The zoom: its first letter mid-screen.
+        let first = stage.glyphs.iter().find(|g| g.zoom).unwrap();
+        stage.seek_to(when_scrolled(&stage, first.x + 112.0 / 2.0 + 20.0));
+        let mut b = FrameBuffer::new(112, ROWS);
+        stage.render(&mut b, 0);
+        out += &format!("\n=== zoom ===\n{}\n", b.to_ansi_string());
         std::fs::write("target/hills-blocks.ansi", out).unwrap();
     }
 

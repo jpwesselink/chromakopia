@@ -7,7 +7,7 @@ use chromakopia::prelude::*;
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
-use super::glyphs::{c64, has_c64, has_mario, mario, shade, stamp, LETTER_HIGHLIGHT, LETTER_UPPER};
+use super::glyphs::{c64, has_c64, has_mario, mario, shade, stamp, stamp_tinted, LETTER_HIGHLIGHT, LETTER_UPPER};
 use super::looping::{self, angle_index, track, ANGLES};
 #[cfg(test)]
 use super::glyphs::LETTER_LOWER;
@@ -20,6 +20,24 @@ const SCROLL_WAVE: f64 = 4.0;
 const SCROLL_WAVE_PERIOD: f64 = 0.8;
 /// Every font's baseline sits on `y0 + BASE` (plus the wave).
 pub const BASE: i64 = 7;
+/// Zoomed letters grow from the C64's 8 pixels up to this many, each in
+/// a slot this wide (plus a pixel for the extrusion).
+const ZOOM_MAX: i64 = 20;
+pub const ZOOM_SLOT: i64 = ZOOM_MAX + 2;
+/// Seconds for one grow-and-shrink.
+const ZOOM_PERIOD: f64 = 1.6;
+
+/// How big a zoomed letter is at screen `x`, `t` seconds in: a wave
+/// rolling through the text, 8 pixels at its smallest.
+fn zoom_size(x: i64, t: f64) -> i64 {
+    let wave = 0.5 + 0.5 * (TAU * t / ZOOM_PERIOD + x as f64 * 0.06).sin();
+    8 + ((ZOOM_MAX - 8) as f64 * wave).round() as i64
+}
+
+/// How wide `g` is on screen: its slot when zoomed.
+fn width(g: &Glyph) -> i64 {
+    if g.zoom { ZOOM_SLOT } else { advance(g.font, g.ch) }
+}
 
 /// A scroller font, switched with `{font …}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -180,7 +198,7 @@ impl Scroller {
     /// or None when it's off screen.
     fn spot(&self, g: &Glyph, width: usize, scrolled: f64, t: f64) -> Option<(i64, i64)> {
         let x = width as i64 - pen(scrolled) + g.x as i64;
-        if x < -(advance(g.font, g.ch) + 4) || x > width as i64 {
+        if x < -(self::width(g) + 4) || x > width as i64 {
             return None;
         }
         let wave = if g.wave { (TAU * t / SCROLL_WAVE_PERIOD + x as f64 * 0.05).sin() } else { 0.0 };
@@ -197,6 +215,13 @@ impl Scroller {
                 continue;
             }
             let Some((x, base)) = self.spot(g, c.width, scrolled, t) else { continue };
+            if g.zoom && g.font == Font::C64 && g.style == Style::Candy {
+                // Grown about the middle of its slot and of the C64's capitals.
+                let size = zoom_size(x, t);
+                let (left, top) = (x + (ZOOM_MAX - size) / 2, base - 4 - size / 2);
+                stamp_tinted(c, &c64(g.ch), (left, top), size, if size < 14 { 1 } else { 2 }, |_, _| None);
+                continue;
+            }
             let top = base - baseline(g.font);
             match (g.font, g.style) {
                 (Font::C64, Style::Candy) => stamp(c, &c64(g.ch), (x, top), 1, 1, &mut face),
@@ -256,7 +281,7 @@ pub const PITCH: &str = "{hills}{style flat}Welly well, what do we have here?{st
 Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 Clouds that drift and throw shadows on the land. Never shade. They're above that.   \
 A logo that will not sit still, bouncing every letter on its own little wave...   in fact, it won't{logo away} even stay.    \
-{path loop}And all of it at a silky 60 frames per second.{path off}   {font big}BENDING THE RULES{font c64}   {logo}\
+{path loop}And all of it at a silky 60 frames per second.{path off}   {font big}BENDING THE RULES{font c64}   {logo}{zoom on}Zoom in, zoom out...{zoom off}   \
 How is it done?   Ha!   A magician never tells...   {font term}(this is your terminal's own font, by the way - blink and you miss it){font c64}   \
 ...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}{wave off}...ofc you should type it without the colours, just like we did in 1986...{wave on}{style candy}   \
 Greetings fly out to Exel, {} and Hardbeat - still sorry, Apache: no Microsoft BackOffice was harmed - Paradox - Pitr / Eindbazen - ISO - Danny Styles - Spidey - Humasect - Nightdead - Si-Goat - Stephen Parker - Koffiekop - Kevinjel - Sanity - \
@@ -282,7 +307,7 @@ mod tests {
     }
 
     fn one(font: Font, style: Style, ch: char) -> Scroller {
-        Scroller::new(vec![Glyph { ch, x: 0.0, font, style, wave: true, path: None }], 40)
+        Scroller::new(vec![Glyph { ch, x: 0.0, font, style, wave: true, path: None, zoom: false }], 40)
     }
 
     /// Ink rows (pixel) and colours of `s` painted with its glyph at x = 10.
@@ -325,7 +350,7 @@ mod tests {
         let tops = |wave: bool| -> Vec<i64> {
             (0..48)
                 .map(|frame| {
-                    let s = Scroller::new(vec![Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave, path: None }], 40);
+                    let s = Scroller::new(vec![Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave, path: None, zoom: false }], 40);
                     let layers = Layers::new(40).layer(Layer::paint(move |c| s.paint(c, (c.width - 10) as f64)));
                     let mut buf = FrameBuffer::new(60, 40);
                     layers.render(&mut buf, frame);
@@ -342,7 +367,7 @@ mod tests {
     #[test]
     fn term_letters_wave_in_whole_rows_unless_wave_is_off() {
         let rows = |wave: bool| -> Vec<usize> {
-            let s = Scroller::new(vec![Glyph { ch: 'Q', x: 0.0, font: Font::Term, style: Style::Candy, wave, path: None }], 40);
+            let s = Scroller::new(vec![Glyph { ch: 'Q', x: 0.0, font: Font::Term, style: Style::Candy, wave, path: None, zoom: false }], 40);
             (0..48)
                 .map(|frame| {
                     let mut buf = FrameBuffer::new(60, 40);
@@ -360,7 +385,7 @@ mod tests {
     #[test]
     fn looped_letters_ride_over_the_top_upside_down() {
         let w = 200;
-        let g = Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave: true, path: Some(looping::Shape::Loop) };
+        let g = Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave: true, path: Some(looping::Shape::Loop), zoom: false };
         // On the real screen: the scroller's own line, full height.
         let base = (SCROLLER_Y + BASE) as f64;
         // Scrolled so the letter's middle is halfway round the loop.
@@ -386,7 +411,7 @@ mod tests {
         let tops = |d: f64| -> Vec<usize> {
             (0..48)
                 .map(|frame| {
-                    let g = Glyph { ch: 'M', x: 0.0, font: Font::C64, style: Style::Flat, wave: true, path: Some(looping::Shape::Loop) };
+                    let g = Glyph { ch: 'M', x: 0.0, font: Font::C64, style: Style::Flat, wave: true, path: Some(looping::Shape::Loop), zoom: false };
                     let s = Scroller::new(vec![g], SCROLLER_Y);
                     let layers = Layers::new(ROWS).layer(Layer::paint(move |c| s.paint(c, d + 4.0)));
                     let mut buf = FrameBuffer::new(w, ROWS);
@@ -400,6 +425,44 @@ mod tests {
         // Right at the loop's mouth it rides flat.
         let flat = tops(looping::loop_start(w));
         assert!(flat.iter().all(|&t| t == flat[0]), "{flat:?}");
+    }
+
+    /// How tall each of four zoomed I's stands at `frame`, in pixels.
+    fn zoomed_heights(frame: usize) -> Vec<usize> {
+        let glyphs = (0..4)
+            .map(|k| Glyph { ch: 'I', x: (k * ZOOM_SLOT) as f64, font: Font::C64, style: Style::Candy, wave: false, path: None, zoom: true })
+            .collect();
+        let s = Scroller::new(glyphs, SCROLLER_Y);
+        let width = (4 * ZOOM_SLOT) as usize;
+        let layers = Layers::new(ROWS).layer(Layer::paint(move |c| s.paint(c, c.width as f64)));
+        let mut buf = FrameBuffer::new(width, ROWS);
+        layers.render(&mut buf, frame);
+        let lit = |x: usize, y: usize| {
+            let cell = buf.get(x, y / 2);
+            if cell.ch == ' ' { cell.bg.is_some() } else { y % 2 == 0 || cell.bg.is_some() }
+        };
+        (0..4)
+            .map(|k| {
+                let cols = k * ZOOM_SLOT as usize..(k + 1) * ZOOM_SLOT as usize;
+                let rows: Vec<usize> = (0..ROWS * 2).filter(|&y| cols.clone().any(|x| lit(x, y))).collect();
+                rows.last().map_or(0, |last| last - rows[0] + 1)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn zoomed_letters_grow_and_shrink_on_a_wave() {
+        let now = zoomed_heights(0);
+        assert!(now.iter().all(|&h| h >= 8), "{now:?}");
+        // Side by side, each its own size...
+        assert!(now.iter().any(|&h| h != now[0]), "all one size: {now:?}");
+        // ...and each one changes size as the wave rolls on.
+        let later = zoomed_heights(10);
+        assert_ne!(now, later);
+        // Up to 2.5× the C64's 8 pixels, never past it.
+        let all: Vec<usize> = (0..60).flat_map(zoomed_heights).collect();
+        let tallest = *all.iter().max().unwrap();
+        assert!(tallest >= 18 && tallest <= ZOOM_MAX as usize + 3, "{tallest}");
     }
 
     #[test]
