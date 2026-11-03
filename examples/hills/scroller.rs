@@ -7,10 +7,10 @@ use chromakopia::prelude::*;
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
-use super::glyphs::{c64, has_c64, has_mario, mario, shade, stamp, stamp_tinted, LETTER_HIGHLIGHT, LETTER_UPPER};
+use super::glyphs::{
+    c64, has_c64, has_mario, mario, shade, stamp, stamp_tinted, LETTER_HIGHLIGHT, LETTER_LOWER, LETTER_OUTLINE, LETTER_UPPER,
+};
 use super::looping::{self, angle_index, track, ANGLES};
-#[cfg(test)]
-use super::glyphs::LETTER_LOWER;
 use super::script::Glyph;
 use super::tiny;
 
@@ -65,6 +65,16 @@ fn zoom_run(run: &[(f64, char)], t: f64) -> Vec<(i64, i64, i64)> {
         }))
         .collect();
     edges.windows(2).zip(&sizes).map(|(e, s)| (e[0], e[1] - e[0], (s * scale).round() as i64)).collect()
+}
+
+/// How far toward the outline a letter at the back (`ZOOM_MIN`) darkens.
+const ZOOM_DEPTH: f64 = 0.3;
+
+/// `color` on a zoomed letter `size` pixels big: the smaller, the further
+/// back, the darker — untouched up front at `ZOOM_MAX`.
+fn deep(color: Color, size: i64) -> Color {
+    let back = (ZOOM_MAX - size) as f64 / (ZOOM_MAX - ZOOM_MIN) as f64;
+    Color::lerp_rgb(color, LETTER_OUTLINE, ZOOM_DEPTH * back.clamp(0.0, 1.0))
 }
 
 /// Whether `g` is drawn as part of a zoom run.
@@ -265,9 +275,11 @@ impl Scroller {
             let wave = if g.wave { (TAU * t / SCROLL_WAVE_PERIOD + x as f64 * 0.05).sin() } else { 0.0 };
             let base = self.y0 + BASE + (SCROLL_WAVE * wave).round() as i64;
             let flat = g.style == Style::Flat;
-            stamp_tinted(c, &c64(g.ch), (x, base - 4 - size / 2), size, if size < 14 { 1 } else { 2 }, |_, _| {
-                flat.then_some(LETTER_HIGHLIGHT)
-            });
+            // The face's own colours (pink over lavender), darker the deeper it lies.
+            let face = |_: f64, y: f64| {
+                Some(deep(if flat { LETTER_HIGHLIGHT } else if y < 0.0 { LETTER_UPPER } else { LETTER_LOWER }, size))
+            };
+            stamp_tinted(c, &c64(g.ch), (x, base - 4 - size / 2), size, if size < 14 { 1 } else { 2 }, face);
         }
     }
 
@@ -557,6 +569,24 @@ mod tests {
         let sizes: std::collections::BTreeSet<i64> = (0..72).map(|f| zoom_run(&run, f as f64 / 60.0)[4].2).collect();
         assert!(sizes.len() >= 20, "{} sizes: {sizes:?}", sizes.len());
         assert!(*sizes.first().unwrap() <= 8 && *sizes.last().unwrap() >= 28, "{sizes:?}");
+    }
+
+    #[test]
+    fn deeper_letters_are_a_bit_darker() {
+        let light = |c: Color| c.r as u32 + c.g as u32 + c.b as u32;
+        // Up front: the colours as they are.
+        assert_eq!(deep(LETTER_UPPER, ZOOM_MAX), LETTER_UPPER);
+        // Further back: darker, a step at a time, but never murky.
+        let row: Vec<u32> = (ZOOM_MIN..=ZOOM_MAX).map(|s| light(deep(LETTER_UPPER, s))).collect();
+        assert!(row.windows(2).all(|w| w[0] <= w[1]), "{row:?}");
+        assert!(row[0] < light(LETTER_UPPER) && row[0] * 10 > light(LETTER_UPPER) * 6, "{row:?}");
+        // And on screen: a small letter's face is darker than a big one's.
+        let s = Scroller::new(zoomed("MMMMMMMM", 0.0), SCROLLER_Y);
+        let layers = Layers::new(ROWS).layer(Layer::paint(move |c| s.paint(c, c.width as f64)));
+        let mut buf = FrameBuffer::new(200, ROWS);
+        layers.render(&mut buf, 0);
+        let faces = (0..ROWS).flat_map(|y| (0..200).map(move |x| (x, y))).map(|(x, y)| buf.get(x, y).color);
+        assert!(faces.into_iter().any(|c| c != LETTER_UPPER && light(c) < light(LETTER_UPPER) && light(c) > light(LETTER_LOWER) / 2 && c.r > c.b));
     }
 
     #[test]
