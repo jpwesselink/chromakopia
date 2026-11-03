@@ -10,6 +10,7 @@
 
 use chromakopia::animate::framebuffer::FPS;
 
+use super::dive;
 use super::looping::{self, Shape};
 use super::scroller::{self, Font, Style};
 
@@ -198,8 +199,11 @@ impl Script {
                     }
                     Code::Zoom(on) => zoom = on,
                     Code::Dive(on) => {
+                        // Room for the camera to go in (or out) before what
+                        // follows comes on.
                         dived = on;
                         events.push((x, code));
+                        x += width as f64 / 2.0 + if on { dive::IN_SECS } else { dive::OUT_SECS } * SPEED;
                     }
                     Code::Path(next) => {
                         if let Some(shape) = path.filter(|&p| Some(p) != next) {
@@ -399,6 +403,11 @@ mod tests {
         let p = s.place(100).unwrap();
         assert_eq!(p.glyphs.iter().map(|g| g.wave).collect::<Vec<_>>(), vec![Wave::On, Wave::Water, Wave::Water, Wave::On]);
         assert_eq!(p.events.iter().map(|e| e.1).collect::<Vec<_>>(), vec![Code::Dive(true), Code::Dive(false)]);
+        // Each leaves room: half a screen, plus as far as the text scrolls
+        // while the camera goes in (or out) — what follows waits for it.
+        let xs: Vec<f64> = p.glyphs.iter().map(|g| g.x).collect();
+        let (lead_in, lead_out) = (50.0 + dive::IN_SECS * SPEED, 50.0 + dive::OUT_SECS * SPEED);
+        assert_eq!(xs, vec![0.0, 8.0 + lead_in, 16.0 + lead_in, 24.0 + lead_in + lead_out]);
     }
 
     #[test]

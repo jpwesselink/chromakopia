@@ -67,8 +67,8 @@ struct View {
     hills: Option<f64>,
     /// Seconds into the cold open, while it plays.
     intro: Option<f64>,
-    /// How far into the big C the camera has dived (0..=1).
-    dive: f64,
+    /// How far into the big C the camera has dived.
+    dive: dive::Dive,
 }
 
 /// What is on screen at script time `t`: the scroller, plus the landscape
@@ -103,14 +103,20 @@ fn script_view(tl: &script::Timeline, intro_secs: f64, t: f64) -> View {
             .map(|h| (h - gone).min(landscape::ENTRANCE_SECS) - gone * landscape::EXIT_SPEED)
             .filter(|&h| h > 0.0);
     }
-    // In over DIVE_SECS from `{dive in}`, back out from `{dive out}`.
+    // From `{dive in}`: the zoom, then the waves spread. From `{dive out}`:
+    // the waves merge, then the zoom out.
     let (dive_in, dive_out) = (tl.since(script::Code::Dive(true), t), tl.since(script::Code::Dive(false), t));
+    let part = |from: f64, secs: f64| ((t - from) / secs).clamp(0.0, 1.0);
     let dive = match (dive_in, dive_out) {
-        (Some(a), b) if b.is_none_or(|b| a > b) => (t - a) / dive::DIVE_SECS,
-        (_, Some(b)) => 1.0 - (t - b) / dive::DIVE_SECS,
-        _ => 0.0,
-    }
-    .clamp(0.0, 1.0);
+        (Some(a), b) if b.is_none_or(|b| a > b) => {
+            dive::Dive { zoom: part(a, dive::DIVE_SECS), waves: part(a + dive::DIVE_SECS, dive::WAVES_SECS) }
+        }
+        (_, Some(b)) => dive::Dive {
+            zoom: 1.0 - part(b + dive::WAVES_SECS, dive::DIVE_SECS),
+            waves: 1.0 - part(b, dive::WAVES_SECS),
+        },
+        _ => dive::Dive::default(),
+    };
     let intro = (t < intro_secs).then_some(t);
     View { logo, heading: None, panel: None, pushed: None, scroll: tl.scrolled(t), hills, intro, dive }
 }
@@ -139,7 +145,7 @@ fn view_for(steps: &[Step], i: usize, local: f64) -> View {
     let pushed = panel
         .filter(|pv| !pv.slide.first && local < panel::ENTER_SECS)
         .map(|_| PanelView { step: i - 1, local: steps[i - 1].secs + local, slide: slide_of(steps, i - 1) });
-    View { logo, heading, panel, pushed, scroll: 0.0, hills: Some(f64::INFINITY), intro: None, dive: 0.0 }
+    View { logo, heading, panel, pushed, scroll: 0.0, hills: Some(f64::INFINITY), intro: None, dive: dive::Dive::default() }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -419,7 +425,7 @@ fn build_layers(
         }))
         .layer(Layer::paint(move |c| {
             let view = *scroll_view.lock().unwrap();
-            scroller.paint_dived(c, view.scroll, view.dive)
+            scroller.paint_dived(c, view.scroll, view.dive.zoom)
         }))
 }
 
@@ -672,7 +678,14 @@ mod tests {
         // The dive into the big C: on the way in, in, letters on the water, on the way out.
         let dive_in = first_cue(&stage, script::Code::Dive(true));
         let dive_out = first_cue(&stage, script::Code::Dive(false));
-        for (name, t) in [("dive 0.6", dive_in + 0.6), ("dive in", dive_in + 1.6), ("dive ride", dive_in + 3.5), ("dive out", dive_out + 0.8)] {
+        for (name, t) in [
+            ("dive 0.6", dive_in + 0.6),
+            ("dive in", dive_in + dive::IN_SECS),
+            ("dive ride", dive_in + dive::IN_SECS + 2.0),
+            ("dive merge", dive_out + 0.4),
+            ("dive out", dive_out + dive::WAVES_SECS + 0.8),
+            ("dive after", dive_out + dive::OUT_SECS + 0.5),
+        ] {
             stage.seek_to(t);
             let mut b = FrameBuffer::new(112, ROWS);
             stage.render(&mut b, 30);
@@ -751,18 +764,27 @@ mod tests {
     }
 
     #[test]
-    fn the_camera_dives_in_and_comes_back_out() {
+    fn the_camera_dives_in_the_waves_spread_then_merge_and_it_comes_back_out() {
         let w = 100;
-        let placed = script::parse("{dive in}{gap}{gap}abc{dive out}{gap}def").unwrap().place(w).unwrap();
+        let placed = script::parse("{dive in}abc{gap}{gap}{dive out}def").unwrap().place(w).unwrap();
         let tl = script::Timeline::new(&placed, w);
         let at = |on| tl.cues.iter().find(|c| c.code == script::Code::Dive(on)).unwrap().t;
-        let dive = |t| script_view(&tl, 0.0, t).dive;
-        assert_eq!(dive(at(true) - 0.1), 0.0);
-        assert!(dive(at(true) + 0.5) > 0.0 && dive(at(true) + 0.5) < 1.0);
-        assert_eq!(dive(at(true) + dive::DIVE_SECS), 1.0);
-        assert_eq!(dive(at(false) - 0.1), 1.0);
-        assert!(dive(at(false) + 0.5) < 1.0);
-        assert_eq!(dive(at(false) + dive::DIVE_SECS), 0.0);
+        let view = |t| script_view(&tl, 0.0, t).dive;
+        let (a, b) = (at(true), at(false));
+        // In: the zoom, then the waves.
+        assert_eq!(view(a - 0.1), dive::Dive::default());
+        assert!(view(a + 0.5).zoom > 0.0 && view(a + 0.5).zoom < 1.0);
+        assert_eq!(view(a + 0.5).waves, 0.0);
+        assert_eq!(view(a + dive::DIVE_SECS).zoom, 1.0);
+        assert!(view(a + dive::DIVE_SECS + 0.3).waves > 0.0);
+        assert_eq!(view(a + dive::DIVE_SECS + dive::WAVES_SECS).waves, 1.0);
+        // Out: the waves merge first, then the zoom.
+        assert_eq!(view(b - 0.1), dive::Dive { zoom: 1.0, waves: 1.0 });
+        assert!(view(b + 0.3).waves < 1.0);
+        assert_eq!(view(b + 0.3).zoom, 1.0);
+        assert_eq!(view(b + dive::WAVES_SECS + 1e-6).waves, 0.0);
+        assert!(view(b + dive::WAVES_SECS + 0.5).zoom < 1.0);
+        assert_eq!(view(b + dive::WAVES_SECS + dive::DIVE_SECS + 1e-6), dive::Dive::default());
     }
 
     #[test]
@@ -777,11 +799,17 @@ mod tests {
         assert!(dive_in >= last_out, "{dive_in} vs {last_out}");
         stage.seek_to(dive_in);
         assert!(matches!(stage.view_at(0).logo, LogoPhase::Away(t) if t >= wordmark::AWAY_DONE));
-        // ...and back out, all the way, before the logo comes home.
-        let back = stage.timeline.cues.iter().find(|c| c.code == script::Code::Logo && c.t > dive_in).unwrap().t;
-        assert!(dive_out + dive::DIVE_SECS <= back, "{dive_out} vs {back}");
-        // Some letters ride the water.
-        assert!(stage.glyphs.iter().any(|g| g.wave == script::Wave::Water));
+        // The water's text comes on only once the camera is in, the waves out.
+        let wet: Vec<_> = stage.glyphs.iter().filter(|g| g.wave == script::Wave::Water).collect();
+        assert!(!wet.is_empty());
+        assert!(when_scrolled(&stage, wet[0].x) >= dive_in + dive::DIVE_SECS + dive::WAVES_SECS - 1e-9);
+        // What follows comes on only once the camera is all the way out...
+        let back_out = dive_out + dive::WAVES_SECS + dive::DIVE_SECS;
+        let next = stage.glyphs.iter().find(|g| g.x > wet.last().unwrap().x && g.wave != script::Wave::Water).unwrap();
+        assert!(when_scrolled(&stage, next.x) >= back_out - 1e-9, "{} vs {back_out}", when_scrolled(&stage, next.x));
+        // ...and before the logo comes home.
+        let home = stage.timeline.cues.iter().find(|c| c.code == script::Code::Logo && c.t > dive_in).unwrap().t;
+        assert!(back_out <= home, "{back_out} vs {home}");
     }
 
     #[test]

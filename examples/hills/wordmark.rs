@@ -247,7 +247,7 @@ impl Wordmark {
     /// its left neighbour's extrusion. `tilt` is which way is down in the
     /// big C, if it's out (see `looping::tilt`); `dive` how far the camera
     /// has gone into it (see `dive`).
-    pub fn paint(&self, c: &mut Canvas, phase: LogoPhase, tilt: f64, dive: f64) {
+    pub fn paint(&self, c: &mut Canvas, phase: LogoPhase, tilt: f64, dive: dive::Dive) {
         if phase == LogoPhase::Hidden {
             return;
         }
@@ -259,8 +259,8 @@ impl Wordmark {
         for (i, glyph) in self.glyphs.iter().enumerate() {
             let at = (x0 + (i * ADVANCE) as i64 * s, y0 + self.bob(i, wall, phase));
             let grown = c_grown(phase);
-            if i == 0 && grown >= 1.0 && dive > 0.0 {
-                dive::Camera::new(c.width, c.height, dive, wall).paint(c, glyph, wall);
+            if i == 0 && grown >= 1.0 && dive.zoom > 0.0 {
+                dive::Camera::new(c.width, c.height, dive.zoom, wall).paint(c, glyph, wall, dive.waves);
             } else if i == 0 && grown > 0.0 {
                 self.paint_big_c(c, glyph, at, grown, wall, tilt);
             } else {
@@ -304,7 +304,7 @@ mod tests {
     fn ink(screen_w: usize, phase: LogoPhase, frame: usize) -> Vec<(i64, i64)> {
         let word = Wordmark::placed(screen_w);
         let layers = Layers::new(ROWS).layer(Layer::paint(move |c| {
-            word.paint(c, phase, 0.0, 0.0);
+            word.paint(c, phase, 0.0, dive::Dive::default());
             word.paint_tagline(c, phase);
         }));
         let mut buf = FrameBuffer::new(screen_w, ROWS);
@@ -460,7 +460,7 @@ mod tests {
         for screen_w in [80, 120, 200, 300] {
             let word = Wordmark::placed(screen_w);
             let bottom = Layout::for_width(screen_w).logo_last();
-            let layers = Layers::new(ROWS).layer(Layer::paint(move |c| word.paint(c, LogoPhase::Top, 0.0, 0.0)));
+            let layers = Layers::new(ROWS).layer(Layer::paint(move |c| word.paint(c, LogoPhase::Top, 0.0, dive::Dive::default())));
             let (mut lowest, mut highest) = (0, i64::MAX);
             for frame in (0..600).step_by(3) {
                 let mut buf = FrameBuffer::new(screen_w, ROWS);
