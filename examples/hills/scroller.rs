@@ -20,35 +20,56 @@ const SCROLL_WAVE: f64 = 4.0;
 const SCROLL_WAVE_PERIOD: f64 = 0.8;
 /// Every font's baseline sits on `y0 + BASE` (plus the wave).
 pub const BASE: i64 = 7;
-/// Zoomed letters grow from the C64's 8 pixels up to `ZOOM_MAX` and
-/// back, packed tight against each other; a run of them is as wide as
-/// `ZOOM_SLOT` per letter, on average how big they are.
-const ZOOM_MAX: i64 = 20;
-pub const ZOOM_SLOT: i64 = (8 + ZOOM_MAX) / 2;
+/// Zoomed letters grow from `ZOOM_MIN` to `ZOOM_MAX` pixels and back,
+/// packed by their ink with one pixel of outline between them.
+const ZOOM_MIN: i64 = 6;
+const ZOOM_MAX: i64 = 30;
+const ZOOM_MID: f64 = (ZOOM_MIN + ZOOM_MAX) as f64 / 2.0;
+const ZOOM_GAP: i64 = 1;
 /// Seconds for one grow-and-shrink.
 const ZOOM_PERIOD: f64 = 1.2;
 
-/// A run of zoomed letters at text pixels `xs`, `t` seconds in: each
-/// one's left edge from the run's start, and its size. The wave goes with
-/// the letters, so each pulses as it scrolls; scaled so the run fills its
-/// slots exactly.
-fn zoom_run(xs: &[f64], t: f64) -> Vec<(i64, i64)> {
-    let raw: Vec<f64> =
-        xs.iter().map(|x| 8.0 + (ZOOM_MAX - 8) as f64 * (0.5 + 0.5 * (TAU * t / ZOOM_PERIOD + x * 0.06).sin())).collect();
-    let scale = (xs.len() as i64 * ZOOM_SLOT) as f64 / raw.iter().sum::<f64>();
+/// The columns of the C64's 8 that `ch` has ink in: first, and how many.
+/// A space gets three empty ones.
+fn ink(ch: char) -> (i64, i64) {
+    let cols = c64(ch).iter().fold(0u8, |a, r| a | r);
+    if cols == 0 {
+        return (0, 3);
+    }
+    let first = cols.leading_zeros() as i64;
+    (first, 8 - first - cols.trailing_zeros() as i64)
+}
+
+/// How much room a zoomed `ch` takes in the text: its ink at the middle
+/// size, plus the gap.
+pub fn zoom_advance(ch: char) -> i64 {
+    (ZOOM_MID * ink(ch).1 as f64 / 8.0).round() as i64 + ZOOM_GAP
+}
+
+/// A run of zoomed letters `(text x, char)`, `t` seconds in: each one's
+/// left ink edge from the run's start, the room it takes, and its size.
+/// The wave goes with the letters, so each pulses as it scrolls; scaled
+/// so the run fills exactly its room in the text.
+fn zoom_run(run: &[(f64, char)], t: f64) -> Vec<(i64, i64, i64)> {
+    let span = (ZOOM_MAX - ZOOM_MIN) as f64;
+    let sizes: Vec<f64> =
+        run.iter().map(|&(x, _)| ZOOM_MIN as f64 + span * (0.5 + 0.5 * (TAU * t / ZOOM_PERIOD + x * 0.05).sin())).collect();
+    let rooms: Vec<f64> = run.iter().zip(&sizes).map(|(&(_, ch), s)| s * ink(ch).1 as f64 / 8.0 + ZOOM_GAP as f64).collect();
+    let total: i64 = run.iter().map(|&(_, ch)| zoom_advance(ch)).sum();
+    let scale = total as f64 / rooms.iter().sum::<f64>();
     let mut sum = 0.0;
     let edges: Vec<i64> = std::iter::once(0)
-        .chain(raw.iter().map(|r| {
+        .chain(rooms.iter().map(|r| {
             sum += r * scale;
             sum.round() as i64
         }))
         .collect();
-    edges.windows(2).map(|e| (e[0], e[1] - e[0])).collect()
+    edges.windows(2).zip(&sizes).map(|(e, s)| (e[0], e[1] - e[0], (s * scale).round() as i64)).collect()
 }
 
 /// Whether `g` is drawn as part of a zoom run.
-fn zooms(g: &Glyph) -> bool {
-    g.zoom && g.font == Font::C64 && g.style == Style::Candy && g.path.is_none()
+pub fn zooms(g: &Glyph) -> bool {
+    g.zoom && g.font == Font::C64 && g.path.is_none()
 }
 
 /// A scroller font, switched with `{font …}`.
@@ -174,7 +195,7 @@ impl Scroller {
         let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
         for (i, g) in glyphs.iter().enumerate().filter(|(_, g)| zooms(g)) {
             match runs.last_mut() {
-                Some(r) if r.end == i && glyphs[i - 1].x + ZOOM_SLOT as f64 == g.x => r.end = i + 1,
+                Some(r) if r.end == i && glyphs[i - 1].x + zoom_advance(glyphs[i - 1].ch) as f64 == g.x => r.end = i + 1,
                 _ => runs.push(i..i + 1),
             }
         }
@@ -230,18 +251,23 @@ impl Scroller {
     /// grown about the middle of the C64's capitals and riding the wave.
     fn paint_zoom(&self, c: &mut Canvas, run: &[Glyph], scrolled: f64, t: f64) {
         let start = c.width as i64 - pen(scrolled) + run[0].x as i64;
-        if start > c.width as i64 || start + run.len() as i64 * ZOOM_SLOT < -4 {
+        let room: i64 = run.iter().map(|g| zoom_advance(g.ch)).sum();
+        if start > c.width as i64 || start + room < -4 {
             return;
         }
-        let xs: Vec<f64> = run.iter().map(|g| g.x).collect();
-        for (g, (off, size)) in run.iter().zip(zoom_run(&xs, t)) {
-            let x = start + off;
+        let letters: Vec<(f64, char)> = run.iter().map(|g| (g.x, g.ch)).collect();
+        for (g, (edge, _, size)) in run.iter().zip(zoom_run(&letters, t)) {
+            // The cell sits so its first inked column lands on the edge.
+            let x = start + edge - ink(g.ch).0 * size / 8;
             if g.ch == ' ' || x > c.width as i64 || x + size < -4 {
                 continue;
             }
             let wave = if g.wave { (TAU * t / SCROLL_WAVE_PERIOD + x as f64 * 0.05).sin() } else { 0.0 };
             let base = self.y0 + BASE + (SCROLL_WAVE * wave).round() as i64;
-            stamp_tinted(c, &c64(g.ch), (x, base - 4 - size / 2), size, if size < 14 { 1 } else { 2 }, |_, _| None);
+            let flat = g.style == Style::Flat;
+            stamp_tinted(c, &c64(g.ch), (x, base - 4 - size / 2), size, if size < 14 { 1 } else { 2 }, |_, _| {
+                flat.then_some(LETTER_HIGHLIGHT)
+            });
         }
     }
 
@@ -466,13 +492,21 @@ mod tests {
         assert!(flat.iter().all(|&t| t == flat[0]), "{flat:?}");
     }
 
-    /// How tall each of four zoomed I's stands at `frame`, in pixels.
-    fn zoomed_heights(frame: usize) -> Vec<usize> {
-        let glyphs = (0..4)
-            .map(|k| Glyph { ch: 'I', x: (k * ZOOM_SLOT) as f64, font: Font::C64, style: Style::Candy, wave: false, path: None, zoom: true })
-            .collect();
+    /// `text` as one zoom run starting at text pixel `x0`.
+    fn zoomed(text: &str, x0: f64) -> Vec<Glyph> {
+        let mut x = x0;
+        text.chars()
+            .map(|ch| {
+                let g = Glyph { ch, x, font: Font::C64, style: Style::Candy, wave: false, path: None, zoom: true };
+                x += zoom_advance(ch) as f64;
+                g
+            })
+            .collect()
+    }
+
+    /// Lit pixels of `glyphs` painted at their text positions, `frame` in.
+    fn painted(glyphs: Vec<Glyph>, width: usize, frame: usize) -> Vec<(usize, usize)> {
         let s = Scroller::new(glyphs, SCROLLER_Y);
-        let width = (4 * ZOOM_SLOT) as usize;
         let layers = Layers::new(ROWS).layer(Layer::paint(move |c| s.paint(c, c.width as f64)));
         let mut buf = FrameBuffer::new(width, ROWS);
         layers.render(&mut buf, frame);
@@ -480,55 +514,62 @@ mod tests {
             let cell = buf.get(x, y / 2);
             if cell.ch == ' ' { cell.bg.is_some() } else { y % 2 == 0 || cell.bg.is_some() }
         };
-        (0..4)
-            .map(|k| {
-                let cols = k * ZOOM_SLOT as usize..(k + 1) * ZOOM_SLOT as usize;
-                let rows: Vec<usize> = (0..ROWS * 2).filter(|&y| cols.clone().any(|x| lit(x, y))).collect();
-                rows.last().map_or(0, |last| last - rows[0] + 1)
-            })
-            .collect()
+        (0..ROWS * 2).flat_map(|y| (0..width).map(move |x| (x, y))).filter(|&(x, y)| lit(x, y)).collect()
     }
 
     #[test]
     fn zoomed_letters_sit_tight_in_their_run() {
-        let xs: Vec<f64> = (0..9).map(|k| 100.0 + (k * ZOOM_SLOT) as f64).collect();
+        let run: Vec<(f64, char)> = zoomed("ZOOM IN, ZOOM", 100.0).iter().map(|g| (g.x, g.ch)).collect();
+        let total: i64 = run.iter().map(|&(_, ch)| zoom_advance(ch)).sum();
         for t in [0.0, 0.3, 1.1] {
-            let run = zoom_run(&xs, t);
+            let boxes = zoom_run(&run, t);
             // Each starts where the one before ends, and together they fill
             // the run exactly — what follows never shifts.
-            assert_eq!(run[0].0, 0);
-            for w in run.windows(2) {
-                assert_eq!(w[1].0, w[0].0 + w[0].1, "{run:?}");
+            assert_eq!(boxes[0].0, 0);
+            for w in boxes.windows(2) {
+                assert_eq!(w[1].0, w[0].0 + w[0].1, "{boxes:?}");
             }
-            let last = run.last().unwrap();
-            assert_eq!(last.0 + last.1, 9 * ZOOM_SLOT);
-            assert!(run.iter().any(|r| r.1 != run[0].1), "all one size: {run:?}");
+            let last = boxes.last().unwrap();
+            assert_eq!(last.0 + last.1, total);
+            assert!(boxes.iter().any(|b| b.2 != boxes[0].2), "all one size: {boxes:?}");
         }
     }
 
     #[test]
-    fn a_zoomed_letter_pulses_as_it_scrolls() {
-        // Sizes go with the letter, not the screen: the same letter, a
-        // moment later and further left, is another size.
-        let xs: Vec<f64> = (0..9).map(|k| (k * ZOOM_SLOT) as f64).collect();
-        let sizes: Vec<i64> = (0..30).map(|f| zoom_run(&xs, f as f64 / 30.0)[4].1).collect();
-        let (lo, hi) = (*sizes.iter().min().unwrap(), *sizes.iter().max().unwrap());
-        assert!(hi - lo >= 8, "barely moves: {sizes:?}");
+    fn narrow_letters_leave_no_gaps() {
+        // I's are narrow in an 8-wide cell: packed by their ink, there is
+        // no empty column between them, just the outline.
+        for frame in [0, 20, 40] {
+            let px = painted(zoomed("IIIIII", 0.0), 160, frame);
+            let cols: std::collections::BTreeSet<usize> = px.iter().map(|p| p.0).collect();
+            let (first, last) = (*cols.first().unwrap(), *cols.last().unwrap());
+            let empty: Vec<usize> = (first..=last).filter(|x| !cols.contains(x)).collect();
+            assert!(empty.is_empty(), "frame {frame}: gaps at {empty:?}");
+        }
     }
 
     #[test]
-    fn zoomed_letters_grow_and_shrink_on_a_wave() {
-        let now = zoomed_heights(0);
-        assert!(now.iter().all(|&h| h >= 8), "{now:?}");
-        // Side by side, each its own size...
-        assert!(now.iter().any(|&h| h != now[0]), "all one size: {now:?}");
-        // ...and each one changes size as the wave rolls on.
-        let later = zoomed_heights(10);
-        assert_ne!(now, later);
-        // Up to 2.5× the C64's 8 pixels, never past it.
-        let all: Vec<usize> = (0..60).flat_map(zoomed_heights).collect();
-        let tallest = *all.iter().max().unwrap();
-        assert!(tallest >= 18 && tallest <= ZOOM_MAX as usize + 6, "{tallest}");
+    fn a_zoomed_letter_pulses_through_many_sizes() {
+        // Sizes go with the letter, not the screen: the same letter, a
+        // moment later and further left, is another size — and every size
+        // between small and big comes by.
+        let run: Vec<(f64, char)> = zoomed("ZOOM IN, ZOOM", 0.0).iter().map(|g| (g.x, g.ch)).collect();
+        let sizes: std::collections::BTreeSet<i64> = (0..72).map(|f| zoom_run(&run, f as f64 / 60.0)[4].2).collect();
+        assert!(sizes.len() >= 20, "{} sizes: {sizes:?}", sizes.len());
+        assert!(*sizes.first().unwrap() <= 8 && *sizes.last().unwrap() >= 28, "{sizes:?}");
+    }
+
+    #[test]
+    fn zoomed_letters_fit_under_the_screen_edge() {
+        let mut tallest = 0;
+        for frame in 0..72 {
+            let px = painted(zoomed("MMMMMM", 0.0), 200, frame);
+            let bottom = px.iter().map(|p| p.1).max().unwrap();
+            let top = px.iter().map(|p| p.1).min().unwrap();
+            assert!(bottom < ROWS * 2, "frame {frame}: off the bottom at {bottom}");
+            tallest = tallest.max(bottom - top);
+        }
+        assert!(tallest >= 28, "{tallest}");
     }
 
     #[test]

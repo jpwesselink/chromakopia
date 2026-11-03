@@ -171,10 +171,12 @@ impl Script {
             if !scroller::has(font, ch) {
                 return Err(format!("font {font:?} has no {ch:?} (in {:?})", chars[i.saturating_sub(10)..(i + 10).min(chars.len())].iter().collect::<String>()));
             }
-            if ch != ' ' || zoom {
-                glyphs.push(Glyph { ch, x, font, style, wave, path, zoom });
+            let g = Glyph { ch, x, font, style, wave, path, zoom };
+            let zooms = scroller::zooms(&g);
+            if ch != ' ' || zooms {
+                glyphs.push(g);
             }
-            x += if zoom { scroller::ZOOM_SLOT } else { scroller::advance(font, ch) } as f64;
+            x += if zooms { scroller::zoom_advance(ch) } else { scroller::advance(font, ch) } as f64;
         }
         Ok(Placed { glyphs, events, length: x })
     }
@@ -354,10 +356,12 @@ mod tests {
         let chars: String = p.glyphs.iter().map(|g| g.ch).collect();
         assert_eq!(chars, "abc de");
         assert_eq!(p.glyphs.iter().map(|g| g.zoom).collect::<Vec<_>>(), vec![false, false, true, true, true, false]);
-        // Each zoomed letter takes a slot as wide as it is on average.
-        let slot = scroller::ZOOM_SLOT as f64;
+        // Each zoomed letter takes as much room as it has ink, on average.
+        let adv = |ch| scroller::zoom_advance(ch) as f64;
         let xs: Vec<f64> = p.glyphs.iter().map(|g| g.x).collect();
-        assert_eq!(xs, vec![0.0, 8.0, 16.0, 16.0 + slot, 16.0 + 2.0 * slot, 16.0 + 3.0 * slot]);
+        let c = 16.0 + adv('c');
+        assert_eq!(xs, vec![0.0, 8.0, 16.0, c, c + adv(' '), c + adv(' ') + adv('d')]);
+        assert!(adv('i') < adv('m'));
     }
 
     #[test]
