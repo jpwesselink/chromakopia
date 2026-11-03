@@ -20,23 +20,35 @@ const SCROLL_WAVE: f64 = 4.0;
 const SCROLL_WAVE_PERIOD: f64 = 0.8;
 /// Every font's baseline sits on `y0 + BASE` (plus the wave).
 pub const BASE: i64 = 7;
-/// Zoomed letters grow from the C64's 8 pixels up to this many, each in
-/// a slot this wide (plus a pixel for the extrusion).
+/// Zoomed letters grow from the C64's 8 pixels up to `ZOOM_MAX` and
+/// back, packed tight against each other; a run of them is as wide as
+/// `ZOOM_SLOT` per letter, on average how big they are.
 const ZOOM_MAX: i64 = 20;
-pub const ZOOM_SLOT: i64 = ZOOM_MAX + 2;
+pub const ZOOM_SLOT: i64 = (8 + ZOOM_MAX) / 2;
 /// Seconds for one grow-and-shrink.
-const ZOOM_PERIOD: f64 = 1.6;
+const ZOOM_PERIOD: f64 = 1.2;
 
-/// How big a zoomed letter is at screen `x`, `t` seconds in: a wave
-/// rolling through the text, 8 pixels at its smallest.
-fn zoom_size(x: i64, t: f64) -> i64 {
-    let wave = 0.5 + 0.5 * (TAU * t / ZOOM_PERIOD + x as f64 * 0.06).sin();
-    8 + ((ZOOM_MAX - 8) as f64 * wave).round() as i64
+/// A run of zoomed letters at text pixels `xs`, `t` seconds in: each
+/// one's left edge from the run's start, and its size. The wave goes with
+/// the letters, so each pulses as it scrolls; scaled so the run fills its
+/// slots exactly.
+fn zoom_run(xs: &[f64], t: f64) -> Vec<(i64, i64)> {
+    let raw: Vec<f64> =
+        xs.iter().map(|x| 8.0 + (ZOOM_MAX - 8) as f64 * (0.5 + 0.5 * (TAU * t / ZOOM_PERIOD + x * 0.06).sin())).collect();
+    let scale = (xs.len() as i64 * ZOOM_SLOT) as f64 / raw.iter().sum::<f64>();
+    let mut sum = 0.0;
+    let edges: Vec<i64> = std::iter::once(0)
+        .chain(raw.iter().map(|r| {
+            sum += r * scale;
+            sum.round() as i64
+        }))
+        .collect();
+    edges.windows(2).map(|e| (e[0], e[1] - e[0])).collect()
 }
 
-/// How wide `g` is on screen: its slot when zoomed.
-fn width(g: &Glyph) -> i64 {
-    if g.zoom { ZOOM_SLOT } else { advance(g.font, g.ch) }
+/// Whether `g` is drawn as part of a zoom run.
+fn zooms(g: &Glyph) -> bool {
+    g.zoom && g.font == Font::C64 && g.style == Style::Candy && g.path.is_none()
 }
 
 /// A scroller font, switched with `{font …}`.
@@ -137,6 +149,8 @@ pub struct Scroller {
     y0: i64,
     /// Every path-riding letter at every angle, worked out once.
     turns: HashMap<(char, Font), Turns>,
+    /// Runs of zoomed letters, as ranges into `glyphs`.
+    runs: Vec<std::ops::Range<usize>>,
 }
 
 /// The pixel font `font` draws `ch` from, and at what scale — None for the
@@ -157,7 +171,14 @@ impl Scroller {
             let Some((rows, scale)) = bitmap(g.font, g.ch) else { continue };
             turns.entry((g.ch, g.font)).or_insert_with(|| (0..ANGLES).map(|i| looping::turned(&rows, scale, i)).collect());
         }
-        Self { glyphs, y0, turns }
+        let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+        for (i, g) in glyphs.iter().enumerate().filter(|(_, g)| zooms(g)) {
+            match runs.last_mut() {
+                Some(r) if r.end == i && glyphs[i - 1].x + ZOOM_SLOT as f64 == g.x => r.end = i + 1,
+                _ => runs.push(i..i + 1),
+            }
+        }
+        Self { glyphs, y0, turns, runs }
     }
 
     /// Draw path-riding letter `g` wherever it is on its track, `scrolled`
@@ -198,11 +219,30 @@ impl Scroller {
     /// or None when it's off screen.
     fn spot(&self, g: &Glyph, width: usize, scrolled: f64, t: f64) -> Option<(i64, i64)> {
         let x = width as i64 - pen(scrolled) + g.x as i64;
-        if x < -(self::width(g) + 4) || x > width as i64 {
+        if x < -(advance(g.font, g.ch) + 4) || x > width as i64 {
             return None;
         }
         let wave = if g.wave { (TAU * t / SCROLL_WAVE_PERIOD + x as f64 * 0.05).sin() } else { 0.0 };
         Some((x, self.y0 + BASE + (SCROLL_WAVE * wave).round() as i64))
+    }
+
+    /// Paint a run of zoomed letters, tight against each other, each
+    /// grown about the middle of the C64's capitals and riding the wave.
+    fn paint_zoom(&self, c: &mut Canvas, run: &[Glyph], scrolled: f64, t: f64) {
+        let start = c.width as i64 - pen(scrolled) + run[0].x as i64;
+        if start > c.width as i64 || start + run.len() as i64 * ZOOM_SLOT < -4 {
+            return;
+        }
+        let xs: Vec<f64> = run.iter().map(|g| g.x).collect();
+        for (g, (off, size)) in run.iter().zip(zoom_run(&xs, t)) {
+            let x = start + off;
+            if g.ch == ' ' || x > c.width as i64 || x + size < -4 {
+                continue;
+            }
+            let wave = if g.wave { (TAU * t / SCROLL_WAVE_PERIOD + x as f64 * 0.05).sin() } else { 0.0 };
+            let base = self.y0 + BASE + (SCROLL_WAVE * wave).round() as i64;
+            stamp_tinted(c, &c64(g.ch), (x, base - 4 - size / 2), size, if size < 14 { 1 } else { 2 }, |_, _| None);
+        }
     }
 
     /// Paint the pixel-font letters `scrolled` pixels in (0 = just off the
@@ -210,16 +250,15 @@ impl Scroller {
     pub fn paint(&self, c: &mut Canvas, scrolled: f64) {
         let t = c.frame as f64 / FPS;
         let mut face = Vec::new();
-        for g in self.glyphs.iter().filter(|g| g.font != Font::Term) {
+        for run in &self.runs {
+            self.paint_zoom(c, &self.glyphs[run.clone()], scrolled, t);
+        }
+        for g in self.glyphs.iter().filter(|g| g.font != Font::Term && !zooms(g)) {
             if self.paint_on_path(c, g, scrolled, &mut face) {
                 continue;
             }
             let Some((x, base)) = self.spot(g, c.width, scrolled, t) else { continue };
-            if g.zoom && g.font == Font::C64 && g.style == Style::Candy {
-                // Grown about the middle of its slot and of the C64's capitals.
-                let size = zoom_size(x, t);
-                let (left, top) = (x + (ZOOM_MAX - size) / 2, base - 4 - size / 2);
-                stamp_tinted(c, &c64(g.ch), (left, top), size, if size < 14 { 1 } else { 2 }, |_, _| None);
+            if g.ch == ' ' {
                 continue;
             }
             let top = base - baseline(g.font);
@@ -242,7 +281,7 @@ impl Scroller {
     /// with `{wave off}`). Run after the pixel layers have rendered.
     pub fn paint_cells(&self, buf: &mut FrameBuffer, scrolled: f64, frame: usize) {
         let t = frame as f64 / FPS;
-        for g in self.glyphs.iter().filter(|g| g.font == Font::Term) {
+        for g in self.glyphs.iter().filter(|g| g.font == Font::Term && g.ch != ' ') {
             let Some((x, base)) = self.spot(g, buf.width, scrolled, t) else { continue };
             let row = (base - 4).div_euclid(2);
             if x < 0 || x as usize >= buf.width || row < 0 || row as usize >= buf.height {
@@ -451,6 +490,33 @@ mod tests {
     }
 
     #[test]
+    fn zoomed_letters_sit_tight_in_their_run() {
+        let xs: Vec<f64> = (0..9).map(|k| 100.0 + (k * ZOOM_SLOT) as f64).collect();
+        for t in [0.0, 0.3, 1.1] {
+            let run = zoom_run(&xs, t);
+            // Each starts where the one before ends, and together they fill
+            // the run exactly — what follows never shifts.
+            assert_eq!(run[0].0, 0);
+            for w in run.windows(2) {
+                assert_eq!(w[1].0, w[0].0 + w[0].1, "{run:?}");
+            }
+            let last = run.last().unwrap();
+            assert_eq!(last.0 + last.1, 9 * ZOOM_SLOT);
+            assert!(run.iter().any(|r| r.1 != run[0].1), "all one size: {run:?}");
+        }
+    }
+
+    #[test]
+    fn a_zoomed_letter_pulses_as_it_scrolls() {
+        // Sizes go with the letter, not the screen: the same letter, a
+        // moment later and further left, is another size.
+        let xs: Vec<f64> = (0..9).map(|k| (k * ZOOM_SLOT) as f64).collect();
+        let sizes: Vec<i64> = (0..30).map(|f| zoom_run(&xs, f as f64 / 30.0)[4].1).collect();
+        let (lo, hi) = (*sizes.iter().min().unwrap(), *sizes.iter().max().unwrap());
+        assert!(hi - lo >= 8, "barely moves: {sizes:?}");
+    }
+
+    #[test]
     fn zoomed_letters_grow_and_shrink_on_a_wave() {
         let now = zoomed_heights(0);
         assert!(now.iter().all(|&h| h >= 8), "{now:?}");
@@ -462,7 +528,7 @@ mod tests {
         // Up to 2.5× the C64's 8 pixels, never past it.
         let all: Vec<usize> = (0..60).flat_map(zoomed_heights).collect();
         let tallest = *all.iter().max().unwrap();
-        assert!(tallest >= 18 && tallest <= ZOOM_MAX as usize + 3, "{tallest}");
+        assert!(tallest >= 18 && tallest <= ZOOM_MAX as usize + 6, "{tallest}");
     }
 
     #[test]

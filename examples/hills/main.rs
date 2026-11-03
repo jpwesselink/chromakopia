@@ -640,10 +640,12 @@ mod tests {
         }
         // The zoom: its first letter mid-screen.
         let first = stage.glyphs.iter().find(|g| g.zoom).unwrap();
-        stage.seek_to(when_scrolled(&stage, first.x + 112.0 / 2.0 + 20.0));
-        let mut b = FrameBuffer::new(112, ROWS);
-        stage.render(&mut b, 0);
-        out += &format!("\n=== zoom ===\n{}\n", b.to_ansi_string());
+        for (name, k) in [("zoom", 0.0), ("zoom later", 20.0)] {
+            stage.seek_to(when_scrolled(&stage, first.x + 112.0 / 2.0 + 60.0 + k));
+            let mut b = FrameBuffer::new(112, ROWS);
+            stage.render(&mut b, 0);
+            out += &format!("\n=== {name} ===\n{}\n", b.to_ansi_string());
+        }
         std::fs::write("target/hills-blocks.ansi", out).unwrap();
     }
 
