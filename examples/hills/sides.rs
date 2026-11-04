@@ -50,14 +50,14 @@ pub struct Side {
 
 /// Every side scroller the script can call on.
 pub const SIDES: [Side; 4] = [
-    // In front of the second hill, ducking in and out behind the third.
+    // In front of the third hill, ducking in and out behind the fourth.
     Side {
         name: "hide",
         text: "psst... down here!   behind the hills!   hello? can anybody see me?",
-        y: 58,
+        y: 60,
         scale: 1,
         speed: 1.0,
-        z: z::ridge(3) - 5,
+        z: z::ridge(4) - 5,
         amp: 6.0,
         spread: 0.45,
         period: 1.4,
