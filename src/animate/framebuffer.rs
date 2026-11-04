@@ -603,17 +603,27 @@ fn finish(stderr: &mut impl std::io::Write, quit: bool, start_row: usize, height
     let _ = stderr.flush();
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn synced(frame: String) -> String {
+    // Synchronized output: the terminal shows the frame once it's all in,
+    // never half drawn. Terminals without it ignore the codes.
+    format!("\x1B[?2026h{frame}\x1B[?2026l")
+}
+
 /// Diff two framebuffers and produce minimal ANSI output.
 ///
 /// Uses absolute cursor positioning — no newlines, no scrolling.
 #[cfg(not(target_arch = "wasm32"))]
 fn diff_render(prev: Option<&FrameBuffer>, curr: &FrameBuffer, start_row: usize) -> String {
+    use std::fmt::Write as _;
     let mut out = String::with_capacity(curr.width * curr.height * 4);
     let mut last_fg: Option<Color> = None;
     let mut last_bg: Option<Option<Color>> = None;
 
     for y in 0..curr.height {
-        let mut need_position = true;
+        // Unchanged cells since the cursor was last placed on this row
+        // (None: it isn't on this row yet).
+        let mut gap: Option<usize> = None;
 
         for x in 0..curr.width {
             let cell = curr.get(x, y);
@@ -621,34 +631,46 @@ fn diff_render(prev: Option<&FrameBuffer>, curr: &FrameBuffer, start_row: usize)
                 Some(p) if y < p.height && x < p.width => p.get(x, y) != cell,
                 _ => true,
             };
-
-            if changed {
-                if need_position {
-                    out.push_str(&format!("\x1B[{};{}H", start_row + y, x + 1));
-                }
-                need_position = false;
-
-                // Background color
-                if last_bg != Some(cell.bg) {
-                    match cell.bg {
-                        Some(bg) => out.push_str(&format!("\x1B[48;2;{};{};{}m", bg.r, bg.g, bg.b)),
-                        None => out.push_str("\x1B[49m"),
-                    }
-                    last_bg = Some(cell.bg);
-                }
-
-                // Foreground color
-                if last_fg != Some(cell.color) {
-                    out.push_str(&format!(
-                        "\x1B[38;2;{};{};{}m",
-                        cell.color.r, cell.color.g, cell.color.b
-                    ));
-                    last_fg = Some(cell.color);
-                }
-                out.push(cell.ch);
-            } else {
-                need_position = true;
+            if !changed {
+                gap = gap.map(|g| g + 1);
+                continue;
             }
+            match gap {
+                None => {
+                    let _ = write!(out, "\x1B[{};{}H", start_row + y, x + 1);
+                }
+                Some(0) => {}
+                Some(n) => {
+                    let _ = write!(out, "\x1B[{n}C");
+                }
+            }
+            gap = Some(0);
+
+            // Only the colours that show: a space is all background, a
+            // full block all foreground. Both go in one code.
+            let fg = (cell.ch != ' ' && last_fg != Some(cell.color)).then_some(cell.color);
+            let bg = (cell.ch != '\u{2588}' && last_bg != Some(cell.bg)).then_some(cell.bg);
+            if fg.is_some() || bg.is_some() {
+                out.push_str("\x1B[");
+                if let Some(c) = fg {
+                    let _ = write!(out, "38;2;{};{};{}", c.r, c.g, c.b);
+                    last_fg = Some(c);
+                }
+                if let Some(b) = bg {
+                    if fg.is_some() {
+                        out.push(';');
+                    }
+                    match b {
+                        Some(c) => {
+                            let _ = write!(out, "48;2;{};{};{}", c.r, c.g, c.b);
+                        }
+                        None => out.push_str("49"),
+                    }
+                    last_bg = Some(b);
+                }
+                out.push('m');
+            }
+            out.push(cell.ch);
         }
     }
 
@@ -780,7 +802,7 @@ pub(crate) async fn run_effect_in(
 
         {
             let mut stderr = std::io::stderr().lock();
-            let _ = stderr.write_all(output.as_bytes());
+            let _ = stderr.write_all(synced(output).as_bytes());
             let _ = stderr.flush();
         }
         prev = Some(buf.clone());
@@ -1042,7 +1064,7 @@ pub fn spawn_effect(
             ));
             {
                 let mut stderr = std::io::stderr().lock();
-                let _ = stderr.write_all(output.as_bytes());
+                let _ = stderr.write_all(synced(output).as_bytes());
                 let _ = stderr.flush();
             }
             prev = Some(buf.clone());
@@ -1129,6 +1151,45 @@ mod tests {
         let s = buf.to_ansi_string();
         assert!(s.contains("ab\n"));
         assert!(s.contains("cd"));
+    }
+
+    #[test]
+    fn diff_render_sets_both_colours_in_one_code() {
+        let mut buf = FrameBuffer::new(1, 1);
+        buf.set(0, 0, Cell::with_bg('\u{2580}', Color::new(1, 2, 3), Color::new(4, 5, 6)));
+        let output = diff_render(None, &buf, 1);
+        assert!(output.contains("\x1B[38;2;1;2;3;48;2;4;5;6m\u{2580}"), "{output:?}");
+    }
+
+    #[test]
+    fn diff_render_skips_colours_nobody_sees() {
+        // A space shows only its background, a full block only its foreground.
+        let mut buf = FrameBuffer::new(4, 1);
+        let bg = Color::new(9, 9, 9);
+        buf.set(0, 0, Cell::with_bg(' ', Color::new(1, 1, 1), bg));
+        buf.set(1, 0, Cell::with_bg(' ', Color::new(2, 2, 2), bg));
+        buf.set(2, 0, Cell::with_bg('\u{2588}', Color::new(3, 3, 3), Color::new(7, 7, 7)));
+        buf.set(3, 0, Cell::with_bg('\u{2588}', Color::new(3, 3, 3), Color::new(8, 8, 8)));
+        let output = diff_render(None, &buf, 1);
+        assert_eq!(output.matches("\x1B[").count(), 4, "{output:?}"); // move, bg, fg, reset
+        assert!(output.contains("  \x1B[38;2;3;3;3m\u{2588}\u{2588}"), "{output:?}");
+    }
+
+    #[test]
+    fn diff_render_steps_over_short_gaps() {
+        let buf1 = FrameBuffer::from_text("abcdefgh", Color::new(255, 255, 255));
+        let mut buf2 = buf1.clone();
+        buf2.set(0, 0, Cell::new('x', Color::new(255, 255, 255)));
+        buf2.set(4, 0, Cell::new('y', Color::new(255, 255, 255)));
+        let output = diff_render(Some(&buf1), &buf2, 1);
+        assert_eq!(output.matches('H').count(), 1, "{output:?}");
+        assert!(output.contains("x\x1B[3Cy"), "{output:?}");
+    }
+
+    #[test]
+    fn frames_are_drawn_in_one_go() {
+        let out = synced("abc".to_string());
+        assert_eq!(out, "\x1B[?2026habc\x1B[?2026l");
     }
 
     #[test]
