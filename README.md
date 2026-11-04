@@ -26,7 +26,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 Every frame is a 2D grid of `Cell { ch, fg, bg }` rendered atomically via absolute cursor positioning. That gives you:
 
 - **2D effects** — half-blocks (`▀ ▄ █` = 2 pixels per cell), per-cell colour fields, overlays composited over backgrounds.
-- **Steady FPS** — lockstep producer/consumer at 30 FPS. Animation timing is computed in *frames* so the same code produces the same output on every machine.
+- **Steady FPS** — lockstep producer/consumer at 60 FPS. Animation timing is computed in *frames* so the same code produces the same output on every machine.
 - **In-place updates** — animations don't scroll the terminal; they redraw the same region.
 - **WASM-portable** — the buffer is just a `Vec<Cell>`; effects render identically to a browser canvas via [chromakopia-wasm](https://jpwesselink.github.io/chromakopia/).
 
@@ -189,7 +189,7 @@ chromakopia::set_color_enabled(Some(false));  // explicit override
 
 ## Terminals
 
-Frames go out as diffs inside synchronized output (`\x1B[?2026h … l`), so a terminal that supports it never shows a frame half drawn. iTerm2, Ghostty, kitty and WezTerm look their best. Apple's Terminal.app has no synchronized output and can tear; there chromakopia draws every other frame (same pace, half the bytes) to make that rarer. `CHROMAKOPIA_HALF_RATE=1` or `=0` forces half rate on or off in any terminal.
+Frames go out as diffs inside synchronized output (`\x1B[?2026h … l`), so a terminal that supports it never shows a frame half drawn. One-colour cells go out as filled spaces rather than block glyphs. iTerm2, Ghostty, kitty and WezTerm look their best. Apple's Terminal.app draws half-block glyphs from the font and shows seams and smears around moving pixels; use another terminal for the full effect.
 
 ## Examples
 

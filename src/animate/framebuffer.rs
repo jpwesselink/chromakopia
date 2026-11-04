@@ -603,26 +603,24 @@ fn finish(stderr: &mut impl std::io::Write, quit: bool, start_row: usize, height
     let _ = stderr.flush();
 }
 
-/// Frames to step on per frame drawn. Apple's Terminal.app has no
-/// synchronized output, so it can show a frame half written — tearing;
-/// drawing every other frame there halves the bytes it has to take in
-/// and with them the chance. `CHROMAKOPIA_HALF_RATE=1` or `=0` (the
-/// `half` setting) forces it on or off anywhere; `term` is
-/// `TERM_PROGRAM`.
-pub fn frame_step(half: Option<&str>, term: Option<&str>) -> usize {
-    let half = match half {
-        Some("1") => true,
-        Some("0") => false,
-        _ => term == Some("Apple_Terminal"),
-    };
-    if half { 2 } else { 1 }
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 fn synced(frame: String) -> String {
     // Synchronized output: the terminal shows the frame once it's all in,
     // never half drawn. Terminals without it ignore the codes.
     format!("\x1B[?2026h{frame}\x1B[?2026l")
+}
+
+/// A block cell that is one colour top to bottom goes out as a space on
+/// that background: a filled rectangle every terminal draws edge to edge,
+/// where a font's block glyph can leave seams or bleed into its
+/// neighbours (Terminal.app) — and with no foreground to send.
+fn solid(cell: Cell) -> Cell {
+    let one = match cell.ch {
+        '\u{2588}' => Some(cell.color),
+        '\u{2580}' | '\u{2584}' if cell.bg == Some(cell.color) => Some(cell.color),
+        _ => None,
+    };
+    one.map_or(cell, |c| Cell::with_bg(' ', c, c))
 }
 
 /// Diff two framebuffers and produce minimal ANSI output.
@@ -646,6 +644,7 @@ fn diff_render(prev: Option<&FrameBuffer>, curr: &FrameBuffer, start_row: usize)
                 Some(p) if y < p.height && x < p.width => p.get(x, y) != cell,
                 _ => true,
             };
+            let cell = solid(cell);
             if !changed {
                 gap = gap.map(|g| g + 1);
                 continue;
@@ -781,13 +780,7 @@ pub(crate) async fn run_effect_in(
         spawn_key_listener(quit_key, on_key, running.clone())
     });
 
-    // Terminals that can't show a frame in one go get half as many, each
-    // two frames on, so the animation keeps its pace.
-    let step = frame_step(
-        std::env::var("CHROMAKOPIA_HALF_RATE").ok().as_deref(),
-        std::env::var("TERM_PROGRAM").ok().as_deref(),
-    );
-    let frame_duration = Duration::from_secs_f64(step as f64 / FPS / speed.max(0.001));
+    let frame_duration = Duration::from_secs_f64(1.0 / FPS / speed.max(0.001));
     let term_width = crate::terminal::terminal_width();
     let deadline = tokio::time::Instant::now() + duration;
     let mut interval = tokio::time::interval(frame_duration);
@@ -827,7 +820,7 @@ pub(crate) async fn run_effect_in(
             let _ = stderr.flush();
         }
         prev = Some(buf.clone());
-        frame += step;
+        frame += 1;
     }
     running.store(false, Ordering::Relaxed);
 
@@ -970,13 +963,7 @@ pub fn spawn_effect(
         spawn_key_listener(Some(key), None, running.clone())
     });
 
-    // Terminals that can't show a frame in one go get half as many, each
-    // two frames on, so the animation keeps its pace.
-    let step = frame_step(
-        std::env::var("CHROMAKOPIA_HALF_RATE").ok().as_deref(),
-        std::env::var("TERM_PROGRAM").ok().as_deref(),
-    );
-    let frame_duration = Duration::from_secs_f64(step as f64 / FPS / speed.max(0.001));
+    let frame_duration = Duration::from_secs_f64(1.0 / FPS / speed.max(0.001));
     let term_width = crate::terminal::terminal_width();
 
     // Single loop: animate, diff, write — frame production and display 1:1.
@@ -1040,7 +1027,7 @@ pub fn spawn_effect(
                 let mut old_buf = FrameBuffer::new(width, height);
                 old_effect.render(&mut old_buf, frame);
 
-                *elapsed += step;
+                *elapsed += 1;
                 let t = easing.apply((*elapsed as f64 / total.max(1) as f64).min(1.0));
 
                 for y in 0..buf.height {
@@ -1058,7 +1045,7 @@ pub fn spawn_effect(
 
             // Apply fade on top
             if let Some((color, ref easing, total, ref mut elapsed)) = fade {
-                *elapsed += step;
+                *elapsed += 1;
                 let t = easing.apply((*elapsed as f64 / total.max(1) as f64).min(1.0));
                 for y in 0..buf.height {
                     for x in 0..buf.width {
@@ -1095,7 +1082,7 @@ pub fn spawn_effect(
                 let _ = stderr.flush();
             }
             prev = Some(buf.clone());
-            frame += step;
+            frame += 1;
         }
 
         let quit = quit_pressed.is_some_and(|p| p.load(Ordering::Relaxed));
@@ -1198,8 +1185,8 @@ mod tests {
         buf.set(2, 0, Cell::with_bg('\u{2588}', Color::new(3, 3, 3), Color::new(7, 7, 7)));
         buf.set(3, 0, Cell::with_bg('\u{2588}', Color::new(3, 3, 3), Color::new(8, 8, 8)));
         let output = diff_render(None, &buf, 1);
-        assert_eq!(output.matches("\x1B[").count(), 4, "{output:?}"); // move, bg, fg, reset
-        assert!(output.contains("  \x1B[38;2;3;3;3m\u{2588}\u{2588}"), "{output:?}");
+        assert_eq!(output.matches("\x1B[").count(), 4, "{output:?}"); // move, bg, bg, reset
+        assert!(output.contains("  \x1B[48;2;3;3;3m  "), "{output:?}"); // full blocks go out as filled spaces
     }
 
     #[test]
@@ -1277,16 +1264,27 @@ mod tests {
             }
         }
 
-        /// Whether the screen shows `buf`: a space by its background, a
-        /// full block by its foreground, anything else by both.
+        /// Whether the screen shows `buf`: block cells and spaces by the
+        /// colours of their top and bottom halves, anything else by its
+        /// character and both colours.
         fn shows(&self, buf: &FrameBuffer) -> Result<(), String> {
+            fn halves(ch: char, fg: Option<Color>, bg: Option<Color>) -> Option<[Option<Color>; 2]> {
+                match ch {
+                    ' ' => Some([bg, bg]),
+                    '\u{2588}' => Some([fg, fg]),
+                    '\u{2580}' => Some([fg, bg]),
+                    '\u{2584}' => Some([bg, fg]),
+                    _ => None,
+                }
+            }
             for y in 0..buf.height {
                 for x in 0..buf.width {
                     let want = buf.get(x, y);
                     let (ch, fg, bg) = self.cells[y * self.w + x];
-                    let ok = ch == want.ch
-                        && (want.ch == ' ' || fg == Some(want.color))
-                        && (want.ch == '\u{2588}' || bg == want.bg);
+                    let ok = match (halves(want.ch, Some(want.color), want.bg), halves(ch, fg, bg)) {
+                        (Some(a), Some(b)) => a == b,
+                        _ => ch == want.ch && fg == Some(want.color) && bg == want.bg,
+                    };
                     if !ok {
                         return Err(format!("({x},{y}): screen {ch:?} {fg:?} {bg:?}, frame {want:?}"));
                     }
@@ -1322,16 +1320,6 @@ mod tests {
             }
             prev = Some(buf.clone());
         }
-    }
-
-    #[test]
-    fn terminal_app_draws_every_other_frame_unless_told_otherwise() {
-        assert_eq!(frame_step(None, Some("Apple_Terminal")), 2);
-        assert_eq!(frame_step(None, Some("iTerm.app")), 1);
-        assert_eq!(frame_step(None, None), 1);
-        assert_eq!(frame_step(Some("0"), Some("Apple_Terminal")), 1);
-        assert_eq!(frame_step(Some("1"), Some("ghostty")), 2);
-        assert_eq!(frame_step(Some("yes"), Some("ghostty")), 1);
     }
 
     #[test]
