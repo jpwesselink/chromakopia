@@ -1186,6 +1186,117 @@ mod tests {
         assert!(output.contains("x\x1B[3Cy"), "{output:?}");
     }
 
+    /// A tiny terminal: plays `diff_render`'s output (cursor moves, short
+    /// hops, SGR colours, characters) onto a grid of (char, fg, bg).
+    struct Term {
+        w: usize,
+        cells: Vec<(char, Option<Color>, Option<Color>)>,
+        x: usize,
+        y: usize,
+        fg: Option<Color>,
+        bg: Option<Color>,
+    }
+
+    impl Term {
+        fn new(w: usize, h: usize) -> Self {
+            Term { w, cells: vec![(' ', None, None); w * h], x: 0, y: 0, fg: None, bg: None }
+        }
+
+        fn play(&mut self, s: &str) {
+            let mut chars = s.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c != '\x1B' {
+                    self.cells[self.y * self.w + self.x] = (c, self.fg, self.bg);
+                    self.x += 1;
+                    continue;
+                }
+                assert_eq!(chars.next(), Some('['));
+                let mut params = String::new();
+                let end = loop {
+                    let c = chars.next().unwrap();
+                    if c.is_ascii_alphabetic() {
+                        break c;
+                    }
+                    params.push(c);
+                };
+                let nums: Vec<u8> = params.split(';').map(|p| p.parse::<u16>().unwrap_or(0) as u8).collect();
+                match end {
+                    'H' => {
+                        self.y = nums[0] as usize - 1;
+                        self.x = nums[1] as usize - 1;
+                    }
+                    'C' => self.x += nums[0] as usize,
+                    'm' => {
+                        let mut i = 0;
+                        while i < nums.len() {
+                            match nums[i] {
+                                0 => (self.fg, self.bg) = (None, None),
+                                38 => {
+                                    self.fg = Some(Color::new(nums[i + 2], nums[i + 3], nums[i + 4]));
+                                    i += 4;
+                                }
+                                48 => {
+                                    self.bg = Some(Color::new(nums[i + 2], nums[i + 3], nums[i + 4]));
+                                    i += 4;
+                                }
+                                49 => self.bg = None,
+                                n => panic!("unexpected SGR {n}"),
+                            }
+                            i += 1;
+                        }
+                    }
+                    e => panic!("unexpected CSI {e}"),
+                }
+            }
+        }
+
+        /// Whether the screen shows `buf`: a space by its background, a
+        /// full block by its foreground, anything else by both.
+        fn shows(&self, buf: &FrameBuffer) -> Result<(), String> {
+            for y in 0..buf.height {
+                for x in 0..buf.width {
+                    let want = buf.get(x, y);
+                    let (ch, fg, bg) = self.cells[y * self.w + x];
+                    let ok = ch == want.ch
+                        && (want.ch == ' ' || fg == Some(want.color))
+                        && (want.ch == '\u{2588}' || bg == want.bg);
+                    if !ok {
+                        return Err(format!("({x},{y}): screen {ch:?} {fg:?} {bg:?}, frame {want:?}"));
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn played_on_a_terminal_every_frame_shows_exactly() {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let (w, h) = (40, 12);
+        let palette = [Color::new(10, 20, 30), Color::new(200, 100, 50), Color::new(0, 0, 0), Color::new(255, 255, 255)];
+        let glyphs = [' ', '\u{2580}', '\u{2584}', '\u{2588}', 'a'];
+        let mut term = Term::new(w, h);
+        let mut prev: Option<FrameBuffer> = None;
+        let mut buf = FrameBuffer::new(w, h);
+        for frame in 0..300 {
+            // Change a few cells, sometimes a lot, the way scenes do.
+            let changes = if frame % 50 == 0 { w * h } else { rng.random_range(0..40) };
+            for _ in 0..changes {
+                let (x, y) = (rng.random_range(0..w), rng.random_range(0..h));
+                let ch = glyphs[rng.random_range(0..glyphs.len())];
+                let fg = palette[rng.random_range(0..palette.len())];
+                let bg = if rng.random_bool(0.2) { None } else { Some(palette[rng.random_range(0..palette.len())]) };
+                buf.set(x, y, Cell { ch, color: fg, bg });
+            }
+            term.play(&diff_render(prev.as_ref(), &buf, 1));
+            if let Err(e) = term.shows(&buf) {
+                panic!("frame {frame}: {e}");
+            }
+            prev = Some(buf.clone());
+        }
+    }
+
     #[test]
     fn frames_are_drawn_in_one_go() {
         let out = synced("abc".to_string());
