@@ -587,6 +587,96 @@ mod tests {
         }
     }
 
+    /// Worst stretches of the whole script, a second at a time:
+    /// `cargo test --release --example hills bench_script -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_script() {
+        let stage = Stage::new(200);
+        let mut worst: Vec<(f64, f64)> = Vec::new();
+        let mut t = 0.0;
+        while t < stage.timeline.total {
+            stage.seek_to(t);
+            let start = std::time::Instant::now();
+            for f in 0..15 {
+                let mut b = FrameBuffer::new(200, ROWS);
+                stage.render(&mut b, f * 4);
+            }
+            worst.push((start.elapsed().as_secs_f64() * 1000.0 / 15.0, t));
+            t += 1.0;
+        }
+        let mean = worst.iter().map(|w| w.0).sum::<f64>() / worst.len() as f64;
+        worst.sort_by(|a, b| b.0.total_cmp(&a.0));
+        println!("mean {mean:.2} ms/frame over {} s", worst.len());
+        for (ms, t) in worst.iter().take(12) {
+            println!("t={t:>5.0}s scroll={:>6.0}: {ms:.2} ms/frame", stage.timeline.scrolled(*t));
+        }
+    }
+
+    /// Bytes per frame the terminal has to swallow (same diff as the renderer):
+    /// `cargo test --release --example hills bench_bytes -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_bytes() {
+        fn bytes(prev: &FrameBuffer, curr: &FrameBuffer) -> (usize, usize) {
+            let (mut n, mut cells) = (0, 0);
+            let (mut fg, mut bg) = (None, None);
+            for y in 0..curr.height {
+                let mut placed = false;
+                for x in 0..curr.width {
+                    let c = curr.get(x, y);
+                    if prev.get(x, y) == c {
+                        placed = false;
+                        continue;
+                    }
+                    cells += 1;
+                    if !placed {
+                        n += format!("\x1B[{};{}H", y + 1, x + 1).len();
+                        placed = true;
+                    }
+                    if bg != Some(c.bg) {
+                        n += c.bg.map_or(5, |b| format!("\x1B[48;2;{};{};{}m", b.r, b.g, b.b).len());
+                        bg = Some(c.bg);
+                    }
+                    if fg != Some(c.color) {
+                        n += format!("\x1B[38;2;{};{};{}m", c.color.r, c.color.g, c.color.b).len();
+                        fg = Some(c.color);
+                    }
+                    n += c.ch.len_utf8();
+                }
+            }
+            (n, cells)
+        }
+        let (w, h) = (200, ROWS);
+        let stage = Stage::new(w);
+        let mut rows: Vec<(usize, usize, f64)> = Vec::new();
+        let mut t = 0.0;
+        while t < stage.timeline.total {
+            stage.seek_to(t);
+            let mut prev = FrameBuffer::new(w, h);
+            stage.render(&mut prev, 0);
+            let (mut n, mut cells) = (0, 0);
+            for f in 1..=30 {
+                let mut b = FrameBuffer::new(w, h);
+                stage.render(&mut b, f);
+                let (bn, bc) = bytes(&prev, &b);
+                n += bn;
+                cells += bc;
+                prev = b;
+            }
+            rows.push((n / 30, cells / 30, t));
+            t += 2.0;
+        }
+        let mean = rows.iter().map(|r| r.0).sum::<usize>() / rows.len();
+        println!("mean {mean} bytes/frame ({} cells on screen)", w * h);
+        rows.sort_by(|a, b| b.0.cmp(&a.0));
+        for (n, cells, t) in rows.iter().take(15) {
+            let sc = stage.timeline.scrolled(*t);
+            let text: String = stage.glyphs.iter().filter(|g| (sc - w as f64..sc).contains(&g.x)).map(|g| g.ch).take(30).collect();
+            println!("t={t:>5.0}s scroll={sc:>6.0}: {n:>6} bytes/frame, {cells:>5} cells changed  {text:?}");
+        }
+    }
+
     /// `cargo test --release --example hills dump_blocks -- --ignored`, then
     /// `cat target/hills-blocks.ansi` in a 120-column terminal.
     #[test]
