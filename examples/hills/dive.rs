@@ -18,8 +18,10 @@ pub const DIVE_SECS: f64 = 1.5;
 /// Seconds the extra waves take to spread out once in — and to merge
 /// back before the zoom out.
 pub const WAVES_SECS: f64 = 0.8;
-/// Seconds from `{dive in}` until the water is all waves, and from
-/// `{dive out}` until the camera is back out.
+/// Seconds from `{dive in}` until the water is all waves, with nothing
+/// riding the turning liquid first; and from `{dive out}` until the
+/// camera is back out.
+#[cfg(test)]
 pub const IN_SECS: f64 = DIVE_SECS + WAVES_SECS;
 pub const OUT_SECS: f64 = WAVES_SECS + DIVE_SECS;
 
@@ -120,17 +122,47 @@ impl Camera {
         middle + (own + spread - middle) * e
     }
 
+    /// How far below the camera's point the surface is (screen pixels,
+    /// down), `along` pixels across from it.
+    fn sag(&self, along: f64, wall: f64) -> f64 {
+        self.surface_y(self.anchor.0 + along, wall) - self.anchor.1
+    }
+
+    /// Where a letter riding the surface is with the liquid turned to
+    /// `tilt` (as `looping::tilt`) about the camera's point: `along` pixels
+    /// across from it as on the straight (+ is right when level). Its
+    /// baseline middle on screen, and its angle — the turn plus the slope
+    /// under the letter, `width` pixels wide.
+    pub fn rider(&self, along: f64, tilt: f64, wall: f64, width: f64) -> looping::Spot {
+        let down = self.sag(along, wall);
+        let slope = (self.sag(along + width / 2.0, wall) - self.sag(along - width / 2.0, wall)) / width;
+        let (sin, cos) = tilt.sin_cos();
+        // Along runs (cos, sin) on screen, down runs (−sin, cos).
+        looping::Spot {
+            x: self.anchor.0 + along * cos - down * sin,
+            y: self.anchor.1 + along * sin + down * cos,
+            angle: tilt + slope.atan(),
+        }
+    }
+
     /// Paint the C through the camera: pink above the surface, lavender
     /// below — turning, `waves` of the way to five surfaces, into six
     /// layers in the landscape's colours — a cream edge on top of each run
-    /// of ink, a dark outline round it.
-    pub fn paint(&self, c: &mut Canvas, glyph: &[u8; 8], wall: f64, waves: f64) {
+    /// of ink, a dark outline round it. While the liquid is turned to
+    /// `tilt` (the waves are in then), the surface turns about the
+    /// camera's point.
+    pub fn paint(&self, c: &mut Canvas, glyph: &[u8; 8], wall: f64, waves: f64, tilt: f64) {
         let e = Easing::EaseInOut.apply(waves.clamp(0.0, 1.0));
         let lit = |(gx, gy): (f64, f64)| {
             (0.0..8.0).contains(&gx) && (0.0..8.0).contains(&gy) && glyph[gy as usize] & (0x80 >> gx as usize) != 0
         };
+        let (sin, cos) = tilt.sin_cos();
         for x in 0..c.width {
-            let surfaces: Vec<f64> = (0..5).map(|k| self.surface_k(k, x as f64 + 0.5, wall, waves)).collect();
+            let surfaces: Vec<f64> = if tilt == 0.0 {
+                (0..5).map(|k| self.surface_k(k, x as f64 + 0.5, wall, waves)).collect()
+            } else {
+                Vec::new()
+            };
             for y in 0..c.height {
                 let at = |dx: f64, dy: f64| self.glyph_at((x as f64 + 0.5 + dx, y as f64 + 0.5 + dy));
                 // Ink within a pixel of here, `k` pixels up-left — the
@@ -142,7 +174,14 @@ impl Camera {
                     } else {
                         // The layer: how many surfaces are above here.
                         let py = y as f64 + 0.5;
-                        let under = surfaces.iter().filter(|&&s| s <= py).count();
+                        let under = if tilt == 0.0 {
+                            surfaces.iter().filter(|&&s| s <= py).count()
+                        } else {
+                            // Turned: above or below the one surface, across
+                            // and down from the camera's point.
+                            let (rx, ry) = (x as f64 + 0.5 - self.anchor.0, py - self.anchor.1);
+                            if -rx * sin + ry * cos >= self.sag(rx * cos + ry * sin, wall) { 5 } else { 0 }
+                        };
                         let liquid = Color::lerp_rgb(LETTER_UPPER, LETTER_LOWER, under as f64 / 5.0);
                         let (a, b, level) = LAYERS[under];
                         Color::lerp_rgb(liquid, dither(a, b, level, x, y), e)
@@ -220,7 +259,7 @@ mod tests {
             let at = ((cx - BIG / 2.0).round() as i64, (cy + wordmark::big_c_bob(0.0) - BIG / 2.0).round() as i64);
             super::super::glyphs::stamp_tinted(c, &mario('C'), at, BIG as i64, 2, |_, _| None);
         }));
-        let dived = render(Box::new(|c| Camera::new(c.width, c.height, 0.001, 0.0).paint(c, &mario('C'), 0.0, 0.0)));
+        let dived = render(Box::new(|c| Camera::new(c.width, c.height, 0.001, 0.0).paint(c, &mario('C'), 0.0, 0.0, 0.0)));
         let extruded = |cells: &[chromakopia::animate::Cell]| {
             cells.iter().filter(|c| c.color == LETTER_EXTRUDE || c.bg == Some(LETTER_EXTRUDE)).count() as i64
         };
@@ -231,7 +270,7 @@ mod tests {
     /// Pixel colours of the water at `waves`, `wall` seconds in.
     fn water(w: usize, waves: f64, wall: f64) -> impl Fn(usize, usize) -> Option<Color> {
         let layers = Layers::new(ROWS)
-            .layer(Layer::paint(move |c| Camera::new(c.width, c.height, 1.0, wall).paint(c, &mario('C'), wall, waves)));
+            .layer(Layer::paint(move |c| Camera::new(c.width, c.height, 1.0, wall).paint(c, &mario('C'), wall, waves, 0.0)));
         let mut buf = FrameBuffer::new(w, ROWS);
         layers.render(&mut buf, 0);
         move |x, y| {
@@ -280,7 +319,7 @@ mod tests {
     fn the_water_on_screen_is_the_surface_the_letters_ride() {
         let w = 112;
         let wall = 0.7;
-        let layers = Layers::new(ROWS).layer(Layer::paint(move |c| Camera::new(c.width, c.height, 1.0, wall).paint(c, &mario('C'), wall, 0.0)));
+        let layers = Layers::new(ROWS).layer(Layer::paint(move |c| Camera::new(c.width, c.height, 1.0, wall).paint(c, &mario('C'), wall, 0.0, 0.0)));
         let mut buf = FrameBuffer::new(w, ROWS);
         layers.render(&mut buf, 0);
         let px = |x: usize, y: usize| {

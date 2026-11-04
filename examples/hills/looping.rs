@@ -36,7 +36,8 @@ pub enum Shape {
     /// In from the right, once round a vertical loop in the middle of the
     /// screen, out to the left.
     Loop,
-    /// Riding the surface of the big C's liquid, turning with it.
+    /// Once dived into the big C: riding the surface of its liquid across
+    /// the screen, turning with it (see `dive::Camera::rider`).
     Spin,
 }
 
@@ -101,8 +102,8 @@ pub fn loop_start(width: usize) -> f64 {
 pub fn track(shape: Shape, d: f64, width: usize, base: f64) -> Spot {
     match shape {
         Shape::Loop => loop_track(d, width, base),
-        // Level through the big C's middle (`on_surface` turns and sloshes it).
-        Shape::Spin => Spot { x: width as f64 - d, y: loop_centre(width).1, angle: 0.0 },
+        // Level through the middle (`dive::Camera::rider` turns and sloshes it).
+        Shape::Spin => Spot { x: width as f64 - d, y: base, angle: 0.0 },
     }
 }
 
@@ -134,92 +135,69 @@ pub fn loop_centre(width: usize) -> (f64, f64) {
     (width as f64 / 2.0, (super::SCROLLER_Y + super::scroller::BASE) as f64 - LOOP_R)
 }
 
-/// Scrolled pixels per turn of the big C's liquid — and of the letters
-/// riding its surface with `{path spin}`.
-pub const SPIN_TURN: f64 = 200.0;
-/// Scrolled pixels the liquid takes to come up to speed before the riders
-/// (half a turn), and to come to rest (another half).
-pub const SPIN_UP: f64 = SPIN_TURN;
-pub const SPIN_DOWN: f64 = SPIN_TURN;
-/// Scrolled pixels from when the liquid starts turning until the first
-/// rider comes in: the spin-up, then on its own at full speed until it's
-/// level again — so the riders come in along a level surface.
-pub const SPIN_LEAD: f64 = SPIN_TURN + SPIN_UP / 2.0;
+/// Scrolled pixels the big C's liquid takes to slow down and come to rest
+/// level: three quarters of a turn.
+pub const SPIN_DOWN: f64 = 1.5 * LOOP_EXTRA;
 
-/// How far from the big C's middle a rider on its surface can still be on
-/// a screen `width` wide: past the farthest corner, plus a letter.
+/// How far from the screen's middle a letter riding the turning surface
+/// once dived in (see `dive::Camera::rider`) can still be on a screen
+/// `width` wide: past the corners, plus a letter.
 fn spin_reach(width: usize) -> f64 {
-    let (cx, cy) = loop_centre(width);
-    let h = (super::ROWS * 2) as f64;
-    cx.max(width as f64 - cx).hypot(cy.max(h - cy)) + 16.0
+    (width as f64 / 2.0).hypot(super::ROWS as f64) + 16.0
 }
 
-/// The spin's ride on a screen `width` wide: how far the text has
-/// scrolled when the first `{path spin}` letter comes in at the right
-/// edge, and when the last one is out of reach. None when nothing spins.
+/// The big C's liquid's turn on a screen `width` wide, in scrolled pixels:
+/// from when the first looping letter enters the loop — it turns as they
+/// do — until the last `{path spin}` letter, riding the surface once the
+/// camera has dived in, is out of reach (or, with none, a while after the
+/// last looper is out). None when nothing loops.
 pub fn ride(glyphs: &[Glyph], width: usize) -> Option<(f64, f64)> {
-    let mut riders = glyphs.iter().filter(|g| g.path == Some(Shape::Spin));
     let mid = |g: &Glyph| g.x + scroller::advance(g.font, g.ch) as f64 / 2.0;
-    let first = riders.next()?;
-    let last = riders.next_back().unwrap_or(first);
-    let (cx, _) = loop_centre(width);
-    Some((mid(first), mid(last) + width as f64 - cx + spin_reach(width)))
+    let mut loopers = glyphs.iter().filter(|g| g.path == Some(Shape::Loop));
+    let first = loopers.next()?;
+    let last = loopers.next_back().unwrap_or(first);
+    let start = mid(first) + loop_start(width);
+    let end = match glyphs.iter().rfind(|g| g.path == Some(Shape::Spin)) {
+        Some(g) => mid(g) + width as f64 / 2.0 + spin_reach(width),
+        None => mid(last) + loop_start(width) + 2.0 * LOOP_EXTRA + SPIN_DOWN,
+    };
+    Some((start, end))
 }
 
-/// The liquid's turn for a `ride`, in scrolled pixels: when it starts
-/// turning, when it starts slowing down, and when it's at rest again.
-fn spin((start, end): (f64, f64)) -> (f64, f64, f64) {
-    // As many turns at full speed with the riders as fit while they're on
-    // (at least one), then slowing down — which turns it as far as half
-    // the slow-down at full speed would, so it lands level.
-    let laps = ((end - start - SPIN_DOWN / 2.0) / SPIN_TURN).floor().max(1.0);
-    let slow = start + laps * SPIN_TURN - SPIN_DOWN / 2.0;
-    (start - SPIN_LEAD, slow, slow + SPIN_DOWN)
+/// When the liquid starts slowing down for a `ride`, and when it's at
+/// rest: as many whole turns as fit, slowing down — which turns it as far
+/// as half the slow-down at full speed would — so it lands level by `end`.
+fn spin((start, end): (f64, f64)) -> (f64, f64) {
+    let laps = ((end - start - SPIN_DOWN / 2.0) / LOOP_EXTRA).floor().max(1.0);
+    let slow = start + laps * LOOP_EXTRA - SPIN_DOWN / 2.0;
+    (slow, slow + SPIN_DOWN)
 }
 
 /// When the liquid is at rest again after `ride`, in scrolled pixels.
 pub fn spin_done(ride: (f64, f64)) -> f64 {
-    spin(ride).2
+    spin(ride).1
 }
 
 /// Which way is down in the big C, `scrolled` pixels in (radians,
-/// clockwise): it gets going before the riders come in, is level as the
-/// first arrives, turns with them a lap per SPIN_TURN, then slows down and
-/// lands level. 0 otherwise.
+/// clockwise): turned as a looping letter would be, a lap per letter's lap,
+/// from when the first goes in — on through the dive and the letters
+/// riding the surface — then slowing down to land level. 0 otherwise.
 pub fn tilt(scrolled: f64, ride: Option<(f64, f64)>) -> f64 {
-    let Some(ride) = ride else { return 0.0 };
-    let (from, slow, rest) = spin(ride);
-    if scrolled < from || scrolled >= rest {
+    let Some((start, end)) = ride else { return 0.0 };
+    let (slow, rest) = spin((start, end));
+    if scrolled < start || scrolled >= rest {
         return 0.0;
     }
-    // Radians per scrolled pixel at full speed. The speed ramps along a
-    // smoothstep, so a ramp turns it half as far as full speed would.
-    let speed = TAU / SPIN_TURN;
-    let start = ride.0;
-    let turned = if scrolled < from + SPIN_UP {
-        let q = (scrolled - from) / SPIN_UP;
-        speed * (SPIN_UP * (q.powi(3) - q.powi(4) / 2.0) - SPIN_LEAD + SPIN_UP / 2.0)
-    } else if scrolled < slow {
+    // Radians per scrolled pixel at full speed. It slows down along a
+    // smoothstep, so turns half as far as full speed would meanwhile.
+    let speed = TAU / LOOP_EXTRA;
+    let turned = if scrolled < slow {
         speed * (scrolled - start)
     } else {
         let q = (scrolled - slow) / SPIN_DOWN;
         speed * (slow - start + SPIN_DOWN * (q - q.powi(3) + q.powi(4) / 2.0))
     };
     turned.rem_euclid(TAU)
-}
-
-/// Where a letter riding the liquid's surface is, from the big C's middle:
-/// `along` pixels along the surface (as on the straight: + is right when
-/// level), with the surface turned to `tilt` and sloshing, `wall` seconds
-/// in. Its baseline middle, and its angle — the surface's turn plus its
-/// slope under the letter, `width` pixels wide.
-pub fn on_surface(along: f64, tilt: f64, wall: f64, width: f64) -> Spot {
-    let h = |a: f64| super::dive::wave(a, wall);
-    let up = h(along);
-    let slope = (h(along + width / 2.0) - h(along - width / 2.0)) / width;
-    let (sin, cos) = tilt.sin_cos();
-    // Along runs (cos, sin) on screen, up runs (sin, −cos).
-    Spot { x: along * cos + up * sin, y: along * sin - up * cos, angle: tilt - slope.atan() }
 }
 
 /// The nearest of the `ANGLES` turns to `angle`.
@@ -436,36 +414,33 @@ mod tests {
 
     #[test]
     fn tilt_turns_like_a_rider_while_letters_loop() {
-        let ride = (1000.0, 1000.0 + 2.9 * SPIN_TURN);
-        let (from, rest) = (1000.0 - SPIN_LEAD, spin_done(ride));
-        assert_eq!(tilt(from - 1.0, Some(ride)), 0.0, "level before");
-        assert_eq!(tilt(500.0, None), 0.0, "no spin, no tilt");
-        // Already turning before the first rider comes in, level as it does,
-        // then a turn per SPIN_TURN.
-        assert!(tilt(1000.0 - SPIN_TURN / 4.0, Some(ride)) > 0.0);
-        for k in 0..=5 {
-            let s = 1000.0 + k as f64 * SPIN_TURN / 4.0;
-            let want = (TAU * (s - 1000.0) / SPIN_TURN).rem_euclid(TAU);
+        let (a, l) = (1000.0, LOOP_EXTRA);
+        let ride = (a, a + 4.3 * l);
+        let rest = spin_done(ride);
+        assert_eq!(tilt(a - 1.0, Some(ride)), 0.0, "level before");
+        assert_eq!(tilt(500.0, None), 0.0, "no loop, no tilt");
+        // One turn per lap, as a letter goes round.
+        for k in 0..=8 {
+            let s = a + k as f64 * l / 4.0;
+            let want = (TAU * (s - a) / l).rem_euclid(TAU);
             let d = (tilt(s, Some(ride)) - want).rem_euclid(TAU);
             assert!(d.min(TAU - d) < 1e-9, "at {s}");
         }
-        // Two turns fit before slowing down, landing level with the riders still on.
-        assert!((rest - (1000.0 + 2.0 * SPIN_TURN + SPIN_DOWN / 2.0)).abs() < 1e-9, "{rest}");
+        // As many turns as fit, slowing down to land level by the end.
+        assert!((rest - (a + 3.0 * l + SPIN_DOWN / 2.0)).abs() < 1e-9, "{rest}");
         assert!(rest <= ride.1);
         assert_eq!(tilt(rest + 1.0, Some(ride)), 0.0);
-        // A short ride still gets one turn.
-        assert!(spin_done((0.0, 10.0)) >= SPIN_TURN);
-        // Smooth all the way: no jumps, getting going and slowing down gently.
+        // Smooth all the way: no jumps, slowing down gently.
         let step = |s: f64| {
             let d = (tilt(s + 1.0, Some(ride)) - tilt(s, Some(ride))).rem_euclid(TAU);
             d.min(TAU - d)
         };
-        let full = TAU / SPIN_TURN;
-        for k in 0..(rest - from) as usize + 4 {
-            let s = from - 2.0 + k as f64;
+        let full = TAU / l;
+        for k in 0..(rest - a) as usize + 4 {
+            let s = a + k as f64;
             assert!(step(s) <= full + 1e-6, "jump at {s}: {}", step(s));
         }
-        assert!(step(from + 1.0) < full / 50.0 && step(rest - 2.0) < full / 50.0);
+        assert!(step(rest - 2.0) < full / 50.0);
     }
 
     #[test]

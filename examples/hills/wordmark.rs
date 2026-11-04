@@ -68,6 +68,7 @@ pub const SLOSH: f64 = 1.5;
 /// When the C leaves for the loop: as the last of the others (H) jumps.
 const C_LEAVES: f64 = (WORD.len() - 2) as f64 * EXIT_STAGGER;
 /// Seconds until the others are gone and the C is big in the loop.
+#[cfg(test)]
 pub const AWAY_DONE: f64 = C_LEAVES + MORPH_SECS;
 
 /// Seconds to glide between the centre and the top.
@@ -141,15 +142,6 @@ fn away_offset(i: usize, t: f64) -> f64 {
 /// How far the big C bobs up and down in the loop, `wall` seconds in.
 pub fn big_c_bob(wall: f64) -> f64 {
     BIG_C_BOB * DYCP_AMP * (TAU * wall / DYCP_PERIOD).sin()
-}
-
-/// The big C's middle once it's grown, on a screen `width` wide, `wall`
-/// seconds in — where its liquid's surface runs through, on whole pixels
-/// as it's stamped.
-pub fn big_c_centre(width: usize, wall: f64) -> (f64, f64) {
-    let (cx, cy) = looping::loop_centre(width);
-    let half = 4.0 * BIG_C as f64;
-    ((cx - half).round() + half, (cy + big_c_bob(wall) - half).round() + half)
 }
 
 fn c_grown(phase: LogoPhase) -> f64 {
@@ -268,7 +260,7 @@ impl Wordmark {
             let at = (x0 + (i * ADVANCE) as i64 * s, y0 + self.bob(i, wall, phase));
             let grown = c_grown(phase);
             if i == 0 && grown >= 1.0 && dive.zoom > 0.0 {
-                dive::Camera::new(c.width, c.height, dive.zoom, wall).paint(c, glyph, wall, dive.waves);
+                dive::Camera::new(c.width, c.height, dive.zoom, wall).paint(c, glyph, wall, dive.waves, tilt);
             } else if i == 0 && grown > 0.0 {
                 self.paint_big_c(c, glyph, at, grown, wall, tilt);
             } else {

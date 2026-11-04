@@ -103,13 +103,15 @@ fn script_view(tl: &script::Timeline, intro_secs: f64, t: f64) -> View {
             .map(|h| (h - gone).min(landscape::ENTRANCE_SECS) - gone * landscape::EXIT_SPEED)
             .filter(|&h| h > 0.0);
     }
-    // From `{dive in}`: the zoom, then the waves spread. From `{dive out}`:
-    // the waves merge, then the zoom out.
+    // From `{dive in}`: the zoom, then — once whatever rides the turning
+    // liquid is through — the waves spread. From `{dive out}`: the waves
+    // merge, then the zoom out.
     let (dive_in, dive_out) = (tl.since(script::Code::Dive(true), t), tl.since(script::Code::Dive(false), t));
     let part = |from: f64, secs: f64| ((t - from) / secs).clamp(0.0, 1.0);
     let dive = match (dive_in, dive_out) {
         (Some(a), b) if b.is_none_or(|b| a > b) => {
-            dive::Dive { zoom: part(a, dive::DIVE_SECS), waves: part(a + dive::DIVE_SECS, dive::WAVES_SECS) }
+            let spread = tl.since(script::Code::Spread, t).filter(|&s| s >= a);
+            dive::Dive { zoom: part(a, dive::DIVE_SECS), waves: spread.map_or(0.0, |s| part(s, dive::WAVES_SECS)) }
         }
         (_, Some(b)) => dive::Dive {
             zoom: 1.0 - part(b + dive::WAVES_SECS, dive::DIVE_SECS),
@@ -755,14 +757,30 @@ mod tests {
             stage.render(&mut b, 0);
             out += &format!("\n=== {name} ===\n{}\n", b.to_ansi_string());
         }
-        // The spin: the C turning alone, the riders coming in, turning
-        // with it, slowing down, level again.
+        // The spin: looping round the C, zooming in still turning, the
+        // riders on the turning surface, slowing down, the waves spreading.
         let ride = looping::ride(&stage.glyphs, 112).unwrap();
-        for k in [-200.0, -60.0, 30.0, 80.0, 130.0, 180.0, 260.0, 330.0, 400.0, 470.0] {
-            stage.seek_to(when_scrolled(&stage, ride.0 + k));
+        let dive_in = first_cue(&stage, script::Code::Dive(true));
+        let spread = first_cue(&stage, script::Code::Spread);
+        let first_in = when_scrolled(&stage, ride.0);
+        for (name, t) in [
+            ("a loop", first_in + 2.0),
+            ("b loop", first_in + 5.0),
+            ("c zoom", dive_in + 0.7),
+            ("d zoomed", dive_in + 1.6),
+            ("e ride", dive_in + 2.6),
+            ("f ride", dive_in + 3.8),
+            ("g ride", dive_in + 5.2),
+            ("h slowing", spread - 2.5),
+            ("i slowing", spread - 0.8),
+            ("j landed", spread),
+            ("k spread", spread + 0.5),
+            ("l waves", spread + 1.6),
+        ] {
+            stage.seek_to(t);
             let mut b = FrameBuffer::new(112, ROWS);
             stage.render(&mut b, 0);
-            out += &format!("\n=== spin {k} ===\n{}\n", b.to_ansi_string());
+            out += &format!("\n=== spin {name} ===\n{}\n", b.to_ansi_string());
         }
         // The zoom: its first letter mid-screen.
         let first = stage.glyphs.iter().find(|g| g.zoom).unwrap();
@@ -890,15 +908,18 @@ mod tests {
         let stage = Stage::new(w);
         let dive_in = first_cue(&stage, script::Code::Dive(true));
         let dive_out = first_cue(&stage, script::Code::Dive(false));
-        // Once the last rider is off the C's liquid, while the C is big...
-        let ride = looping::ride(&stage.glyphs, w).unwrap();
-        assert!(stage.timeline.scrolled(dive_in) >= ride.1 - 1e-6);
+        // Once the last rider is out of the loop, while the C is big in it...
+        let loopers: Vec<_> = stage.glyphs.iter().filter(|g| g.path == Some(looping::Shape::Loop)).collect();
+        let last_out = when_scrolled(&stage, loopers.last().unwrap().x + 4.0 + looping::loop_start(w) + looping::LOOP_EXTRA);
+        assert!(dive_in >= last_out, "{dive_in} vs {last_out}");
         stage.seek_to(dive_in);
         assert!(matches!(stage.view_at(0).logo, LogoPhase::Away(t) if t >= wordmark::AWAY_DONE));
-        // The water's text comes on only once the camera is in, the waves out.
-        let wet: Vec<_> = stage.glyphs.iter().filter(|g| g.wave == script::Wave::Water).collect();
+        // The water's own text comes on only once the camera is in, the waves out.
+        let wet: Vec<_> = stage.glyphs.iter().filter(|g| g.wave == script::Wave::Water && g.path.is_none()).collect();
         assert!(!wet.is_empty());
-        assert!(when_scrolled(&stage, wet[0].x) >= dive_in + dive::DIVE_SECS + dive::WAVES_SECS - 1e-9);
+        let spread = first_cue(&stage, script::Code::Spread);
+        assert!(spread >= dive_in + dive::DIVE_SECS);
+        assert!(when_scrolled(&stage, wet[0].x) >= spread + dive::WAVES_SECS - 1e-9);
         // What follows comes on only once the camera is all the way out...
         let back_out = dive_out + dive::WAVES_SECS + dive::DIVE_SECS;
         let next = stage.glyphs.iter().find(|g| g.x > wet.last().unwrap().x && g.wave != script::Wave::Water).unwrap();
@@ -951,49 +972,57 @@ mod tests {
     }
 
     #[test]
-    fn the_big_c_turns_alone_then_with_the_riders_then_comes_to_rest_before_the_dive() {
+    fn the_big_c_turns_through_the_loop_and_the_dive_then_rests_before_the_waves() {
         let w = 112;
         let stage = Stage::new(w);
         let ride = looping::ride(&stage.glyphs, w).unwrap();
-        let away = first_cue(&stage, script::Code::LogoAway);
-        let dive_in = first_cue(&stage, script::Code::Dive(true));
-        let (first_in, last_out) = (when_scrolled(&stage, ride.0), when_scrolled(&stage, ride.1));
+        let cue = |code| first_cue(&stage, code);
+        let (dive_in, spread) = (cue(script::Code::Dive(true)), cue(script::Code::Spread));
         let tilt = |t: f64| looping::tilt(stage.timeline.scrolled(t), Some(ride));
-        // Still while the C glides in and grows...
-        assert_eq!(tilt(away + wordmark::AWAY_DONE - 0.05), 0.0);
-        // ...then turning on its own for a good while before the first rider.
-        let alone = (first_in - away - wordmark::AWAY_DONE, looping::SPIN_LEAD / FPS);
-        assert!(alone.0 >= alone.1 - 0.1, "{alone:?}");
-        assert!(tilt(first_in - 1.0) > 0.0);
-        // A turn or two together, then slowing down to level while the
-        // riders are still on — and all gone before the dive.
+        let spinners: Vec<_> = stage.glyphs.iter().filter(|g| g.path == Some(looping::Shape::Spin)).collect();
+        assert!(!spinners.is_empty());
+        let spin_in = when_scrolled(&stage, spinners[0].x);
+        // Turning from the loop on, through the zoom in...
+        let first_in = when_scrolled(&stage, ride.0);
+        assert!(tilt(first_in + 0.5) > 0.0);
+        assert!(dive_in > first_in && dive_in < spin_in);
+        // ...the riders on the turning surface come on once the camera is in...
+        assert!(spin_in >= dive_in + dive::DIVE_SECS - 1e-9);
+        stage.seek_to(spin_in + 1.0);
+        let v = stage.view_at(0);
+        assert_eq!(v.dive, dive::Dive { zoom: 1.0, waves: 0.0 });
+        assert!(tilt(spin_in + 1.0) > 0.0);
+        // ...then it slows down, lands level, and only then do the waves spread.
         let rest = when_scrolled(&stage, looping::spin_done(ride));
-        let slow = rest - looping::SPIN_DOWN / FPS;
-        let together = (stage.timeline.scrolled(slow) - ride.0) / looping::SPIN_TURN;
-        assert!((1.0..=2.5).contains(&together), "{together} turns together");
-        assert!(rest <= last_out, "{rest} vs {last_out}");
-        assert!(stage.timeline.scrolled(dive_in) >= ride.1 - 1e-6);
-        assert_eq!(tilt(dive_in), 0.0);
-        eprintln!("alone {:.2}s · together {together:.2} turns, {:.2}s · slowing {:.2}s · riders off {:.2}s later", first_in - away - wordmark::AWAY_DONE, slow - first_in, rest - slow, last_out - rest);
+        assert!(rest > spin_in + 1.0 && spread >= rest - 1.0 / FPS, "{rest} vs {spread}");
+        assert_eq!(tilt(spread), 0.0);
+        stage.seek_to(spread + dive::WAVES_SECS);
+        assert!(stage.view_at(0).dive.waves > 0.999);
+        eprintln!(
+            "loop+dive {:.2}s · riding the turn {:.2}s (slowing the last {:.2}s) · waves at {:.2}s",
+            spin_in - first_in,
+            rest - spin_in,
+            looping::SPIN_DOWN / FPS,
+            spread - first_in
+        );
     }
 
     #[test]
-    fn riders_lie_on_the_big_cs_surface_and_turn_with_it() {
+    fn spin_riders_lie_on_the_turned_surface_through_the_middle() {
         let w = 112;
-        let stage = Stage::new(w);
-        let ride = looping::ride(&stage.glyphs, w).unwrap();
-        // Somewhere into the turn: a rider near the middle sits on the
-        // surface line through the C, turned as the liquid is.
-        let s = ride.0 + 1.3 * looping::SPIN_TURN;
-        let tilt = looping::tilt(s, Some(ride));
-        assert!(tilt > 0.5 && tilt < std::f64::consts::TAU - 0.5, "{tilt}");
-        let spot = looping::on_surface(10.0, tilt, 0.0, 8.0);
-        let (sin, cos) = tilt.sin_cos();
-        // Along the turned surface, give or take the slosh.
-        assert!(((spot.x * cos + spot.y * sin) - 10.0).abs() < 1e-9);
-        assert!((spot.x * sin - spot.y * cos).abs() <= 2.0 * wordmark::SLOSH);
-        let d = (spot.angle - tilt).rem_euclid(std::f64::consts::TAU);
-        assert!(d.min(std::f64::consts::TAU - d) < 1.0, "angle {} vs tilt {tilt}", spot.angle);
+        let cam = dive::Camera::new(w, ROWS * 2, 1.0, 0.3);
+        let tilt = 2.0;
+        let (sin, cos) = f64::sin_cos(tilt);
+        let mid = (w as f64 / 2.0, ROWS as f64);
+        for along in [-40.0, -10.0, 0.0, 25.0] {
+            let s = cam.rider(along, tilt, 0.3, 8.0);
+            let (rx, ry) = (s.x - mid.0, s.y - mid.1);
+            // Along the turned line, off it by the slosh only.
+            assert!((rx * cos + ry * sin - along).abs() < 1e-9);
+            assert!((-rx * sin + ry * cos).abs() < 20.0, "{along}: {}", -rx * sin + ry * cos);
+            let d = (s.angle - tilt).rem_euclid(std::f64::consts::TAU);
+            assert!(d.min(std::f64::consts::TAU - d) < 1.2, "angle {} vs tilt {tilt}", s.angle);
+        }
     }
 
     #[test]

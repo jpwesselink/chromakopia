@@ -13,7 +13,6 @@ use chromakopia::animate::framebuffer::FPS;
 use super::dive;
 use super::looping::{self, Shape};
 use super::scroller::{self, Font, Style};
-use super::wordmark;
 
 /// Scroll speed, pixels per second (one pixel per frame).
 const SPEED: f64 = FPS;
@@ -56,6 +55,9 @@ pub enum Code {
     Bye,
     /// A skip stop with nothing attached (set by `with_lead`, not typed).
     Mark,
+    /// Dived in, the liquid's layers spread into waves (set by `place`,
+    /// not typed).
+    Spread,
 }
 
 /// What a letter rides, switched with `{wave on|off|long}`.
@@ -176,8 +178,8 @@ impl Script {
         // Where each long wave starts and ends, in text pixels.
         let mut longs: Vec<(f64, f64)> = Vec::new();
         let mut dived = false;
-        // Where the last `{logo away}` sits, and the first letter on the path.
-        let (mut away, mut path_from) = (None, 0);
+        // Dived in, with the waves yet to spread.
+        let mut to_spread = false;
         let (mut glyphs, mut events, mut x) = (Vec::new(), Vec::new(), 0.0);
         let mut codes = self.events.iter().peekable();
         let chars: Vec<char> = self.text.chars().collect();
@@ -201,35 +203,25 @@ impl Script {
                         wave = next;
                     }
                     Code::Zoom(on) => zoom = on,
-                    Code::Dive(on) => {
-                        // Room for the camera to go in (or out) before what
-                        // follows comes on.
-                        dived = on;
+                    Code::Dive(true) => {
+                        // Room for the camera to go in before what follows
+                        // comes on; the waves spread later (see `spread`).
+                        dived = true;
+                        to_spread = true;
                         events.push((x, code));
-                        x += width as f64 / 2.0 + if on { dive::IN_SECS } else { dive::OUT_SECS } * SPEED;
+                        x += width as f64 / 2.0 + dive::DIVE_SECS * SPEED;
                     }
-                    Code::LogoAway => {
-                        away = Some(x);
+                    Code::Dive(false) => {
+                        if std::mem::take(&mut to_spread) {
+                            spread(&mut x, &mut events, &glyphs, width);
+                        }
+                        dived = false;
                         events.push((x, code));
+                        x += width as f64 / 2.0 + dive::OUT_SECS * SPEED;
                     }
                     Code::Path(next) => {
                         if let Some(shape) = path.filter(|&p| Some(p) != next) {
                             x += looping::extra(shape, width);
-                            // Off the big C's liquid: until the riders are
-                            // gone and it has come to rest.
-                            if let Some(ride) = looping::ride(&glyphs[path_from..], width) {
-                                x = x.max(looping::spin_done(ride).max(ride.1) - width as f64 / 2.0);
-                            }
-                        }
-                        if path.is_none() && next == Some(Shape::Spin) {
-                            // The big C grows in, its liquid gets going on
-                            // its own — the riders come in once it's turned
-                            // level again.
-                            if let Some(a) = away {
-                                let grown = wordmark::AWAY_DONE * SPEED;
-                                x = x.max(a + width as f64 / 2.0 + grown + looping::SPIN_LEAD);
-                            }
-                            path_from = glyphs.len();
                         }
                         path = next;
                     }
@@ -239,6 +231,11 @@ impl Script {
             let Some(&ch) = chars.get(i) else { break };
             if !scroller::has(font, ch) {
                 return Err(format!("font {font:?} has no {ch:?} (in {:?})", chars[i.saturating_sub(10)..(i + 10).min(chars.len())].iter().collect::<String>()));
+            }
+            if to_spread && path != Some(Shape::Spin) {
+                // The first letter to ride the waves: they spread first.
+                to_spread = false;
+                spread(&mut x, &mut events, &glyphs, width);
             }
             let g = Glyph { ch, x, font, style, wave: if dived { Wave::Water } else { wave }, path, zoom };
             let zooms = scroller::zooms(&g);
@@ -260,6 +257,20 @@ impl Script {
         }
         Ok(Placed { glyphs, events, length: x })
     }
+}
+
+/// Once dived in, the liquid's layers spread into waves: once the camera
+/// is in — and, with letters riding the turning surface, once it has come
+/// to rest — at scroll `x`. What follows waits for the waves to spread.
+fn spread(x: &mut f64, events: &mut Vec<(f64, Code)>, glyphs: &[Glyph], width: usize) {
+    let mut at = *x;
+    if glyphs.iter().any(|g| g.path == Some(Shape::Spin)) {
+        if let Some(ride) = looping::ride(glyphs, width) {
+            at = at.max(looping::spin_done(ride));
+        }
+    }
+    events.push((at - width as f64 / 2.0, Code::Spread));
+    *x = at + dive::WAVES_SECS * SPEED;
 }
 
 /// When a code fires.
@@ -390,21 +401,33 @@ mod tests {
     }
 
     #[test]
-    fn with_the_big_c_out_the_liquid_turns_alone_before_the_riders_come_in() {
+    fn dived_in_the_spin_riders_come_first_then_the_waves_spread() {
         let w = 100;
-        let p = parse("ab{logo away}c{path spin}de{path off}{logo}f").unwrap().place(w).unwrap();
+        let p = parse("{path loop}ab{path off}{dive in}{path spin}cd{path off}ef{dive out}g").unwrap().place(w).unwrap();
         assert_eq!(parse("{path spin}").unwrap().events, vec![(0, Code::Path(Some(Shape::Spin)))]);
-        let away = p.events[0].0 + w as f64 / 2.0;
+        let codes: Vec<Code> = p.events.iter().map(|e| e.1).collect();
+        assert_eq!(codes, [Code::Dive(true), Code::Spread, Code::Dive(false)]);
+        let fire = |i: usize| p.events[i].0 + w as f64 / 2.0;
+        let at = |ch| p.glyphs.iter().find(|g| g.ch == ch).unwrap();
+        // The spin riders come on once the camera is in...
+        assert_eq!(at('c').x, fire(0) + dive::DIVE_SECS * SPEED);
+        assert_eq!(at('c').path, Some(Shape::Spin));
+        // ...the waves spread once the liquid has come to rest...
         let ride = looping::ride(&p.glyphs, w).unwrap();
-        // The C is big, then the liquid gets going — and the first rider
-        // comes in as it's level again.
-        let from = ride.0 - looping::SPIN_LEAD;
-        assert!(from >= away + wordmark::AWAY_DONE * SPEED - 1e-9, "{from} vs {away}");
-        assert!(from <= away + wordmark::AWAY_DONE * SPEED + 8.0, "waits too long: {from} vs {away}");
-        // What follows fires once the riders are gone and the liquid is still.
-        let next = p.events[1].0 + w as f64 / 2.0;
-        assert_eq!(p.events[1].1, Code::Logo);
-        assert!(next >= ride.1 && next >= looping::spin_done(ride), "{next} vs {ride:?}");
+        assert!(fire(1) >= looping::spin_done(ride) - 1e-9 && fire(1) >= at('c').x);
+        // ...and the water's own text comes on once they have.
+        assert_eq!(at('e').x, fire(1) + dive::WAVES_SECS * SPEED);
+        assert_eq!(at('e').wave, Wave::Water);
+    }
+
+    #[test]
+    fn without_spin_riders_the_waves_spread_once_the_camera_is_in() {
+        let w = 100;
+        let p = parse("{dive in}ab{dive out}").unwrap().place(w).unwrap();
+        let fire = |i: usize| p.events[i].0 + w as f64 / 2.0;
+        assert_eq!(p.events[1].1, Code::Spread);
+        assert_eq!(fire(1), fire(0) + dive::DIVE_SECS * SPEED);
+        assert_eq!(p.glyphs[0].x, fire(0) + dive::IN_SECS * SPEED);
     }
 
     #[test]
@@ -442,7 +465,7 @@ mod tests {
         assert!(parse("{dive deep}").is_err());
         let p = s.place(100).unwrap();
         assert_eq!(p.glyphs.iter().map(|g| g.wave).collect::<Vec<_>>(), vec![Wave::On, Wave::Water, Wave::Water, Wave::On]);
-        assert_eq!(p.events.iter().map(|e| e.1).collect::<Vec<_>>(), vec![Code::Dive(true), Code::Dive(false)]);
+        assert_eq!(p.events.iter().map(|e| e.1).collect::<Vec<_>>(), vec![Code::Dive(true), Code::Spread, Code::Dive(false)]);
         // Each leaves room: half a screen, plus as far as the text scrolls
         // while the camera goes in (or out) — what follows waits for it.
         let xs: Vec<f64> = p.glyphs.iter().map(|g| g.x).collect();
