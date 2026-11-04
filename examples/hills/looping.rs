@@ -36,12 +36,15 @@ pub enum Shape {
     /// In from the right, once round a vertical loop in the middle of the
     /// screen, out to the left.
     Loop,
+    /// Riding the surface of the big C's liquid, turning with it.
+    Spin,
 }
 
 impl Shape {
     pub fn named(name: &str) -> Option<Shape> {
         match name {
             "loop" => Some(Shape::Loop),
+            "spin" => Some(Shape::Spin),
             _ => None,
         }
     }
@@ -52,6 +55,8 @@ impl Shape {
 pub fn extra(shape: Shape, _width: usize) -> f64 {
     match shape {
         Shape::Loop => LOOP_EXTRA,
+        // What follows waits for the spin to come to rest instead.
+        Shape::Spin => 0.0,
     }
 }
 
@@ -65,6 +70,8 @@ pub fn wave_weight(shape: Shape, d: f64, width: usize) -> f64 {
             let away = if d < start { start - d } else if d > end { d - end } else { 0.0 };
             (away / WAVE_FADE).min(1.0)
         }
+        // It rides the liquid's slosh instead (see `on_surface`).
+        Shape::Spin => 0.0,
     }
 }
 
@@ -94,6 +101,8 @@ pub fn loop_start(width: usize) -> f64 {
 pub fn track(shape: Shape, d: f64, width: usize, base: f64) -> Spot {
     match shape {
         Shape::Loop => loop_track(d, width, base),
+        // Level through the big C's middle (`on_surface` turns and sloshes it).
+        Shape::Spin => Spot { x: width as f64 - d, y: loop_centre(width).1, angle: 0.0 },
     }
 }
 
@@ -125,36 +134,47 @@ pub fn loop_centre(width: usize) -> (f64, f64) {
     (width as f64 / 2.0, (super::SCROLLER_Y + super::scroller::BASE) as f64 - LOOP_R)
 }
 
-/// The loop's ride on a screen `width` wide: how far the text has
-/// scrolled when the first looping letter enters the loop, and when the
-/// last one leaves it. None when nothing loops.
-pub fn ride(glyphs: &[Glyph], width: usize) -> Option<(f64, f64)> {
-    let mut loopers = glyphs.iter().filter(|g| g.path == Some(Shape::Loop));
-    let at = |g: &Glyph| g.x + scroller::advance(g.font, g.ch) as f64 / 2.0 + loop_start(width);
-    let first = loopers.next()?;
-    let last = loopers.last().unwrap_or(first);
-    Some((at(first), at(last) + LOOP_EXTRA))
+/// Scrolled pixels per turn of the big C's liquid — and of the letters
+/// riding its surface with `{path spin}`.
+pub const SPIN_TURN: f64 = 200.0;
+/// Scrolled pixels the liquid takes to come up to speed before the riders
+/// (half a turn), and to come to rest (another half).
+pub const SPIN_UP: f64 = SPIN_TURN;
+pub const SPIN_DOWN: f64 = SPIN_TURN;
+/// Scrolled pixels from when the liquid starts turning until the first
+/// rider comes in: the spin-up, then on its own at full speed until it's
+/// level again — so the riders come in along a level surface.
+pub const SPIN_LEAD: f64 = SPIN_TURN + SPIN_UP / 2.0;
+
+/// How far from the big C's middle a rider on its surface can still be on
+/// a screen `width` wide: past the farthest corner, plus a letter.
+fn spin_reach(width: usize) -> f64 {
+    let (cx, cy) = loop_centre(width);
+    let h = (super::ROWS * 2) as f64;
+    cx.max(width as f64 - cx).hypot(cy.max(h - cy)) + 16.0
 }
 
-/// Scrolled pixels the liquid takes to come up to speed before the
-/// riders (half a turn), and at least to come to rest after them (half a
-/// turn — up to one and a half, so it lands upright).
-pub const SPIN_UP: f64 = LOOP_EXTRA;
-pub const SPIN_DOWN: f64 = LOOP_EXTRA;
-/// Scrolled pixels from when the liquid starts turning until the first
-/// rider goes in: the spin-up, then on its own at full speed until it's
-/// upright again — so the rider goes in in step with it.
-pub const SPIN_LEAD: f64 = LOOP_EXTRA + SPIN_UP / 2.0;
+/// The spin's ride on a screen `width` wide: how far the text has
+/// scrolled when the first `{path spin}` letter comes in at the right
+/// edge, and when the last one is out of reach. None when nothing spins.
+pub fn ride(glyphs: &[Glyph], width: usize) -> Option<(f64, f64)> {
+    let mut riders = glyphs.iter().filter(|g| g.path == Some(Shape::Spin));
+    let mid = |g: &Glyph| g.x + scroller::advance(g.font, g.ch) as f64 / 2.0;
+    let first = riders.next()?;
+    let last = riders.next_back().unwrap_or(first);
+    let (cx, _) = loop_centre(width);
+    Some((mid(first), mid(last) + width as f64 - cx + spin_reach(width)))
+}
 
 /// The liquid's turn for a `ride`, in scrolled pixels: when it starts
 /// turning, when it starts slowing down, and when it's at rest again.
-fn spin((start, last): (f64, f64)) -> (f64, f64, f64) {
-    // It slows down from when the last rider is out. Slowing down over
-    // `d` turns it as far as `d / 2` at full speed would: stretch `d` so
-    // that lands on a whole number of laps — upright.
-    let laps = ((last - start + SPIN_DOWN / 2.0) / LOOP_EXTRA - 1e-9).ceil();
-    let d = 2.0 * (start + laps * LOOP_EXTRA - last);
-    (start - SPIN_LEAD, last, last + d)
+fn spin((start, end): (f64, f64)) -> (f64, f64, f64) {
+    // As many turns at full speed with the riders as fit while they're on
+    // (at least one), then slowing down — which turns it as far as half
+    // the slow-down at full speed would, so it lands level.
+    let laps = ((end - start - SPIN_DOWN / 2.0) / SPIN_TURN).floor().max(1.0);
+    let slow = start + laps * SPIN_TURN - SPIN_DOWN / 2.0;
+    (start - SPIN_LEAD, slow, slow + SPIN_DOWN)
 }
 
 /// When the liquid is at rest again after `ride`, in scrolled pixels.
@@ -162,11 +182,10 @@ pub fn spin_done(ride: (f64, f64)) -> f64 {
     spin(ride).2
 }
 
-/// Which way is down for something riding along with the loop, `scrolled`
-/// pixels in (radians, clockwise). It gets going before the first letter
-/// goes in, then turns as a looping letter would — a lap per letter's lap,
-/// in step with them — and once the last is out it slows down and lands
-/// upright. 0 otherwise.
+/// Which way is down in the big C, `scrolled` pixels in (radians,
+/// clockwise): it gets going before the riders come in, is level as the
+/// first arrives, turns with them a lap per SPIN_TURN, then slows down and
+/// lands level. 0 otherwise.
 pub fn tilt(scrolled: f64, ride: Option<(f64, f64)>) -> f64 {
     let Some(ride) = ride else { return 0.0 };
     let (from, slow, rest) = spin(ride);
@@ -175,7 +194,7 @@ pub fn tilt(scrolled: f64, ride: Option<(f64, f64)>) -> f64 {
     }
     // Radians per scrolled pixel at full speed. The speed ramps along a
     // smoothstep, so a ramp turns it half as far as full speed would.
-    let speed = TAU / LOOP_EXTRA;
+    let speed = TAU / SPIN_TURN;
     let start = ride.0;
     let turned = if scrolled < from + SPIN_UP {
         let q = (scrolled - from) / SPIN_UP;
@@ -183,11 +202,24 @@ pub fn tilt(scrolled: f64, ride: Option<(f64, f64)>) -> f64 {
     } else if scrolled < slow {
         speed * (scrolled - start)
     } else {
-        let d = rest - slow;
-        let q = (scrolled - slow) / d;
-        speed * (slow - start + d * (q - q.powi(3) + q.powi(4) / 2.0))
+        let q = (scrolled - slow) / SPIN_DOWN;
+        speed * (slow - start + SPIN_DOWN * (q - q.powi(3) + q.powi(4) / 2.0))
     };
     turned.rem_euclid(TAU)
+}
+
+/// Where a letter riding the liquid's surface is, from the big C's middle:
+/// `along` pixels along the surface (as on the straight: + is right when
+/// level), with the surface turned to `tilt` and sloshing, `wall` seconds
+/// in. Its baseline middle, and its angle — the surface's turn plus its
+/// slope under the letter, `width` pixels wide.
+pub fn on_surface(along: f64, tilt: f64, wall: f64, width: f64) -> Spot {
+    let h = |a: f64| super::dive::wave(a, wall);
+    let up = h(along);
+    let slope = (h(along + width / 2.0) - h(along - width / 2.0)) / width;
+    let (sin, cos) = tilt.sin_cos();
+    // Along runs (cos, sin) on screen, up runs (sin, −cos).
+    Spot { x: along * cos + up * sin, y: along * sin - up * cos, angle: tilt - slope.atan() }
 }
 
 /// The nearest of the `ANGLES` turns to `angle`.
@@ -404,29 +436,31 @@ mod tests {
 
     #[test]
     fn tilt_turns_like_a_rider_while_letters_loop() {
-        let ride = (1000.0, 1000.0 + 2.5 * LOOP_EXTRA);
+        let ride = (1000.0, 1000.0 + 2.9 * SPIN_TURN);
         let (from, rest) = (1000.0 - SPIN_LEAD, spin_done(ride));
-        assert_eq!(tilt(from - 1.0, Some(ride)), 0.0, "upright before");
-        assert_eq!(tilt(500.0, None), 0.0, "no loop, no tilt");
-        // Already turning before the first letter goes in...
-        assert!(tilt(1000.0 - LOOP_EXTRA / 4.0, Some(ride)) > 0.0);
-        // ...and in step with it: one turn per lap, as a letter goes round.
-        for k in 0..10 {
-            let s = 1000.0 + k as f64 * LOOP_EXTRA / 4.0;
-            let want = (TAU * (s - 1000.0) / LOOP_EXTRA).rem_euclid(TAU);
+        assert_eq!(tilt(from - 1.0, Some(ride)), 0.0, "level before");
+        assert_eq!(tilt(500.0, None), 0.0, "no spin, no tilt");
+        // Already turning before the first rider comes in, level as it does,
+        // then a turn per SPIN_TURN.
+        assert!(tilt(1000.0 - SPIN_TURN / 4.0, Some(ride)) > 0.0);
+        for k in 0..=5 {
+            let s = 1000.0 + k as f64 * SPIN_TURN / 4.0;
+            let want = (TAU * (s - 1000.0) / SPIN_TURN).rem_euclid(TAU);
             let d = (tilt(s, Some(ride)) - want).rem_euclid(TAU);
             assert!(d.min(TAU - d) < 1e-9, "at {s}");
         }
-        // Slowing down from when the last is out, then upright.
-        assert!(rest >= ride.1 + SPIN_DOWN && rest < ride.1 + SPIN_DOWN + 2.0 * LOOP_EXTRA, "{rest}");
-        assert!(tilt(ride.1 + 1.0, Some(ride)) > 0.0);
+        // Two turns fit before slowing down, landing level with the riders still on.
+        assert!((rest - (1000.0 + 2.0 * SPIN_TURN + SPIN_DOWN / 2.0)).abs() < 1e-9, "{rest}");
+        assert!(rest <= ride.1);
         assert_eq!(tilt(rest + 1.0, Some(ride)), 0.0);
+        // A short ride still gets one turn.
+        assert!(spin_done((0.0, 10.0)) >= SPIN_TURN);
         // Smooth all the way: no jumps, getting going and slowing down gently.
         let step = |s: f64| {
             let d = (tilt(s + 1.0, Some(ride)) - tilt(s, Some(ride))).rem_euclid(TAU);
             d.min(TAU - d)
         };
-        let full = TAU / LOOP_EXTRA;
+        let full = TAU / SPIN_TURN;
         for k in 0..(rest - from) as usize + 4 {
             let s = from - 2.0 + k as f64;
             assert!(step(s) <= full + 1e-6, "jump at {s}: {}", step(s));

@@ -143,6 +143,15 @@ pub fn big_c_bob(wall: f64) -> f64 {
     BIG_C_BOB * DYCP_AMP * (TAU * wall / DYCP_PERIOD).sin()
 }
 
+/// The big C's middle once it's grown, on a screen `width` wide, `wall`
+/// seconds in — where its liquid's surface runs through, on whole pixels
+/// as it's stamped.
+pub fn big_c_centre(width: usize, wall: f64) -> (f64, f64) {
+    let (cx, cy) = looping::loop_centre(width);
+    let half = 4.0 * BIG_C as f64;
+    ((cx - half).round() + half, (cy + big_c_bob(wall) - half).round() + half)
+}
+
 fn c_grown(phase: LogoPhase) -> f64 {
     match phase {
         LogoPhase::Away(t) => Easing::EaseInOut.apply(((t - C_LEAVES) / MORPH_SECS).clamp(0.0, 1.0)),

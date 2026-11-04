@@ -10,10 +10,11 @@ use std::f64::consts::TAU;
 use super::glyphs::{
     c64, has_c64, has_mario, mario, shade, stamp, stamp_tinted, LETTER_HIGHLIGHT, LETTER_LOWER, LETTER_OUTLINE, LETTER_UPPER,
 };
-use super::looping::{self, angle_index, track, ANGLES};
+use super::looping::{self, angle_index, track, Shape, Spot, ANGLES};
 use super::dive;
 use super::script::{Glyph, Wave};
 use super::tiny;
+use super::wordmark;
 
 // Scroller: riding a gentle sine through screen x — classic cracktro
 // bottom scroller. Its speed lives in the script's timeline.
@@ -248,16 +249,27 @@ impl Scroller {
 
     /// Draw path-riding letter `g` wherever it is on its track, `scrolled`
     /// pixels in. False when it isn't one (or its font can't turn).
-    fn paint_on_path(&self, c: &mut Canvas, g: &Glyph, scrolled: f64, scratch: &mut Vec<(i64, i64, Color)>) -> bool {
+    fn paint_on_path(&self, c: &mut Canvas, g: &Glyph, scrolled: f64, tilt: f64, scratch: &mut Vec<(i64, i64, Color)>) -> bool {
         let (Some(shape), Some(turns)) = (g.path, self.turns.get(&(g.ch, g.font))) else { return false };
         let adv = advance(g.font, g.ch);
         let d = (pen(scrolled) - g.x as i64) as f64 - adv as f64 / 2.0;
-        let mut spot = track(shape, d, c.width, (self.y0 + BASE) as f64);
-        // On the straight it rides the wave like any letter (same phase, by
-        // its left edge), calming down for the loop.
-        let left = spot.x - adv as f64 / 2.0;
-        spot.y += (lift(g, left, c.frame as f64 / FPS, c.width) * looping::wave_weight(shape, d, c.width)).round();
-        if spot.x < -(adv as f64) - 4.0 || spot.x > c.width as f64 + adv as f64 {
+        let wall = c.frame as f64 / FPS;
+        let spot = if shape == Shape::Spin {
+            // On the big C's liquid: as far along its surface from the
+            // middle as it would be along the straight, turned with it.
+            let (cx, cy) = wordmark::big_c_centre(c.width, wall);
+            let s = looping::on_surface(c.width as f64 - d - cx, tilt, wall, adv as f64);
+            Spot { x: cx + s.x, y: cy + s.y, ..s }
+        } else {
+            let mut spot = track(shape, d, c.width, (self.y0 + BASE) as f64);
+            // On the straight it rides the wave like any letter (same phase,
+            // by its left edge), calming down for the loop.
+            let left = spot.x - adv as f64 / 2.0;
+            spot.y += (lift(g, left, wall, c.width) * looping::wave_weight(shape, d, c.width)).round();
+            spot
+        };
+        let margin = adv as f64 + 4.0;
+        if spot.x < -margin || spot.x > c.width as f64 + margin || spot.y < -margin || spot.y > c.height as f64 + margin {
             return true;
         }
         // The letter's middle sits `rise` above the track, along its own up.
@@ -337,8 +349,10 @@ impl Scroller {
         for run in &self.runs {
             self.paint_zoom(c, &self.glyphs[run.clone()], scrolled, t);
         }
+        // Which way the big C's liquid — and whatever rides it — is turned.
+        let tilt = looping::tilt(scrolled, looping::ride(&self.glyphs, c.width));
         for g in self.glyphs.iter().filter(|g| g.font != Font::Term && !zooms(g)) {
-            if self.paint_on_path(c, g, scrolled, &mut face) {
+            if self.paint_on_path(c, g, scrolled, tilt, &mut face) {
                 continue;
             }
             let Some((x, base)) = self.spot(g, (c.width, c.height), scrolled, t, dive) else { continue };
@@ -404,7 +418,7 @@ pub const PITCH: &str = "{hills}{style flat}Welly well, what do we have here?{st
 Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 Clouds that drift and throw shadows on the land. Never shade. They're above that.   \
 A logo that will not sit still, bouncing every letter on its own little wave...   in fact, it won't{logo away} even stay.    \
-{path loop}And all of it at a silky 60 frames per second.{path off}{dive in}Down in the C where the colours spill: sky blue, mint and a coral hill!{dive out}{font big}BENDING THE RULES{font c64}   {logo}{zoom on}Zoom in, zoom out...{zoom off}   \
+{path spin}And all of it at a silky 60 frames per second.{path off}{dive in}Down in the C where the colours spill: sky blue, mint and a coral hill!{dive out}{font big}BENDING THE RULES{font c64}   {logo}{zoom on}Zoom in, zoom out...{zoom off}   \
 How is it done?   Ha!   A magician never tells...   {font term}(this is your terminal's own font, by the way - blink and you miss it){font c64}   \
 ...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}{wave off}...ofc you should type it{logo out} without the colours, just like we did in 1986...{wave on}{style candy}   \
 {wave long}Greetings fly out to Exel, {} and Hardbeat - still sorry, Apache: no Microsoft BackOffice was harmed - Paradox - Pitr / Eindbazen - ISO - Danny Styles - Spidey - Humasect - Nightdead - Si-Goat - Stephen Parker - Koffiekop - Kevinjel - Sanity - \
