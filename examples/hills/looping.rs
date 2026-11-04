@@ -136,17 +136,58 @@ pub fn ride(glyphs: &[Glyph], width: usize) -> Option<(f64, f64)> {
     Some((at(first), at(last) + LOOP_EXTRA))
 }
 
+/// Scrolled pixels the liquid takes to come up to speed before the
+/// riders (half a turn), and at least to come to rest after them (half a
+/// turn — up to one and a half, so it lands upright).
+pub const SPIN_UP: f64 = LOOP_EXTRA;
+pub const SPIN_DOWN: f64 = LOOP_EXTRA;
+/// Scrolled pixels from when the liquid starts turning until the first
+/// rider goes in: the spin-up, then on its own at full speed until it's
+/// upright again — so the rider goes in in step with it.
+pub const SPIN_LEAD: f64 = LOOP_EXTRA + SPIN_UP / 2.0;
+
+/// The liquid's turn for a `ride`, in scrolled pixels: when it starts
+/// turning, when it starts slowing down, and when it's at rest again.
+fn spin((start, last): (f64, f64)) -> (f64, f64, f64) {
+    // It slows down from when the last rider is out. Slowing down over
+    // `d` turns it as far as `d / 2` at full speed would: stretch `d` so
+    // that lands on a whole number of laps — upright.
+    let laps = ((last - start + SPIN_DOWN / 2.0) / LOOP_EXTRA - 1e-9).ceil();
+    let d = 2.0 * (start + laps * LOOP_EXTRA - last);
+    (start - SPIN_LEAD, last, last + d)
+}
+
+/// When the liquid is at rest again after `ride`, in scrolled pixels.
+pub fn spin_done(ride: (f64, f64)) -> f64 {
+    spin(ride).2
+}
+
 /// Which way is down for something riding along with the loop, `scrolled`
-/// pixels in: turned as a looping letter would be (radians, clockwise), a
-/// lap per letter's lap, from when the first letter goes in until a whole
-/// lap after the last comes out — so it lands upright. 0 otherwise.
+/// pixels in (radians, clockwise). It gets going before the first letter
+/// goes in, then turns as a looping letter would — a lap per letter's lap,
+/// in step with them — and once the last is out it slows down and lands
+/// upright. 0 otherwise.
 pub fn tilt(scrolled: f64, ride: Option<(f64, f64)>) -> f64 {
-    let Some((start, last)) = ride else { return 0.0 };
-    let laps = ((last - start) / LOOP_EXTRA).ceil().max(1.0);
-    if scrolled < start || scrolled >= start + laps * LOOP_EXTRA {
+    let Some(ride) = ride else { return 0.0 };
+    let (from, slow, rest) = spin(ride);
+    if scrolled < from || scrolled >= rest {
         return 0.0;
     }
-    TAU * ((scrolled - start) / LOOP_EXTRA).fract()
+    // Radians per scrolled pixel at full speed. The speed ramps along a
+    // smoothstep, so a ramp turns it half as far as full speed would.
+    let speed = TAU / LOOP_EXTRA;
+    let start = ride.0;
+    let turned = if scrolled < from + SPIN_UP {
+        let q = (scrolled - from) / SPIN_UP;
+        speed * (SPIN_UP * (q.powi(3) - q.powi(4) / 2.0) - SPIN_LEAD + SPIN_UP / 2.0)
+    } else if scrolled < slow {
+        speed * (scrolled - start)
+    } else {
+        let d = rest - slow;
+        let q = (scrolled - slow) / d;
+        speed * (slow - start + d * (q - q.powi(3) + q.powi(4) / 2.0))
+    };
+    turned.rem_euclid(TAU)
 }
 
 /// The nearest of the `ANGLES` turns to `angle`.
@@ -363,18 +404,34 @@ mod tests {
 
     #[test]
     fn tilt_turns_like_a_rider_while_letters_loop() {
-        let ride = (100.0, 100.0 + 2.5 * LOOP_EXTRA);
-        assert_eq!(tilt(50.0, Some(ride)), 0.0, "upright before");
+        let ride = (1000.0, 1000.0 + 2.5 * LOOP_EXTRA);
+        let (from, rest) = (1000.0 - SPIN_LEAD, spin_done(ride));
+        assert_eq!(tilt(from - 1.0, Some(ride)), 0.0, "upright before");
         assert_eq!(tilt(500.0, None), 0.0, "no loop, no tilt");
-        // One turn per lap, as a letter goes round.
-        let quarter = tilt(100.0 + LOOP_EXTRA / 4.0, Some(ride));
-        assert!((quarter - TAU / 4.0).abs() < 1e-9, "{quarter}");
-        // Keeps turning to the end of a whole lap past the last letter...
-        let end = 100.0 + 3.0 * LOOP_EXTRA;
-        assert!(tilt(end - 1.0, Some(ride)) > 0.0);
-        assert!(TAU - tilt(end - 0.01, Some(ride)) < 0.01, "lands upright, no jump");
-        // ...then rests upright.
-        assert_eq!(tilt(end + 1.0, Some(ride)), 0.0);
+        // Already turning before the first letter goes in...
+        assert!(tilt(1000.0 - LOOP_EXTRA / 4.0, Some(ride)) > 0.0);
+        // ...and in step with it: one turn per lap, as a letter goes round.
+        for k in 0..10 {
+            let s = 1000.0 + k as f64 * LOOP_EXTRA / 4.0;
+            let want = (TAU * (s - 1000.0) / LOOP_EXTRA).rem_euclid(TAU);
+            let d = (tilt(s, Some(ride)) - want).rem_euclid(TAU);
+            assert!(d.min(TAU - d) < 1e-9, "at {s}");
+        }
+        // Slowing down from when the last is out, then upright.
+        assert!(rest >= ride.1 + SPIN_DOWN && rest < ride.1 + SPIN_DOWN + 2.0 * LOOP_EXTRA, "{rest}");
+        assert!(tilt(ride.1 + 1.0, Some(ride)) > 0.0);
+        assert_eq!(tilt(rest + 1.0, Some(ride)), 0.0);
+        // Smooth all the way: no jumps, getting going and slowing down gently.
+        let step = |s: f64| {
+            let d = (tilt(s + 1.0, Some(ride)) - tilt(s, Some(ride))).rem_euclid(TAU);
+            d.min(TAU - d)
+        };
+        let full = TAU / LOOP_EXTRA;
+        for k in 0..(rest - from) as usize + 4 {
+            let s = from - 2.0 + k as f64;
+            assert!(step(s) <= full + 1e-6, "jump at {s}: {}", step(s));
+        }
+        assert!(step(from + 1.0) < full / 50.0 && step(rest - 2.0) < full / 50.0);
     }
 
     #[test]

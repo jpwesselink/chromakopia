@@ -953,6 +953,29 @@ mod tests {
     }
 
     #[test]
+    fn the_big_c_turns_alone_then_with_the_riders_then_comes_to_rest_before_the_dive() {
+        let w = 112;
+        let stage = Stage::new(w);
+        let ride = looping::ride(&stage.glyphs, w).unwrap();
+        let away = first_cue(&stage, script::Code::LogoAway);
+        let dive_in = first_cue(&stage, script::Code::Dive(true));
+        let (first_in, last_out) = (when_scrolled(&stage, ride.0), when_scrolled(&stage, ride.1));
+        let tilt = |t: f64| looping::tilt(stage.timeline.scrolled(t), Some(ride));
+        // Still while the C glides in and grows...
+        assert_eq!(tilt(away + wordmark::AWAY_DONE - 0.05), 0.0);
+        // ...then turning on its own for a good while before the first rider.
+        let alone = (first_in - away - wordmark::AWAY_DONE, looping::SPIN_LEAD / FPS);
+        assert!(alone.0 >= alone.1 - 0.1, "{alone:?}");
+        assert!(tilt(first_in - 1.0) > 0.0);
+        // Turning still as the last comes out, upright again before the dive.
+        assert!(tilt(last_out - 0.1) > 0.0);
+        let rest = when_scrolled(&stage, looping::spin_done(ride));
+        assert!(stage.timeline.scrolled(dive_in) >= looping::spin_done(ride) - 1e-6, "{rest} vs {dive_in}");
+        assert_eq!(tilt(dive_in), 0.0);
+        eprintln!("alone {:.2}s · riding {:.2}s · slowing {:.2}s", first_in - away - wordmark::AWAY_DONE, last_out - first_in, rest - last_out);
+    }
+
+    #[test]
     fn logo_steps_aside_for_the_loop_and_comes_back() {
         let w = 112;
         let stage = Stage::new(w);

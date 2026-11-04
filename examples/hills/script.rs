@@ -13,6 +13,7 @@ use chromakopia::animate::framebuffer::FPS;
 use super::dive;
 use super::looping::{self, Shape};
 use super::scroller::{self, Font, Style};
+use super::wordmark;
 
 /// Scroll speed, pixels per second (one pixel per frame).
 const SPEED: f64 = FPS;
@@ -175,6 +176,8 @@ impl Script {
         // Where each long wave starts and ends, in text pixels.
         let mut longs: Vec<(f64, f64)> = Vec::new();
         let mut dived = false;
+        // Where the last `{logo away}` sits, and the first letter on the path.
+        let (mut away, mut path_from) = (None, 0);
         let (mut glyphs, mut events, mut x) = (Vec::new(), Vec::new(), 0.0);
         let mut codes = self.events.iter().peekable();
         let chars: Vec<char> = self.text.chars().collect();
@@ -205,9 +208,28 @@ impl Script {
                         events.push((x, code));
                         x += width as f64 / 2.0 + if on { dive::IN_SECS } else { dive::OUT_SECS } * SPEED;
                     }
+                    Code::LogoAway => {
+                        away = Some(x);
+                        events.push((x, code));
+                    }
                     Code::Path(next) => {
                         if let Some(shape) = path.filter(|&p| Some(p) != next) {
                             x += looping::extra(shape, width);
+                            // ...and until the big C's liquid, turning with
+                            // the riders, has come to rest.
+                            if let Some(ride) = looping::ride(&glyphs[path_from..], width) {
+                                x = x.max(looping::spin_done(ride) - width as f64 / 2.0);
+                            }
+                        }
+                        if path.is_none() && next == Some(Shape::Loop) {
+                            // With the big C out, its liquid turns on its own
+                            // for a while first — the riders go in once
+                            // it's up to speed, in step with it.
+                            if let Some(a) = away {
+                                let grown = wordmark::AWAY_DONE * SPEED;
+                                x = x.max(a + width as f64 / 2.0 - looping::loop_start(width) + grown + looping::SPIN_LEAD);
+                            }
+                            path_from = glyphs.len();
                         }
                         path = next;
                     }
@@ -362,9 +384,24 @@ mod tests {
         assert_eq!(p.glyphs[2].x - p.glyphs[1].x, 8.0);
         let spaced = parse("{path loop}a b{path off}").unwrap().place(100).unwrap();
         assert_eq!(spaced.glyphs[1].x - spaced.glyphs[0].x, 16.0);
-        // What follows waits until the last looper is out.
-        assert_eq!(p.glyphs[3].x, 24.0 + looping::LOOP_EXTRA);
+        // What follows waits until the last looper is out, and the liquid
+        // turning with them has come to rest by the time it's in the middle.
+        let ride = looping::ride(&p.glyphs, 100).unwrap();
+        assert!(p.glyphs[3].x >= 24.0 + looping::LOOP_EXTRA);
+        assert_eq!(p.glyphs[3].x + 50.0, looping::spin_done(ride));
         assert!(p.events.is_empty(), "nothing to fire: {:?}", p.events);
+    }
+
+    #[test]
+    fn with_the_big_c_out_the_liquid_turns_alone_before_the_riders_go_in() {
+        let w = 100;
+        let p = parse("ab{logo away}c{path loop}de{path off}f").unwrap().place(w).unwrap();
+        let away = p.events[0].0 + w as f64 / 2.0;
+        let (start, _) = looping::ride(&p.glyphs, w).unwrap();
+        // The C is big in the loop, then the liquid gets going — and the
+        // first rider goes in in step with it.
+        assert!(start - looping::SPIN_LEAD >= away + wordmark::AWAY_DONE * SPEED - 1e-9, "{start} vs {away}");
+        assert!(start - looping::SPIN_LEAD <= away + wordmark::AWAY_DONE * SPEED + 8.0, "waits too long: {start} vs {away}");
     }
 
     #[test]

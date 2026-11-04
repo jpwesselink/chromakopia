@@ -68,7 +68,6 @@ pub const SLOSH: f64 = 1.5;
 /// When the C leaves for the loop: as the last of the others (H) jumps.
 const C_LEAVES: f64 = (WORD.len() - 2) as f64 * EXIT_STAGGER;
 /// Seconds until the others are gone and the C is big in the loop.
-#[cfg(test)]
 pub const AWAY_DONE: f64 = C_LEAVES + MORPH_SECS;
 
 /// Seconds to glide between the centre and the top.
