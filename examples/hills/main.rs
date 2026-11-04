@@ -903,6 +903,38 @@ mod tests {
         assert!(hidden * 10 < front * 9, "the hills hide too little of it: {hidden} of {front} cells");
     }
 
+    /// Pictures of each side scroller on its way across, one pixel per
+    /// half-block: `cargo test --release --example hills dump_sides --
+    /// --ignored`, then open `target/hills-sides/*.ppm`.
+    #[test]
+    #[ignore]
+    fn dump_sides() {
+        let w = 160;
+        let stage = Stage::new(w);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/hills-sides");
+        std::fs::create_dir_all(&dir).unwrap();
+        for (i, side) in sides::SIDES.iter().enumerate() {
+            for (k, part) in [0.3, 0.45, 0.55, 0.7].iter().enumerate() {
+                stage.seek_to(first_cue(&stage, script::Code::Side(i)) + side.secs(w) * part);
+                let mut b = FrameBuffer::new(w, ROWS);
+                stage.render(&mut b, 0);
+                let mut out = format!("P6 {w} {} 255\n", ROWS * 2).into_bytes();
+                for py in 0..ROWS * 2 {
+                    for x in 0..w {
+                        let c = b.get(x, py / 2);
+                        let bg = c.bg.unwrap_or(Color::new(0, 0, 0));
+                        let px = match (c.ch, py % 2 == 0) {
+                            ('▀', true) | ('▄', false) | ('█', _) => c.color,
+                            _ => bg,
+                        };
+                        out.extend([px.r, px.g, px.b]);
+                    }
+                }
+                std::fs::write(dir.join(format!("{}-{k}.ppm", side.name)), out).unwrap();
+            }
+        }
+    }
+
     #[test]
     fn pitch_sends_every_side_scroller_across() {
         let w = 160;

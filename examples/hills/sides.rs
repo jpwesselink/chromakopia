@@ -141,9 +141,9 @@ pub const SIDES: [Side; 4] = [
         opacity: 1.0,
         speed: 1.0,
         z: z::ridge(4) - 5,
-        amp: 6.0,
-        spread: 0.45,
-        period: 1.4,
+        amp: 3.0,
+        spread: 0.15,
+        period: 2.0,
     },
     // Way back in the sky, behind the little clouds, slow.
     Side {
