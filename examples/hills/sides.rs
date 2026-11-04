@@ -39,6 +39,7 @@ pub enum Font {
 
 impl Font {
     /// Whether it has `ch`.
+    #[cfg(test)]
     fn has(self, ch: char) -> bool {
         match self {
             Font::C64 | Font::Big => super::glyphs::has_c64(ch),
@@ -56,6 +57,7 @@ impl Font {
     }
 
     /// Pixel rows of a letter, without outline.
+    #[cfg(test)]
     pub fn height(self) -> i64 {
         match self {
             Font::C64 => 8,

@@ -603,6 +603,21 @@ fn finish(stderr: &mut impl std::io::Write, quit: bool, start_row: usize, height
     let _ = stderr.flush();
 }
 
+/// Frames to step on per frame drawn. Apple's Terminal.app has no
+/// synchronized output, so it can show a frame half written — tearing;
+/// drawing every other frame there halves the bytes it has to take in
+/// and with them the chance. `CHROMAKOPIA_HALF_RATE=1` or `=0` (the
+/// `half` setting) forces it on or off anywhere; `term` is
+/// `TERM_PROGRAM`.
+pub fn frame_step(half: Option<&str>, term: Option<&str>) -> usize {
+    let half = match half {
+        Some("1") => true,
+        Some("0") => false,
+        _ => term == Some("Apple_Terminal"),
+    };
+    if half { 2 } else { 1 }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn synced(frame: String) -> String {
     // Synchronized output: the terminal shows the frame once it's all in,
@@ -766,7 +781,13 @@ pub(crate) async fn run_effect_in(
         spawn_key_listener(quit_key, on_key, running.clone())
     });
 
-    let frame_duration = Duration::from_secs_f64(1.0 / FPS / speed.max(0.001));
+    // Terminals that can't show a frame in one go get half as many, each
+    // two frames on, so the animation keeps its pace.
+    let step = frame_step(
+        std::env::var("CHROMAKOPIA_HALF_RATE").ok().as_deref(),
+        std::env::var("TERM_PROGRAM").ok().as_deref(),
+    );
+    let frame_duration = Duration::from_secs_f64(step as f64 / FPS / speed.max(0.001));
     let term_width = crate::terminal::terminal_width();
     let deadline = tokio::time::Instant::now() + duration;
     let mut interval = tokio::time::interval(frame_duration);
@@ -806,7 +827,7 @@ pub(crate) async fn run_effect_in(
             let _ = stderr.flush();
         }
         prev = Some(buf.clone());
-        frame += 1;
+        frame += step;
     }
     running.store(false, Ordering::Relaxed);
 
@@ -949,7 +970,13 @@ pub fn spawn_effect(
         spawn_key_listener(Some(key), None, running.clone())
     });
 
-    let frame_duration = Duration::from_secs_f64(1.0 / FPS / speed.max(0.001));
+    // Terminals that can't show a frame in one go get half as many, each
+    // two frames on, so the animation keeps its pace.
+    let step = frame_step(
+        std::env::var("CHROMAKOPIA_HALF_RATE").ok().as_deref(),
+        std::env::var("TERM_PROGRAM").ok().as_deref(),
+    );
+    let frame_duration = Duration::from_secs_f64(step as f64 / FPS / speed.max(0.001));
     let term_width = crate::terminal::terminal_width();
 
     // Single loop: animate, diff, write — frame production and display 1:1.
@@ -1013,7 +1040,7 @@ pub fn spawn_effect(
                 let mut old_buf = FrameBuffer::new(width, height);
                 old_effect.render(&mut old_buf, frame);
 
-                *elapsed += 1;
+                *elapsed += step;
                 let t = easing.apply((*elapsed as f64 / total.max(1) as f64).min(1.0));
 
                 for y in 0..buf.height {
@@ -1031,7 +1058,7 @@ pub fn spawn_effect(
 
             // Apply fade on top
             if let Some((color, ref easing, total, ref mut elapsed)) = fade {
-                *elapsed += 1;
+                *elapsed += step;
                 let t = easing.apply((*elapsed as f64 / total.max(1) as f64).min(1.0));
                 for y in 0..buf.height {
                     for x in 0..buf.width {
@@ -1068,7 +1095,7 @@ pub fn spawn_effect(
                 let _ = stderr.flush();
             }
             prev = Some(buf.clone());
-            frame += 1;
+            frame += step;
         }
 
         let quit = quit_pressed.is_some_and(|p| p.load(Ordering::Relaxed));
@@ -1295,6 +1322,16 @@ mod tests {
             }
             prev = Some(buf.clone());
         }
+    }
+
+    #[test]
+    fn terminal_app_draws_every_other_frame_unless_told_otherwise() {
+        assert_eq!(frame_step(None, Some("Apple_Terminal")), 2);
+        assert_eq!(frame_step(None, Some("iTerm.app")), 1);
+        assert_eq!(frame_step(None, None), 1);
+        assert_eq!(frame_step(Some("0"), Some("Apple_Terminal")), 1);
+        assert_eq!(frame_step(Some("1"), Some("ghostty")), 2);
+        assert_eq!(frame_step(Some("yes"), Some("ghostty")), 1);
     }
 
     #[test]

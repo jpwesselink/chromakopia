@@ -489,6 +489,12 @@ async fn main() {
         eprintln!("{problem}");
         return;
     }
+    if std::env::var("TERM_PROGRAM").as_deref() == Ok("Apple_Terminal") {
+        eprintln!(
+            "tip: Terminal.app can't show a frame in one go, so this may tear — it runs at half rate here.\n     It looks its best in iTerm2, Ghostty, kitty or WezTerm."
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
     let stage = Stage::new(terminal_width());
     let seek = stage.seek.clone();
     Scene::new()

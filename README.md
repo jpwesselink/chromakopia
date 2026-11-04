@@ -1,6 +1,6 @@
 # chromakopia
 
-Framebuffer-based terminal animation engine for Rust. 30 FPS lockstep renderer, composable effects, same code targets the terminal and WASM.
+Framebuffer-based terminal animation engine for Rust. 60 FPS lockstep renderer, composable effects, same code targets the terminal and WASM.
 
 ```rust
 use chromakopia::prelude::*;
@@ -186,6 +186,10 @@ Auto-detects background/foreground colours for theme-aware animations. Respects 
 if chromakopia::is_dark_theme() { /* light effects */ }
 chromakopia::set_color_enabled(Some(false));  // explicit override
 ```
+
+## Terminals
+
+Frames go out as diffs inside synchronized output (`\x1B[?2026h … l`), so a terminal that supports it never shows a frame half drawn. iTerm2, Ghostty, kitty and WezTerm look their best. Apple's Terminal.app has no synchronized output and can tear; there chromakopia draws every other frame (same pace, half the bytes) to make that rarer. `CHROMAKOPIA_HALF_RATE=1` or `=0` forces half rate on or off in any terminal.
 
 ## Examples
 
