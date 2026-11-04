@@ -621,26 +621,34 @@ mod tests {
         fn bytes(prev: &FrameBuffer, curr: &FrameBuffer) -> (usize, usize) {
             let (mut n, mut cells) = (0, 0);
             let (mut fg, mut bg) = (None, None);
+            let digits = |c: Color| format!("{};{};{}", c.r, c.g, c.b).len();
             for y in 0..curr.height {
-                let mut placed = false;
+                let mut gap: Option<usize> = None;
                 for x in 0..curr.width {
                     let c = curr.get(x, y);
                     if prev.get(x, y) == c {
-                        placed = false;
+                        gap = gap.map(|g| g + 1);
                         continue;
                     }
                     cells += 1;
-                    if !placed {
-                        n += format!("\x1B[{};{}H", y + 1, x + 1).len();
-                        placed = true;
+                    n += match gap {
+                        None => format!("\x1B[{};{}H", y + 1, x + 1).len(),
+                        Some(0) => 0,
+                        Some(g) => format!("\x1B[{g}C").len(),
+                    };
+                    gap = Some(0);
+                    let f = (c.ch != ' ' && fg != Some(c.color)).then_some(c.color);
+                    let b = (c.ch != '\u{2588}' && bg != Some(c.bg)).then_some(c.bg);
+                    if f.is_some() || b.is_some() {
+                        n += 3;
                     }
-                    if bg != Some(c.bg) {
-                        n += c.bg.map_or(5, |b| format!("\x1B[48;2;{};{};{}m", b.r, b.g, b.b).len());
-                        bg = Some(c.bg);
+                    if let Some(f) = f {
+                        n += 5 + digits(f);
+                        fg = Some(f);
                     }
-                    if fg != Some(c.color) {
-                        n += format!("\x1B[38;2;{};{};{}m", c.color.r, c.color.g, c.color.b).len();
-                        fg = Some(c.color);
+                    if let Some(b) = b {
+                        n += b.map_or(2, |b| 5 + digits(b)) + usize::from(f.is_some());
+                        bg = Some(b);
                     }
                     n += c.ch.len_utf8();
                 }
