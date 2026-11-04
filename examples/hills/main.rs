@@ -443,7 +443,7 @@ fn build_layers(
             scroller.paint_dived(c, view.scroll, view.dive.zoom)
         }),
     ));
-    // Side scrollers, each at its own depth.
+    // Side scrollers, each at its own depth and see-through as it says.
     for (i, side) in sides::SIDES.into_iter().enumerate() {
         let view = side_view.clone();
         layers.push((
@@ -452,7 +452,8 @@ fn build_layers(
                 if let Some(secs) = view.lock().unwrap().sides[i] {
                     side.paint(c, secs);
                 }
-            }),
+            })
+            .opacity(side.opacity),
         ));
     }
     stack(layers)
