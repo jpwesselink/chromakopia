@@ -53,6 +53,8 @@ pub enum Code {
     /// Everything leaves: the logo jumps away, the landscape takes
     /// itself down — before the text wraps and the show starts over.
     Bye,
+    /// Side scroller `n` of `sides::SIDES` sets off across the screen.
+    Side(usize),
     /// A skip stop with nothing attached (set by `with_lead`, not typed).
     Mark,
     /// Dived in, the liquid's layers spread into waves (set by `place`,
@@ -112,6 +114,9 @@ pub fn parse(src: &str) -> Result<Script, String> {
             (Some("hills"), None, _) => Code::Hills,
             (Some("bye"), None, _) => Code::Bye,
             (Some("gap"), None, _) => Code::Gap,
+            (Some("side"), Some(name), None) => {
+                Code::Side(super::sides::named(name).ok_or_else(|| format!("unknown side scroller {{{body}}}"))?)
+            }
             (Some("font"), Some(name), None) => {
                 Code::Font(Font::named(name).ok_or_else(|| format!("unknown font {{{body}}}"))?)
             }

@@ -7,6 +7,7 @@ use chromakopia::animate::dither;
 use chromakopia::prelude::*;
 use std::f64::consts::PI;
 
+use super::sides::z;
 use super::{ROWS, TOP_PAD};
 
 // Cloud shadows multiply with NES blue (2C02 entry 22).
@@ -217,7 +218,14 @@ fn cumulus(x: f64) -> f64 {
 
 /// Sky, clouds, hills and cloud shadows, back to front. `since()` is the
 /// seconds since the `{hills}` code (None: not yet — nothing is drawn).
+#[cfg(test)]
 pub fn landscape(since: impl Fn() -> Option<f64> + Clone + Send + 'static) -> Layers {
+    landscape_layers(since).into_iter().fold(Layers::new(ROWS), |layers, (_, l)| layers.layer(l))
+}
+
+/// `landscape`'s layers, each with its depth (see `sides::z`), so other
+/// layers can go in between.
+pub fn landscape_layers(since: impl Fn() -> Option<f64> + Clone + Send + 'static) -> Vec<(i32, Layer)> {
     let h_px = (ROWS * 2) as f64;
     let drop = |i: usize| -> Drop {
         let since = since.clone();
@@ -291,16 +299,17 @@ pub fn landscape(since: impl Fn() -> Option<f64> + Clone + Send + 'static) -> La
     .blend(BlendMode::Multiply)
     .opacity(0.3);
 
-    let mut layers = Layers::new(ROWS).layer(sky).layer(clouds);
+    let mut layers = vec![(z::SKY, sky), (z::CLOUDS, clouds)];
     for (i, r) in ridges.into_iter().enumerate() {
         let r = r
             .swing(SWING * (1.0 + DEPTH * i as f64), PERIOD, Easing::EaseInOut)
             .phase(-(i as f64) * LAG);
         // The first two ridges are the clouds — slightly see-through.
         let r = if i < 2 { r.opacity(0.85) } else { r };
-        layers = layers.layer(r);
+        layers.push((z::ridge(i), r));
     }
-    layers.layer(shadows)
+    layers.push((z::SHADOWS, shadows));
+    layers
 }
 
 #[cfg(test)]

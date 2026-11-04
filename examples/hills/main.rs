@@ -20,6 +20,7 @@ mod looping;
 mod panel;
 mod script;
 mod scroller;
+mod sides;
 // The storyboard's clock and seeking are idle until script codes drive
 // the panels again.
 #[allow(dead_code)]
@@ -69,6 +70,8 @@ struct View {
     intro: Option<f64>,
     /// How far into the big C the camera has dived.
     dive: dive::Dive,
+    /// Per side scroller: seconds since its latest `{side}` code.
+    sides: [Option<f64>; sides::SIDES.len()],
 }
 
 /// What is on screen at script time `t`: the scroller, plus the landscape
@@ -120,7 +123,8 @@ fn script_view(tl: &script::Timeline, intro_secs: f64, t: f64) -> View {
         _ => dive::Dive::default(),
     };
     let intro = (t < intro_secs).then_some(t);
-    View { logo, heading: None, panel: None, pushed: None, scroll: tl.scrolled(t), hills, intro, dive }
+    let sides = std::array::from_fn(|i| tl.since(script::Code::Side(i), t).map(|at| t - at));
+    View { logo, heading: None, panel: None, pushed: None, scroll: tl.scrolled(t), hills, intro, dive, sides }
 }
 
 /// What is on screen `local` seconds into storyboard step `i`. The
@@ -147,7 +151,7 @@ fn view_for(steps: &[Step], i: usize, local: f64) -> View {
     let pushed = panel
         .filter(|pv| !pv.slide.first && local < panel::ENTER_SECS)
         .map(|_| PanelView { step: i - 1, local: steps[i - 1].secs + local, slide: slide_of(steps, i - 1) });
-    View { logo, heading, panel, pushed, scroll: 0.0, hills: Some(f64::INFINITY), intro: None, dive: dive::Dive::default() }
+    View { logo, heading, panel, pushed, scroll: 0.0, hills: Some(f64::INFINITY), intro: None, dive: dive::Dive::default(), sides: [None; sides::SIDES.len()] }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -408,27 +412,56 @@ fn build_layers(
     let logo_view = view.clone();
     let scroll_view = view.clone();
     let hills_view = view.clone();
+    let side_view = view.clone();
     let frame_view = view;
     let frame_steps = steps;
 
-    landscape::landscape(move || hills_view.lock().unwrap().hills)
-        .layer(Layer::paint(move |c| {
+    let mut layers = landscape::landscape_layers(move || hills_view.lock().unwrap().hills);
+    layers.push((
+        sides::z::LOGO,
+        Layer::paint(move |c| {
             let view = *logo_view.lock().unwrap();
             word.paint(c, view.logo, looping::tilt(view.scroll, ride), view.dive);
             let phase = view.logo;
             word.paint_tagline(c, phase);
-        }))
-        // Panel boxes (fill, edge, extrusion).
-        .layer(Layer::paint(move |c| {
+        }),
+    ));
+    // Panel boxes (fill, edge, extrusion).
+    layers.push((
+        sides::z::PANELS,
+        Layer::paint(move |c| {
             let view = *frame_view.lock().unwrap();
             for (_, geo, _) in on_screen(&frame_steps, &view, c.width) {
                 panel::paint_frame(c, &geo);
             }
-        }))
-        .layer(Layer::paint(move |c| {
+        }),
+    ));
+    layers.push((
+        sides::z::SCROLLER,
+        Layer::paint(move |c| {
             let view = *scroll_view.lock().unwrap();
             scroller.paint_dived(c, view.scroll, view.dive.zoom)
-        }))
+        }),
+    ));
+    // Side scrollers, each at its own depth.
+    for (i, side) in sides::SIDES.into_iter().enumerate() {
+        let view = side_view.clone();
+        layers.push((
+            side.z,
+            Layer::paint(move |c| {
+                if let Some(secs) = view.lock().unwrap().sides[i] {
+                    side.paint(c, secs);
+                }
+            }),
+        ));
+    }
+    stack(layers)
+}
+
+/// `layers` back to front by depth; equal depths keep their order.
+fn stack(mut layers: Vec<(i32, Layer)>) -> Layers {
+    layers.sort_by_key(|&(z, _)| z);
+    layers.into_iter().fold(Layers::new(ROWS), |all, (_, layer)| all.layer(layer))
 }
 
 /// The block heading under the panel in the small font, popping up with
@@ -847,6 +880,38 @@ mod tests {
             line.contains("shape & layout")
         });
         assert!(found, "plain heading not found");
+    }
+
+    #[test]
+    fn side_scrollers_go_behind_the_hills_their_depth_puts_in_front() {
+        let w = 120;
+        let side = sides::SIDES[sides::named("hide").unwrap()];
+        let secs = side.secs(w) / 2.0;
+        // Cells the side scroller's letters change at depth `z`.
+        let shows = |z: i32| {
+            let mut layers = landscape::landscape_layers(|| Some(f64::INFINITY));
+            layers.push((z, Layer::paint(move |c| side.paint(c, secs))));
+            let mut with = FrameBuffer::new(w, ROWS);
+            stack(layers).render(&mut with, 0);
+            let mut without = FrameBuffer::new(w, ROWS);
+            landscape::landscape(|| Some(f64::INFINITY)).render(&mut without, 0);
+            (0..ROWS).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| with.get(x, y) != without.get(x, y)).count()
+        };
+        let (front, hidden) = (shows(sides::z::SCROLLER), shows(side.z));
+        assert!(hidden > 0, "not there at all");
+        assert!(hidden * 10 < front * 9, "the hills hide too little of it: {hidden} of {front} cells");
+    }
+
+    #[test]
+    fn pitch_sends_every_side_scroller_across() {
+        let w = 160;
+        let stage = Stage::new(w);
+        for (i, side) in sides::SIDES.iter().enumerate() {
+            let half = side.secs(w) / 2.0;
+            stage.seek_to(first_cue(&stage, script::Code::Side(i)) + half);
+            let since = stage.view_at(0).sides[i];
+            assert!(since.is_some_and(|s| (s - half).abs() < 1e-6), "{}: {since:?}", side.name);
+        }
     }
 
     #[test]
