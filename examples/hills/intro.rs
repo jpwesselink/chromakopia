@@ -1,41 +1,63 @@
-//! The cold open, before the scroller starts: three lines on an empty
-//! screen, on the scroller's line, each a step louder — built as a library `Timeline` of cell
-//! effects.
+//! The cold open, before the scroller starts: four lines, each a step
+//! louder, each on one of the pad's swells (every 4 seconds). The beat
+//! comes in on the fifth swell, at `BEAT_AT`, as "Welly well" reaches the
+//! middle.
 //!
 //! 1. "hey there" — hard on, hard off.
 //! 2. "how nice of you to come along" — fading in and out
 //!    (`AlphaIn` / `AlphaOut`).
-//! 3. "let's see if we can make this more entertaining, shall we?" — in
-//!    the terminal's own font, easing in from the right, holding in the
-//!    middle, easing out to the left.
+//! 3. "we've been expecting you" — in the terminal's own font, easing in
+//!    from the right, holding in the middle, easing out to the left.
+//! 4. "let's see if we can make this more entertaining, shall we?" — a
+//!    DYCP in the C64 letters, in colour, every letter on its own sine,
+//!    crossing a little above the scroller's line (the bass comes in with
+//!    it). It's a side scroller (`sides::Side`), painted with the scene,
+//!    and it may still be on its way out as "Welly well" comes in below.
+//!
+//! Lines 1–3 are a library `Timeline` of cell effects on the scroller's
+//! line.
 
 use chromakopia::animate::framebuffer::FPS;
 use chromakopia::prelude::*;
 
 use super::glyphs;
+use super::sides::{self, Side};
 
 const LINE1: &str = "hey there";
 const LINE2: &str = "how nice of you to come along";
-const LINE3: &str = "let's see if we can make this more entertaining, shall we?";
+const LINE3: &str = "we've been expecting you";
+const LINE4: &str = "let's see if we can make this more entertaining, shall we?";
 
-const STEP1: (f64, f64) = (0.5, 2.5);
-const STEP2: (f64, f64) = (3.2, 7.2);
+/// The pad swells every 4 seconds; a line to each.
+const STEP1: (f64, f64) = (0.3, 3.0);
+const STEP2: (f64, f64) = (4.2, 7.6);
 const FADE_SECS: f64 = 0.8;
-const STEP3_START: f64 = 8.0;
+const STEP3_START: f64 = 8.2;
 /// Step 3: seconds easing in, holding in the middle, easing out.
-const IN_SECS: f64 = 1.5;
-const HOLD_SECS: f64 = 2.0;
-const OUT_SECS: f64 = 1.2;
-/// Quiet after step 3 before the scroller starts.
-const TAIL_SECS: f64 = 0.5;
+const IN_SECS: f64 = 1.2;
+const HOLD_SECS: f64 = 1.2;
+const OUT_SECS: f64 = 0.8;
+/// Step 4, the DYCP, sets off on the fourth swell.
+pub const STEP4_START: f64 = 12.0;
+/// The fifth swell: the beat. The scroller sets off so that its first
+/// code — "Welly well" starting the beat — reaches the middle just
+/// before it, and the beat lands on this bar.
+pub const BEAT_AT: f64 = 16.0;
+/// Pixels above the scroller's glyph top the DYCP rides.
+const DYCP_ABOVE: i64 = 24;
 
 /// The cold open laid out for one screen.
 pub struct Intro {
+    /// Lines 1–3.
     pub timeline: Timeline,
-    /// Seconds it lasts; the scroller starts after it.
+    /// Line 4, from `STEP4_START`.
+    pub dycp: Side,
+    /// Seconds before the scroller starts.
     pub secs: f64,
-    /// When steps 2 and 3 start — skip stops.
-    pub marks: [f64; 2],
+    /// Seconds until the last of it has gone (the DYCP may outlast `secs`).
+    pub shown: f64,
+    /// When steps 2, 3 and 4 start — skip stops.
+    pub marks: [f64; 3],
 }
 
 impl Intro {
@@ -53,7 +75,24 @@ impl Intro {
             .at(STEP2.0..STEP2.0 + FADE_SECS, AlphaIn::new(FADE_SECS))
             .at(STEP2.1 - FADE_SECS..STEP2.1, AlphaOut::new(FADE_SECS))
             .at(STEP3_START..step3_end, Slide { inner: Box::new(text(LINE3, glyphs::LETTER_HIGHLIGHT)), width, top: row as i64 });
-        Self { timeline, secs: step3_end + TAIL_SECS, marks: [STEP2.0, STEP3_START] }
+        let dycp = Side {
+            name: "intro",
+            text: LINE4,
+            y: scroll_y - DYCP_ABOVE,
+            font: sides::Font::C64,
+            tone: (sides::CLOUD, 0.0),
+            opacity: 1.0,
+            speed: 2.0,
+            z: sides::z::SCROLLER,
+            amp: 6.0,
+            spread: 0.5,
+            period: 1.1,
+        };
+        // The scroller's first code reaches the middle half a screen after
+        // it sets off (a pixel a frame); a hair before the beat's bar.
+        let secs = (BEAT_AT - 0.05 - width as f64 / 2.0 / FPS).max(step3_end + 0.2);
+        let shown = (STEP4_START + dycp.secs(width)).max(secs);
+        Self { timeline, dycp, secs, shown, marks: [STEP2.0, STEP3_START, STEP4_START] }
     }
 }
 
@@ -165,7 +204,7 @@ mod tests {
     #[test]
     fn step_three_scrolls_in_holds_and_scrolls_out() {
         let intro = Intro::new(W, H, SCROLL_Y);
-        assert_eq!(intro.marks, [STEP2.0, STEP3_START]);
+        assert_eq!(intro.marks, [STEP2.0, STEP3_START, STEP4_START]);
         let row = (SCROLL_Y as usize + 4) / 2;
         // Where the line's first letter is, if on screen.
         let at = |t: f64| -> Option<usize> {
@@ -179,11 +218,35 @@ mod tests {
         assert!(xs.windows(2).all(|w| w[1] <= w[0]), "always leftward: {xs:?}");
         assert!(xs[0] - xs[3] > xs[xs.len() - 4] - xs[xs.len() - 1], "eases out: {xs:?}");
         // Holds still, whole and centred, in the terminal's own font.
-        let held = STEP3_START + IN_SECS + 0.5;
+        let held = STEP3_START + IN_SECS + 0.3;
         let buf = frame_at(&intro, held);
         assert_eq!(line_at(&buf, LINE3), Some(((W - LINE3.len()) / 2, row)));
-        assert_eq!(at(held + 1.0), at(held));
-        // Then leaves to the left, and is gone before the scroller starts.
-        assert_eq!(text_of(&frame_at(&intro, intro.secs - 0.05)), "");
+        assert_eq!(at(held + 0.5), at(held));
+        // Then leaves to the left, gone before the DYCP sets off.
+        assert_eq!(text_of(&frame_at(&intro, STEP4_START)), "");
+    }
+
+    #[test]
+    fn step_four_is_a_dycp_crossing_above_the_scroller() {
+        let intro = Intro::new(W, H, SCROLL_Y);
+        assert_eq!(intro.dycp.text, LINE4);
+        assert!(intro.dycp.y + intro.dycp.amp as i64 + 8 < SCROLL_Y, "clear of the scroller's line");
+        // It crosses once, from the fourth swell, and the cold open lasts
+        // until it's gone.
+        assert!((intro.shown - (STEP4_START + intro.dycp.secs(W))).abs() < 1e-9);
+        assert!(intro.dycp.crossing(1.0, W) && !intro.dycp.crossing(intro.shown - STEP4_START + 0.1, W));
+    }
+
+    #[test]
+    fn every_line_comes_in_on_a_pad_swell_and_the_beat_on_the_fifth() {
+        for (start, swell) in [STEP1.0, STEP2.0, STEP3_START, STEP4_START].iter().zip([0.0, 4.0, 8.0, 12.0]) {
+            assert!((0.0..0.5).contains(&(start - swell)), "line at {start}, swell at {swell}");
+        }
+        // The scroller's first code reaches the middle just before the beat.
+        for w in [80, 112, 160, 260] {
+            let intro = Intro::new(w, H, SCROLL_Y);
+            let first_code = intro.secs + w as f64 / 2.0 / FPS;
+            assert!((BEAT_AT - 2.0..BEAT_AT).contains(&first_code), "w {w}: {first_code}");
+        }
     }
 }

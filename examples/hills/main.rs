@@ -234,10 +234,10 @@ impl Stage {
             .unwrap_or_else(|e| panic!("scroll text: {e}"));
         let cold_open = intro::Intro::new(screen_w, ROWS, SCROLLER_Y);
         let timeline = script::Timeline::new(&placed, screen_w).with_lead(cold_open.secs, &cold_open.marks);
-        let view = Arc::new(Mutex::new(script_view(&timeline, cold_open.secs, 0.0)));
+        let view = Arc::new(Mutex::new(script_view(&timeline, cold_open.shown, 0.0)));
         let scroller = Arc::new(scroller::Scroller::new(placed.glyphs.clone(), SCROLLER_Y));
         let ride = looping::ride(&placed.glyphs, screen_w);
-        let layers = build_layers(screen_w, view.clone(), steps.clone(), scroller.clone(), ride);
+        let layers = build_layers(screen_w, view.clone(), steps.clone(), scroller.clone(), ride, cold_open.dycp);
         let heading = build_heading(view.clone());
         Self {
             steps,
@@ -298,7 +298,7 @@ impl Stage {
         }
         let t = self.script_time(now);
         self.clock.store(t.to_bits(), Ordering::Relaxed);
-        script_view(&self.timeline, self.intro.secs, t)
+        script_view(&self.timeline, self.intro.shown, t)
     }
 }
 
@@ -415,6 +415,7 @@ fn build_layers(
     steps: Vec<Step>,
     scroller: Arc<scroller::Scroller>,
     ride: Option<(f64, f64)>,
+    dycp: sides::Side,
 ) -> Layers {
     let word = wordmark::Wordmark::placed(screen_w);
     // Baseline high enough that the scroller's wave plus extrusion stays on screen.
@@ -451,6 +452,16 @@ fn build_layers(
         Layer::paint(move |c| {
             let view = *scroll_view.lock().unwrap();
             scroller.paint_dived(c, view.scroll, view.dive.zoom)
+        }),
+    ));
+    // The cold open's last line, a DYCP, from its swell on.
+    let intro_view = side_view.clone();
+    layers.push((
+        dycp.z,
+        Layer::paint(move |c| {
+            if let Some(t) = intro_view.lock().unwrap().intro {
+                dycp.paint(c, t - intro::STEP4_START);
+            }
         }),
     ));
     // Side scrollers, each at its own depth and see-through as it says.
@@ -1009,15 +1020,60 @@ mod tests {
     }
 
     #[test]
-    fn welly_well_starts_the_beat_without_the_bass() {
+    fn pads_four_times_the_bass_with_the_dycp_then_the_beat_on_welly_well() {
+        for w in [100, 160, 260] {
+            let stage = Stage::new(w);
+            let session = music::Session::new(&stage.timeline);
+            // The pad from the start, nothing else for three swells.
+            assert!(session.plays(0.0, "pad") && !session.plays(intro::STEP4_START - 0.1, "bass"));
+            // The bass with the DYCP, on the fourth swell.
+            assert!(session.plays(intro::STEP4_START, "bass"), "w {w}");
+            // The beat exactly on the fifth: "Welly well" in the middle.
+            assert!(!session.plays(intro::BEAT_AT - 0.01, "drums") && session.plays(intro::BEAT_AT, "drums"), "w {w}");
+        }
+    }
+
+    /// Pictures of the cold open's last lines and the hand-over to the
+    /// scroller, one pixel per half-block: `cargo test --release --example
+    /// hills dump_intro -- --ignored`, then open `target/hills-intro/*.ppm`.
+    #[test]
+    #[ignore]
+    fn dump_intro() {
+        let w = 160;
+        let stage = Stage::new(w);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/hills-intro");
+        std::fs::create_dir_all(&dir).unwrap();
+        for t in [9.8, 13.0, 14.5, 16.5, 18.0] {
+            stage.seek_to(t);
+            let mut b = FrameBuffer::new(w, ROWS);
+            stage.render(&mut b, 0);
+            let mut out = format!("P6 {w} {} 255\n", ROWS * 2).into_bytes();
+            for py in 0..ROWS * 2 {
+                for x in 0..w {
+                    let c = b.get(x, py / 2);
+                    let bg = c.bg.unwrap_or(Color::new(0, 0, 0));
+                    let px = match (c.ch, py % 2 == 0) {
+                        ('▀', true) | ('▄', false) | ('█', _) => c.color,
+                        (' ', _) | ('▀', false) | ('▄', true) => bg,
+                        _ => c.color,
+                    };
+                    out.extend([px.r, px.g, px.b]);
+                }
+            }
+            std::fs::write(dir.join(format!("{t:04.1}.ppm")), out).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_dycp_crosses_with_the_scene() {
         let stage = Stage::new(160);
-        let session = music::Session::new(&stage.timeline);
-        let welly = stage.timeline.cues.iter().find(|c| matches!(c.code, script::Code::Play(_))).unwrap().t;
-        let logo = first_cue(&stage, script::Code::Logo);
-        // A bar after "Welly well" reaches the middle: the beat, no bass.
-        assert!(session.plays(welly + 2.1, "drums") && !session.plays(welly + 2.1, "bass"));
-        // The bass comes with the logo.
-        assert!(session.plays(logo + 2.1, "bass"));
+        stage.seek_to(intro::STEP4_START + 2.0);
+        let mut buf = FrameBuffer::new(160, ROWS);
+        stage.render(&mut buf, 0);
+        // Its letters in pixels above the scroller's line.
+        let row = ((stage.intro.dycp.y + 4) / 2) as usize;
+        let ink = (row.saturating_sub(4)..row + 4).flat_map(|y| (0..160).map(move |x| (x, y))).filter(|&(x, y)| matches!(buf.get(x, y).ch, '▀' | '▄')).count();
+        assert!(ink > 50, "only {ink} cells of DYCP");
     }
 
     #[test]
@@ -1238,7 +1294,9 @@ mod tests {
             // No scroll text on screen yet.
             assert!(stage.glyphs.iter().all(|g| 112.0 - v.scroll + g.x >= 112.0), "t={t}");
         }
-        stage.seek_to(stage.intro.secs + 0.1);
+        // The DYCP may still be crossing as the text starts; once it's
+        // gone, so is the cold open.
+        stage.seek_to(stage.intro.shown + 0.1);
         assert_eq!(stage.view_at(0).intro, None);
     }
 
@@ -1313,11 +1371,12 @@ mod tests {
             *stage.seek.lock().unwrap() = Some(Seek::Next);
             stage.view_at(frame)
         };
-        // The cold open's steps 2 and 3, then the scroller starting.
+        // The cold open's steps 2, 3 and 4, then the scroller starting.
         assert_eq!(next(0).intro, Some(stage.intro.marks[0]));
         assert_eq!(next(0).intro, Some(stage.intro.marks[1]));
+        assert_eq!(next(0).intro, Some(stage.intro.marks[2]));
         let v = next(0);
-        assert_eq!((v.intro, v.hills), (None, None));
+        assert_eq!(v.hills, None);
         // Then the hills come in.
         let v = next(0);
         assert_eq!((v.hills, v.logo), (Some(0.0), LogoPhase::Hidden));

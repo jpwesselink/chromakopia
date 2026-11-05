@@ -421,7 +421,7 @@ fn flat(c: &mut Canvas, rows: &[u8], (x, y): (i64, i64), scale: i64) {
 
 /// The scroll text, cracktro style: brag about what's on screen, never
 /// explain how.
-pub const PITCH: &str = "{hills}{play drums little}{style flat}Welly well, what do we have here?{style candy}{gap}{logo}{play drums full}{play bass}{play bells}{pause 3}{gap}\
+pub const PITCH: &str = "{hills}{play drums little}{style flat}Welly well, what do we have here?{style candy}{gap}{logo}{play drums full}{play bells}{pause 3}{gap}\
 ...and yes, before you ask: this is a TERMINAL. No browser, no video, no tricks you can see, just the good old terminal you have known and loved...   which you will now love a little bit more.   {font tiny}(psst... the small print: no pixels were harmed in the making of this demo - because there are no pixels, just text and ANSI escape codes!){font c64}   \
 {side hide}{play mallets}Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 {side far}Clouds that drift and throw shadows on the land. Never shade. They're above that.   \
