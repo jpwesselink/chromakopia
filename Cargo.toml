@@ -50,3 +50,9 @@ path = "examples/license.rs"
 # Examples only: the hills demo plays its own music.
 cpal = "0.15"
 resid-rs = "1.1"
+
+# The demos, as small as they go: `cargo build --profile demo --example hills`.
+[profile.demo]
+inherits = "release"
+opt-level = "z"
+panic = "abort"

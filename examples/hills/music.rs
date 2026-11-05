@@ -215,7 +215,14 @@ impl Session {
     /// Whether `track` has a loop going `secs` into the script (tests).
     #[cfg(test)]
     pub fn plays(&self, secs: f64, track: &str) -> bool {
-        self.at((secs * TICKS as f64) as u64)[track_named(track).unwrap() as usize].is_some()
+        self.loop_at(secs, track).is_some()
+    }
+
+    /// The loop `track` plays `secs` into the script, as an index into
+    /// `CLIPS` (tests).
+    #[cfg(test)]
+    pub fn loop_at(&self, secs: f64, track: &str) -> Option<usize> {
+        self.at((secs * TICKS as f64) as u64)[track_named(track).unwrap() as usize].map(|p| p.0)
     }
 
     /// Just these loops, from the start (tests).

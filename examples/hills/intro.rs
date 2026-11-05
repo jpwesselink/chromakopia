@@ -49,13 +49,15 @@ pub const BEAT_AT: f64 = 16.0;
 const WHIP_IN: f64 = 1.0;
 const WHIP_HOLD: f64 = 1.8;
 const WHIP_OUT: f64 = 0.6;
-/// Rows the rope's wave reaches up and down at its biggest, how fast it
-/// dies away coming in (seconds), radians from one letter to the next,
-/// and how fast it runs along the rope (radians a second).
-const WHIP_AMP: f64 = 6.0;
-const WHIP_DAMP: f64 = 0.3;
-const WHIP_K: f64 = 0.35;
-const WHIP_RUN: f64 = 14.0;
+/// Rows the rope's wave reaches up and down at its biggest (at the tip),
+/// how fast it dies away coming in (seconds), radians from one letter to
+/// the next — a long wave, so neighbours are never more than a row apart
+/// and it reads as one rope, not scattered letters — and how fast it runs
+/// from the handle to the tip (radians a second).
+const WHIP_AMP: f64 = 3.0;
+const WHIP_DAMP: f64 = 0.4;
+const WHIP_K: f64 = 0.18;
+const WHIP_RUN: f64 = 9.0;
 
 /// The cold open laid out for one screen.
 pub struct Intro {
@@ -117,15 +119,17 @@ impl Whip {
         }
     }
 
-    /// Rows letter `i` is off the line, `t` seconds in: the throw's wave
-    /// running down the rope and dying away, nothing while it lies still,
-    /// then the crack — a wave growing as it runs down from the handle
-    /// (the first letter) while the rope is pulled away.
-    fn lift(i: usize, t: f64) -> f64 {
+    /// Rows letter `i` of `len` is off the line, `t` seconds in: the
+    /// throw's wave running from the handle (the first letter) down to
+    /// the tip and dying away, nothing while it lies still, then the crack
+    /// — a wave growing as it runs down from the handle while the rope is
+    /// pulled away. The tip always swings furthest, as a whip's does.
+    fn lift(i: usize, len: usize, t: f64) -> f64 {
         let i = i as f64;
+        let tip = 0.4 + 0.6 * i / len.max(1) as f64;
         let out = t - WHIP_IN - WHIP_HOLD;
         if out < 0.0 {
-            WHIP_AMP * (-t / WHIP_DAMP).exp() * (WHIP_K * i - WHIP_RUN * t).sin()
+            WHIP_AMP * tip * (-t / WHIP_DAMP).exp() * (WHIP_K * i - WHIP_RUN * t).sin()
         } else {
             let p = (out / WHIP_OUT).min(1.0);
             // The crack's front: letters past it haven't felt it yet.
@@ -133,7 +137,18 @@ impl Whip {
             if i > front {
                 return 0.0;
             }
-            WHIP_AMP * p.sqrt() * (WHIP_K * (front - i)).sin()
+            WHIP_AMP * tip * p.sqrt() * (WHIP_K * (front - i)).sin()
+        }
+    }
+
+    /// Letter `i`'s colour: a calm run along the line, pink to cream to
+    /// lavender — fixed, not flowing.
+    fn colour(i: usize, len: usize) -> Color {
+        let k = 2.0 * i as f64 / (len.max(2) - 1) as f64;
+        if k < 1.0 {
+            Color::lerp_rgb(glyphs::LETTER_UPPER, glyphs::LETTER_HIGHLIGHT, k)
+        } else {
+            Color::lerp_rgb(glyphs::LETTER_HIGHLIGHT, glyphs::LETTER_LOWER, k - 1.0)
         }
     }
 }
@@ -142,18 +157,14 @@ impl Effect for Whip {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
         let t = frame as f64 / FPS;
         let x0 = self.x(t).round() as i64;
-        let palette = [glyphs::LETTER_UPPER, glyphs::LETTER_HIGHLIGHT, glyphs::LETTER_LOWER];
+        let len = self.line.chars().count();
         for (i, ch) in self.line.chars().enumerate() {
             if ch == ' ' {
                 continue;
             }
-            // The colour flows along the line.
-            let k = (i as f64 * 0.25 + t * 2.0).rem_euclid(palette.len() as f64);
-            let (a, b) = (palette[k as usize], palette[(k as usize + 1) % palette.len()]);
-            let color = Color::lerp_rgb(a, b, k.fract());
-            let (x, y) = (x0 + i as i64, self.row as i64 - Self::lift(i, t).round() as i64);
+            let (x, y) = (x0 + i as i64, self.row as i64 - Self::lift(i, len, t).round() as i64);
             if x >= 0 && y >= 0 && (x as usize) < buf.width && (y as usize) < buf.height {
-                buf.set(x as usize, y as usize, Cell::new(ch, color));
+                buf.set(x as usize, y as usize, Cell::new(ch, Self::colour(i, len)));
             }
         }
     }
@@ -304,7 +315,16 @@ mod tests {
         let intro = Intro::new(W, H, SCROLL_Y);
         let row = (SCROLL_Y as usize + 4) / 2;
         // Coming in: the rope's wave spreads the letters over rows.
-        assert!(rows_at(&intro, STEP4_START + 0.15).len() >= 4, "{:?}", rows_at(&intro, STEP4_START + 0.15));
+        assert!(rows_at(&intro, STEP4_START + 0.15).len() >= 3, "{:?}", rows_at(&intro, STEP4_START + 0.15));
+        // Always one rope: neighbouring letters at most a row apart.
+        let len = LINE4.len();
+        for f in 0..((WHIP_IN + WHIP_HOLD + WHIP_OUT) * FPS) as usize {
+            let t = f as f64 / FPS;
+            for i in 1..len {
+                let (a, b) = (Whip::lift(i - 1, len, t).round(), Whip::lift(i, len, t).round());
+                assert!((a - b).abs() <= 1.0, "letters {} and {i} {a} and {b} rows off at {t:.2}s", i - 1);
+            }
+        }
         // Then it lies flat and still, whole and centred, to be read —
         // for well over a second.
         for t in [STEP4_START + WHIP_IN + 0.1, STEP4_START + WHIP_IN + WHIP_HOLD - 0.1] {
@@ -314,7 +334,7 @@ mod tests {
         assert!(WHIP_HOLD >= 1.5);
         // The crack: a wave again as it goes, and then gone.
         let cracked = STEP4_START + WHIP_IN + WHIP_HOLD + 0.25;
-        assert!(rows_at(&intro, cracked).len() >= 3, "{:?}", rows_at(&intro, cracked));
+        assert!(rows_at(&intro, cracked).len() >= 2, "{:?}", rows_at(&intro, cracked));
         assert_eq!(text_of(&frame_at(&intro, STEP4_START + WHIP_IN + WHIP_HOLD + WHIP_OUT + 0.05)), "");
         // In colour: not all one.
         let buf = frame_at(&intro, STEP4_START + WHIP_IN + 0.5);

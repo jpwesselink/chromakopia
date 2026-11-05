@@ -7,11 +7,12 @@ use chromakopia::prelude::*;
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
+use super::dive;
 use super::glyphs::{
-    c64, has_c64, has_mario, mario, shade, stamp, stamp_tinted, LETTER_HIGHLIGHT, LETTER_LOWER, LETTER_OUTLINE, LETTER_UPPER,
+    c64, has_c64, has_mario, mario, shade, stamp, stamp_tinted, LETTER_HIGHLIGHT, LETTER_LOWER,
+    LETTER_OUTLINE, LETTER_UPPER,
 };
 use super::looping::{self, angle_index, track, Shape, ANGLES};
-use super::dive;
 use super::script::{Glyph, Wave};
 use super::tiny;
 
@@ -86,9 +87,17 @@ pub fn zoom_advance(ch: char) -> i64 {
 /// so the run fills exactly its room in the text.
 fn zoom_run(run: &[(f64, char)], t: f64) -> Vec<(i64, i64, i64)> {
     let span = (ZOOM_MAX - ZOOM_MIN) as f64;
-    let sizes: Vec<f64> =
-        run.iter().map(|&(x, _)| ZOOM_MIN as f64 + span * (0.5 + 0.5 * (TAU * t / ZOOM_PERIOD + x * 0.05).sin())).collect();
-    let rooms: Vec<f64> = run.iter().zip(&sizes).map(|(&(_, ch), s)| s * ink(ch).1 as f64 / 8.0 + ZOOM_GAP as f64).collect();
+    let sizes: Vec<f64> = run
+        .iter()
+        .map(|&(x, _)| {
+            ZOOM_MIN as f64 + span * (0.5 + 0.5 * (TAU * t / ZOOM_PERIOD + x * 0.05).sin())
+        })
+        .collect();
+    let rooms: Vec<f64> = run
+        .iter()
+        .zip(&sizes)
+        .map(|(&(_, ch), s)| s * ink(ch).1 as f64 / 8.0 + ZOOM_GAP as f64)
+        .collect();
     let total: i64 = run.iter().map(|&(_, ch)| zoom_advance(ch)).sum();
     let scale = total as f64 / rooms.iter().sum::<f64>();
     let mut sum = 0.0;
@@ -98,7 +107,11 @@ fn zoom_run(run: &[(f64, char)], t: f64) -> Vec<(i64, i64, i64)> {
             sum.round() as i64
         }))
         .collect();
-    edges.windows(2).zip(&sizes).map(|(e, s)| (e[0], e[1] - e[0], (s * scale).round() as i64)).collect()
+    edges
+        .windows(2)
+        .zip(&sizes)
+        .map(|(e, s)| (e[0], e[1] - e[0], (s * scale).round() as i64))
+        .collect()
 }
 
 /// How far toward the outline a letter at the back (`ZOOM_MIN`) darkens.
@@ -233,17 +246,33 @@ impl Scroller {
     pub fn new(glyphs: Vec<Glyph>, y0: i64) -> Self {
         let mut turns = HashMap::new();
         for g in glyphs.iter().filter(|g| g.path.is_some()) {
-            let Some((rows, scale)) = bitmap(g.font, g.ch) else { continue };
-            turns.entry((g.ch, g.font)).or_insert_with(|| (0..ANGLES).map(|i| looping::turned(&rows, scale, i)).collect());
+            let Some((rows, scale)) = bitmap(g.font, g.ch) else {
+                continue;
+            };
+            turns.entry((g.ch, g.font)).or_insert_with(|| {
+                (0..ANGLES)
+                    .map(|i| looping::turned(&rows, scale, i))
+                    .collect()
+            });
         }
         let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
         for (i, g) in glyphs.iter().enumerate().filter(|(_, g)| zooms(g)) {
             match runs.last_mut() {
-                Some(r) if r.end == i && glyphs[i - 1].x + zoom_advance(glyphs[i - 1].ch) as f64 == g.x => r.end = i + 1,
+                Some(r)
+                    if r.end == i
+                        && glyphs[i - 1].x + zoom_advance(glyphs[i - 1].ch) as f64 == g.x =>
+                {
+                    r.end = i + 1
+                }
                 _ => runs.push(i..i + 1),
             }
         }
-        Self { glyphs, y0, turns, runs }
+        Self {
+            glyphs,
+            y0,
+            turns,
+            runs,
+        }
     }
 
     /// Draw path-riding letter `g` wherever it is on its track, `scrolled`
@@ -257,7 +286,9 @@ impl Scroller {
         (camera, tilt): (Option<&dive::Camera>, f64),
         scratch: &mut Vec<(i64, i64, Color)>,
     ) -> bool {
-        let (Some(shape), Some(turns)) = (g.path, self.turns.get(&(g.ch, g.font))) else { return false };
+        let (Some(shape), Some(turns)) = (g.path, self.turns.get(&(g.ch, g.font))) else {
+            return false;
+        };
         let adv = advance(g.font, g.ch);
         let d = (pen(scrolled) - g.x as i64) as f64 - adv as f64 / 2.0;
         let wall = c.frame as f64 / FPS;
@@ -265,25 +296,42 @@ impl Scroller {
             // On the liquid's surface, as far across from the camera's
             // point as it would be along the straight, turned with it.
             let Some(cam) = camera else { return true };
-            cam.rider(c.width as f64 - d - c.width as f64 / 2.0, tilt, wall, adv as f64)
+            cam.rider(
+                c.width as f64 - d - c.width as f64 / 2.0,
+                tilt,
+                wall,
+                adv as f64,
+            )
         } else {
             let mut spot = track(shape, d, c.width, (self.y0 + BASE) as f64);
             // On the straight it rides the wave like any letter (same phase,
             // by its left edge), calming down for the loop.
             let left = spot.x - adv as f64 / 2.0;
-            spot.y += (lift(g, left, wall, c.width) * looping::wave_weight(shape, d, c.width)).round();
+            spot.y +=
+                (lift(g, left, wall, c.width) * looping::wave_weight(shape, d, c.width)).round();
             spot
         };
         let margin = adv as f64 + 4.0;
-        if spot.x < -margin || spot.x > c.width as f64 + margin || spot.y < -margin || spot.y > c.height as f64 + margin {
+        if spot.x < -margin
+            || spot.x > c.width as f64 + margin
+            || spot.y < -margin
+            || spot.y > c.height as f64 + margin
+        {
             return true;
         }
         // The letter's middle sits `rise` above the track, along its own up.
         let rise = (baseline(g.font) - adv / 2) as f64;
         let (sin, cos) = spot.angle.sin_cos();
-        let (cx, cy) = ((spot.x + rise * sin).round() as i64, (spot.y - rise * cos).round() as i64);
+        let (cx, cy) = (
+            (spot.x + rise * sin).round() as i64,
+            (spot.y - rise * cos).round() as i64,
+        );
         scratch.clear();
-        scratch.extend(turns[angle_index(spot.angle)].iter().map(|&(x, y, color)| (cx + x, cy + y, color)));
+        scratch.extend(
+            turns[angle_index(spot.angle)]
+                .iter()
+                .map(|&(x, y, color)| (cx + x, cy + y, color)),
+        );
         match g.style {
             Style::Candy => shade(c, scratch, if g.font == Font::C64 { 1 } else { 2 }),
             Style::Flat => {
@@ -297,12 +345,28 @@ impl Scroller {
 
     /// Screen x and wave-shifted bottom line of `g`, `scrolled` pixels in,
     /// or None when it's off screen.
-    fn spot(&self, g: &Glyph, (width, height): (usize, usize), scrolled: f64, t: f64, dive: f64) -> Option<(i64, i64)> {
+    fn spot(
+        &self,
+        g: &Glyph,
+        (width, height): (usize, usize),
+        scrolled: f64,
+        t: f64,
+        dive: f64,
+    ) -> Option<(i64, i64)> {
         let x = width as i64 - pen(scrolled) + g.x as i64;
         if x < -(advance(g.font, g.ch) + 4) || x > width as i64 {
             return None;
         }
-        Some((x, self.base(g, x as f64 + advance(g.font, g.ch) as f64 / 2.0, (width, height), t, dive)))
+        Some((
+            x,
+            self.base(
+                g,
+                x as f64 + advance(g.font, g.ch) as f64 / 2.0,
+                (width, height),
+                t,
+                dive,
+            ),
+        ))
     }
 
     /// `g`'s bottom line with its middle at screen `x`: on the wave — or,
@@ -336,9 +400,25 @@ impl Scroller {
             let flat = g.style == Style::Flat;
             // The face's own colours (pink over lavender), darker the deeper it lies.
             let face = |_: f64, y: f64| {
-                Some(deep(if flat { LETTER_HIGHLIGHT } else if y < 0.0 { LETTER_UPPER } else { LETTER_LOWER }, size))
+                Some(deep(
+                    if flat {
+                        LETTER_HIGHLIGHT
+                    } else if y < 0.0 {
+                        LETTER_UPPER
+                    } else {
+                        LETTER_LOWER
+                    },
+                    size,
+                ))
             };
-            stamp_tinted(c, &c64(g.ch), (x, base - 4 - size / 2), size, if size < 14 { 1 } else { 2 }, face);
+            stamp_tinted(
+                c,
+                &c64(g.ch),
+                (x, base - 4 - size / 2),
+                size,
+                if size < 14 { 1 } else { 2 },
+                face,
+            );
         }
     }
 
@@ -359,11 +439,17 @@ impl Scroller {
         // and whatever rides it — is turned.
         let camera = (dive > 0.0).then(|| dive::Camera::new(c.width, c.height, dive, t));
         let tilt = looping::tilt(scrolled, looping::ride(&self.glyphs, c.width));
-        for g in self.glyphs.iter().filter(|g| g.font != Font::Term && !zooms(g)) {
+        for g in self
+            .glyphs
+            .iter()
+            .filter(|g| g.font != Font::Term && !zooms(g))
+        {
             if self.paint_on_path(c, g, scrolled, (camera.as_ref(), tilt), &mut face) {
                 continue;
             }
-            let Some((x, base)) = self.spot(g, (c.width, c.height), scrolled, t, dive) else { continue };
+            let Some((x, base)) = self.spot(g, (c.width, c.height), scrolled, t, dive) else {
+                continue;
+            };
             if g.ch == ' ' {
                 continue;
             }
@@ -387,8 +473,15 @@ impl Scroller {
     /// with `{wave off}`). Run after the pixel layers have rendered.
     pub fn paint_cells(&self, buf: &mut FrameBuffer, scrolled: f64, frame: usize) {
         let t = frame as f64 / FPS;
-        for g in self.glyphs.iter().filter(|g| g.font == Font::Term && g.ch != ' ') {
-            let Some((x, base)) = self.spot(g, (buf.width, buf.height * 2), scrolled, t, 0.0) else { continue };
+        for g in self
+            .glyphs
+            .iter()
+            .filter(|g| g.font == Font::Term && g.ch != ' ')
+        {
+            let Some((x, base)) = self.spot(g, (buf.width, buf.height * 2), scrolled, t, 0.0)
+            else {
+                continue;
+            };
             let row = (base - 4).div_euclid(2);
             if x < 0 || x as usize >= buf.width || row < 0 || row as usize >= buf.height {
                 continue;
@@ -398,7 +491,11 @@ impl Scroller {
                 Style::Flat => LETTER_HIGHLIGHT,
             };
             let (x, row) = (x as usize, row as usize);
-            buf.set(x, row, BlendMode::Normal.composite(buf.get(x, row), Cell::new(g.ch, color), 1.0));
+            buf.set(
+                x,
+                row,
+                BlendMode::Normal.composite(buf.get(x, row), Cell::new(g.ch, color), 1.0),
+            );
         }
     }
 }
@@ -411,7 +508,11 @@ fn flat(c: &mut Canvas, rows: &[u8], (x, y): (i64, i64), scale: i64) {
             if row & (0x80 >> gx) != 0 {
                 for dy in 0..scale {
                     for dx in 0..scale {
-                        c.set(x + gx * scale + dx, y + gy as i64 * scale + dy, LETTER_HIGHLIGHT);
+                        c.set(
+                            x + gx * scale + dx,
+                            y + gy as i64 * scale + dy,
+                            LETTER_HIGHLIGHT,
+                        );
                     }
                 }
             }
@@ -421,9 +522,9 @@ fn flat(c: &mut Canvas, rows: &[u8], (x, y): (i64, i64), scale: i64) {
 
 /// The scroll text, cracktro style: brag about what's on screen, never
 /// explain how.
-pub const PITCH: &str = "{hills}{play drums little}{style flat}Welly well, what do we have here?{play bass}{style candy}{gap}{logo}{play drums full}{play bells}{pause 3}{gap}\
+pub const PITCH: &str = "{hills}{play drums little}{style flat}Welly well, what do we have here?{play bass}{style candy}{gap}{logo}{play drums full}{play mallets}{pause 3}{gap}\
 ...and yes, before you ask: this is a TERMINAL. No browser, no video, no tricks you can see, just the good old terminal you have known and loved...   which you will now love a little bit more.   {font tiny}(psst... the small print: no pixels were harmed in the making of this demo - because there are no pixels, just text and ANSI escape codes!){font c64}   \
-{side hide}{play mallets}Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
+{side hide}{play 303 2}Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
 {side far}Clouds that drift and throw shadows on the land. Never shade. They're above that.   \
 A logo that will not sit still, bouncing every letter on its own little wave...   in fact, it won't{logo away} even stay.    \
 {play 303}{path loop}And all of it at a silky 60 frames per second.{path off}{dive in}{play drums little}{play marimba}{path spin}Round and round we go - and not a single drop spilled!{path off}Down in the C where the colours spill: sky blue, mint and a coral hill!{dive out}{play drums full}{stop marimba}{font big}BENDING THE RULES{font c64}   {logo}{zoom on}Zoom in, zoom out...{zoom off}   \
@@ -438,8 +539,8 @@ Keys: space or arrows to skip, q to quit.   {bye}{stop all}Text wraps... now!   
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::{ROWS, SCROLLER_Y};
+    use super::*;
     use std::f64::consts::PI;
 
     #[test]
@@ -452,12 +553,24 @@ mod tests {
     }
 
     fn one(font: Font, style: Style, ch: char) -> Scroller {
-        Scroller::new(vec![Glyph { ch, x: 0.0, font, style, wave: Wave::On, path: None, zoom: false }], 40)
+        Scroller::new(
+            vec![Glyph {
+                ch,
+                x: 0.0,
+                font,
+                style,
+                wave: Wave::On,
+                path: None,
+                zoom: false,
+            }],
+            40,
+        )
     }
 
     /// Ink rows (pixel) and colours of `s` painted with its glyph at x = 10.
     fn ink(s: Scroller) -> (Vec<i64>, Vec<Color>) {
-        let layers = Layers::new(40).layer(Layer::paint(move |c| s.paint(c, (c.width - 10) as f64)));
+        let layers =
+            Layers::new(40).layer(Layer::paint(move |c| s.paint(c, (c.width - 10) as f64)));
         let mut buf = FrameBuffer::new(60, 40);
         layers.render(&mut buf, 0);
         let (mut rows, mut colors) = (Vec::new(), Vec::new());
@@ -478,7 +591,10 @@ mod tests {
         let (c64_rows, _) = ink(one(Font::C64, Style::Flat, 'M'));
         let (big_rows, _) = ink(one(Font::Big, Style::Flat, 'M'));
         let span = |r: &[i64]| r.iter().max().unwrap() - r.iter().min().unwrap();
-        assert!(span(&big_rows) > span(&c64_rows) + 2, "{big_rows:?} vs {c64_rows:?}");
+        assert!(
+            span(&big_rows) > span(&c64_rows) + 2,
+            "{big_rows:?} vs {c64_rows:?}"
+        );
         assert_eq!(big_rows.iter().max(), c64_rows.iter().max());
     }
 
@@ -487,7 +603,9 @@ mod tests {
         let (_, flat) = ink(one(Font::C64, Style::Flat, 'A'));
         assert!(flat.iter().all(|&c| c == LETTER_HIGHLIGHT));
         let (_, candy) = ink(one(Font::C64, Style::Candy, 'A'));
-        assert!(candy.iter().any(|&c| c == LETTER_UPPER || c == LETTER_LOWER));
+        assert!(candy
+            .iter()
+            .any(|&c| c == LETTER_UPPER || c == LETTER_LOWER));
     }
 
     #[test]
@@ -495,52 +613,107 @@ mod tests {
         let tops = |wave: bool| -> Vec<i64> {
             (0..48)
                 .map(|frame| {
-                    let s = Scroller::new(vec![Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave: if wave { Wave::On } else { Wave::Off }, path: None, zoom: false }], 40);
-                    let layers = Layers::new(40).layer(Layer::paint(move |c| s.paint(c, (c.width - 10) as f64)));
+                    let s = Scroller::new(
+                        vec![Glyph {
+                            ch: 'M',
+                            x: 0.0,
+                            font: Font::Big,
+                            style: Style::Flat,
+                            wave: if wave { Wave::On } else { Wave::Off },
+                            path: None,
+                            zoom: false,
+                        }],
+                        40,
+                    );
+                    let layers = Layers::new(40)
+                        .layer(Layer::paint(move |c| s.paint(c, (c.width - 10) as f64)));
                     let mut buf = FrameBuffer::new(60, 40);
                     layers.render(&mut buf, frame);
-                    (0..40).find(|&y| (0..60).any(|x| buf.get(x, y).ch != ' ')).unwrap() as i64
+                    (0..40)
+                        .find(|&y| (0..60).any(|x| buf.get(x, y).ch != ' '))
+                        .unwrap() as i64
                 })
                 .collect()
         };
         let straight = tops(false);
         assert!(straight.iter().all(|&t| t == straight[0]), "{straight:?}");
         let waving = tops(true);
-        assert!(waving.iter().any(|&t| t != waving[0]), "flat letters should still wave");
+        assert!(
+            waving.iter().any(|&t| t != waving[0]),
+            "flat letters should still wave"
+        );
     }
 
     #[test]
     fn letters_ride_the_water_once_dived_in() {
         let wall = 0.4;
-        let g = Glyph { ch: 'M', x: 0.0, font: Font::C64, style: Style::Candy, wave: Wave::Water, path: None, zoom: false };
+        let g = Glyph {
+            ch: 'M',
+            x: 0.0,
+            font: Font::C64,
+            style: Style::Candy,
+            wave: Wave::Water,
+            path: None,
+            zoom: false,
+        };
         let bottom = |dive: f64| {
             let s = Scroller::new(vec![g], SCROLLER_Y);
-            let layers = Layers::new(ROWS).layer(Layer::paint(move |c| s.paint_dived(c, (c.width - 50) as f64, dive)));
+            let layers = Layers::new(ROWS).layer(Layer::paint(move |c| {
+                s.paint_dived(c, (c.width - 50) as f64, dive)
+            }));
             let mut buf = FrameBuffer::new(112, ROWS);
             layers.render(&mut buf, (wall * FPS) as usize);
             // Lowest pixel row with ink (outline/extrusion included).
-            (0..ROWS * 2).rev().find(|&y| (50..60).any(|x| {
-                let cell = buf.get(x, y / 2);
-                if y % 2 == 0 { cell.ch != ' ' } else { cell.bg.is_some() || cell.ch == '▄' }
-            })).unwrap() as f64
+            (0..ROWS * 2)
+                .rev()
+                .find(|&y| {
+                    (50..60).any(|x| {
+                        let cell = buf.get(x, y / 2);
+                        if y % 2 == 0 {
+                            cell.ch != ' '
+                        } else {
+                            cell.bg.is_some() || cell.ch == '▄'
+                        }
+                    })
+                })
+                .unwrap() as f64
         };
         // Dived in: sitting on the surface under it (outline and extrusion
         // a pixel or two into the water)...
         let cam = dive::Camera::new(112, ROWS * 2, 1.0, wall);
         let surface = cam.surface_y(54.0, wall);
-        assert!((bottom(1.0) - (surface + 1.0)).abs() <= 1.5, "{} vs surface {surface}", bottom(1.0));
+        assert!(
+            (bottom(1.0) - (surface + 1.0)).abs() <= 1.5,
+            "{} vs surface {surface}",
+            bottom(1.0)
+        );
         // ...not dived: on the scroller's line.
-        assert!((bottom(0.0) - (SCROLLER_Y + BASE + 1) as f64).abs() <= 1.0, "{}", bottom(0.0));
+        assert!(
+            (bottom(0.0) - (SCROLLER_Y + BASE + 1) as f64).abs() <= 1.0,
+            "{}",
+            bottom(0.0)
+        );
     }
 
     #[test]
     fn long_waves_ride_without_the_ripple() {
-        let g = |wave| Glyph { ch: 'A', x: 0.0, font: Font::C64, style: Style::Candy, wave, path: None, zoom: false };
+        let g = |wave| Glyph {
+            ch: 'A',
+            x: 0.0,
+            font: Font::C64,
+            style: Style::Candy,
+            wave,
+            path: None,
+            zoom: false,
+        };
         for (x, t) in [(10.0, 0.0), (55.0, 0.3), (90.0, 1.7)] {
             // Swelled in: just the long wave.
             assert_eq!(lift(&g(Wave::Long(1.0)), x, t, 112), long_lift(x, t, 112));
             // Not yet: just the ripple, so it flows on from the plain wave.
-            assert_eq!(lift(&g(Wave::Long(0.0)), x, t, 112), lift(&g(Wave::On), x, t, 112));
+            assert_eq!(
+                lift(&g(Wave::Long(0.0)), x, t, 112),
+                lift(&g(Wave::On), x, t, 112)
+            );
         }
     }
 
@@ -552,7 +725,10 @@ mod tests {
         for t in [0.0, 1.3, 2.9, 5.1] {
             let ys: Vec<f64> = (0..=w).map(|x| long_lift(x as f64, t, w)).collect();
             let slopes: Vec<f64> = ys.windows(2).map(|p| p[1] - p[0]).collect();
-            assert!(slopes.windows(2).all(|p| (p[1] - p[0]).abs() < 0.05), "kinked at t {t}");
+            assert!(
+                slopes.windows(2).all(|p| (p[1] - p[0]).abs() < 0.05),
+                "kinked at t {t}"
+            );
             assert!(slopes.iter().all(|s| s.abs() < 0.9), "too steep at t {t}");
         }
     }
@@ -563,7 +739,10 @@ mod tests {
         let w = 112;
         let (dt, dx) = (0.5, 2.0 * w as f64 * 0.5 / LONG_PERIOD);
         for x in [0.0, 30.0, 70.0] {
-            assert!((long_lift(x + dx, 1.0 + dt, w) - long_lift(x, 1.0, w)).abs() < 1e-9, "x {x}");
+            assert!(
+                (long_lift(x + dx, 1.0 + dt, w) - long_lift(x, 1.0, w)).abs() < 1e-9,
+                "x {x}"
+            );
         }
     }
 
@@ -573,8 +752,14 @@ mod tests {
         // Lift at the right edge less at the left: negative is the right end higher.
         let slope = |t: f64| long_lift(w as f64, t, w) - long_lift(0.0, t, w);
         let ts: Vec<f64> = (0..100).map(|k| k as f64 * 0.1).collect();
-        assert!(ts.iter().any(|&t| slope(t) < -30.0), "never top right to bottom left");
-        assert!(ts.iter().any(|&t| slope(t) > 30.0), "never rolls the other way");
+        assert!(
+            ts.iter().any(|&t| slope(t) < -30.0),
+            "never top right to bottom left"
+        );
+        assert!(
+            ts.iter().any(|&t| slope(t) > 30.0),
+            "never rolls the other way"
+        );
         for &t in &ts {
             for x in 0..w {
                 let l = long_lift(x as f64, t, w);
@@ -586,12 +771,25 @@ mod tests {
     #[test]
     fn term_letters_wave_in_whole_rows_unless_wave_is_off() {
         let rows = |wave: bool| -> Vec<usize> {
-            let s = Scroller::new(vec![Glyph { ch: 'Q', x: 0.0, font: Font::Term, style: Style::Candy, wave: if wave { Wave::On } else { Wave::Off }, path: None, zoom: false }], 40);
+            let s = Scroller::new(
+                vec![Glyph {
+                    ch: 'Q',
+                    x: 0.0,
+                    font: Font::Term,
+                    style: Style::Candy,
+                    wave: if wave { Wave::On } else { Wave::Off },
+                    path: None,
+                    zoom: false,
+                }],
+                40,
+            );
             (0..48)
                 .map(|frame| {
                     let mut buf = FrameBuffer::new(60, 40);
                     s.paint_cells(&mut buf, 50.0, frame);
-                    (0..40).find(|&y| (0..60).any(|x| buf.get(x, y).ch == 'Q')).unwrap()
+                    (0..40)
+                        .find(|&y| (0..60).any(|x| buf.get(x, y).ch == 'Q'))
+                        .unwrap()
                 })
                 .collect()
         };
@@ -604,7 +802,15 @@ mod tests {
     #[test]
     fn looped_letters_ride_over_the_top_upside_down() {
         let w = 200;
-        let g = Glyph { ch: 'M', x: 0.0, font: Font::Big, style: Style::Flat, wave: Wave::On, path: Some(looping::Shape::Loop), zoom: false };
+        let g = Glyph {
+            ch: 'M',
+            x: 0.0,
+            font: Font::Big,
+            style: Style::Flat,
+            wave: Wave::On,
+            path: Some(looping::Shape::Loop),
+            zoom: false,
+        };
         // On the real screen: the scroller's own line, full height.
         let base = (SCROLLER_Y + BASE) as f64;
         // Scrolled so the letter's middle is halfway round the loop.
@@ -613,14 +819,27 @@ mod tests {
         let layers = Layers::new(ROWS).layer(Layer::paint(move |c| s.paint(c, scrolled)));
         let mut buf = FrameBuffer::new(w, ROWS);
         layers.render(&mut buf, 0);
-        let ink: Vec<usize> = (0..ROWS * 2).filter(|&y| (0..w).any(|x| {
-            let cell = buf.get(x, y / 2);
-            cell.ch != ' ' && if y % 2 == 0 { cell.color == LETTER_HIGHLIGHT } else { cell.bg == Some(LETTER_HIGHLIGHT) }
-        })).collect();
+        let ink: Vec<usize> = (0..ROWS * 2)
+            .filter(|&y| {
+                (0..w).any(|x| {
+                    let cell = buf.get(x, y / 2);
+                    cell.ch != ' '
+                        && if y % 2 == 0 {
+                            cell.color == LETTER_HIGHLIGHT
+                        } else {
+                            cell.bg == Some(LETTER_HIGHLIGHT)
+                        }
+                })
+            })
+            .collect();
         let top = base - 2.0 * looping::LOOP_R;
         assert!(!ink.is_empty());
         // Hanging from the top of the loop, feet up, head towards the middle.
-        assert!(ink.iter().all(|&y| (y as f64) >= top - 2.0 && (y as f64) <= top + 16.0), "{ink:?} vs top {top}");
+        assert!(
+            ink.iter()
+                .all(|&y| (y as f64) >= top - 2.0 && (y as f64) <= top + 16.0),
+            "{ink:?} vs top {top}"
+        );
     }
 
     #[test]
@@ -630,17 +849,31 @@ mod tests {
         let tops = |d: f64| -> Vec<usize> {
             (0..48)
                 .map(|frame| {
-                    let g = Glyph { ch: 'M', x: 0.0, font: Font::C64, style: Style::Flat, wave: Wave::On, path: Some(looping::Shape::Loop), zoom: false };
+                    let g = Glyph {
+                        ch: 'M',
+                        x: 0.0,
+                        font: Font::C64,
+                        style: Style::Flat,
+                        wave: Wave::On,
+                        path: Some(looping::Shape::Loop),
+                        zoom: false,
+                    };
                     let s = Scroller::new(vec![g], SCROLLER_Y);
-                    let layers = Layers::new(ROWS).layer(Layer::paint(move |c| s.paint(c, d + 4.0)));
+                    let layers =
+                        Layers::new(ROWS).layer(Layer::paint(move |c| s.paint(c, d + 4.0)));
                     let mut buf = FrameBuffer::new(w, ROWS);
                     layers.render(&mut buf, frame);
-                    (0..ROWS).find(|&y| (0..w).any(|x| buf.get(x, y).ch != ' ')).unwrap()
+                    (0..ROWS)
+                        .find(|&y| (0..w).any(|x| buf.get(x, y).ch != ' '))
+                        .unwrap()
                 })
                 .collect()
         };
         let waving = tops(30.0);
-        assert!(waving.iter().any(|&t| t != waving[0]), "no wave on the way in: {waving:?}");
+        assert!(
+            waving.iter().any(|&t| t != waving[0]),
+            "no wave on the way in: {waving:?}"
+        );
         // Right at the loop's mouth it rides flat.
         let flat = tops(looping::loop_start(w));
         assert!(flat.iter().all(|&t| t == flat[0]), "{flat:?}");
@@ -651,7 +884,15 @@ mod tests {
         let mut x = x0;
         text.chars()
             .map(|ch| {
-                let g = Glyph { ch, x, font: Font::C64, style: Style::Candy, wave: Wave::Off, path: None, zoom: true };
+                let g = Glyph {
+                    ch,
+                    x,
+                    font: Font::C64,
+                    style: Style::Candy,
+                    wave: Wave::Off,
+                    path: None,
+                    zoom: true,
+                };
                 x += zoom_advance(ch) as f64;
                 g
             })
@@ -666,14 +907,24 @@ mod tests {
         layers.render(&mut buf, frame);
         let lit = |x: usize, y: usize| {
             let cell = buf.get(x, y / 2);
-            if cell.ch == ' ' { cell.bg.is_some() } else { y % 2 == 0 || cell.bg.is_some() }
+            if cell.ch == ' ' {
+                cell.bg.is_some()
+            } else {
+                y % 2 == 0 || cell.bg.is_some()
+            }
         };
-        (0..ROWS * 2).flat_map(|y| (0..width).map(move |x| (x, y))).filter(|&(x, y)| lit(x, y)).collect()
+        (0..ROWS * 2)
+            .flat_map(|y| (0..width).map(move |x| (x, y)))
+            .filter(|&(x, y)| lit(x, y))
+            .collect()
     }
 
     #[test]
     fn zoomed_letters_sit_tight_in_their_run() {
-        let run: Vec<(f64, char)> = zoomed("ZOOM IN, ZOOM", 100.0).iter().map(|g| (g.x, g.ch)).collect();
+        let run: Vec<(f64, char)> = zoomed("ZOOM IN, ZOOM", 100.0)
+            .iter()
+            .map(|g| (g.x, g.ch))
+            .collect();
         let total: i64 = run.iter().map(|&(_, ch)| zoom_advance(ch)).sum();
         for t in [0.0, 0.3, 1.1] {
             let boxes = zoom_run(&run, t);
@@ -685,7 +936,10 @@ mod tests {
             }
             let last = boxes.last().unwrap();
             assert_eq!(last.0 + last.1, total);
-            assert!(boxes.iter().any(|b| b.2 != boxes[0].2), "all one size: {boxes:?}");
+            assert!(
+                boxes.iter().any(|b| b.2 != boxes[0].2),
+                "all one size: {boxes:?}"
+            );
         }
     }
 
@@ -707,10 +961,18 @@ mod tests {
         // Sizes go with the letter, not the screen: the same letter, a
         // moment later and further left, is another size — and every size
         // between small and big comes by.
-        let run: Vec<(f64, char)> = zoomed("ZOOM IN, ZOOM", 0.0).iter().map(|g| (g.x, g.ch)).collect();
-        let sizes: std::collections::BTreeSet<i64> = (0..72).map(|f| zoom_run(&run, f as f64 / 60.0)[4].2).collect();
+        let run: Vec<(f64, char)> = zoomed("ZOOM IN, ZOOM", 0.0)
+            .iter()
+            .map(|g| (g.x, g.ch))
+            .collect();
+        let sizes: std::collections::BTreeSet<i64> = (0..72)
+            .map(|f| zoom_run(&run, f as f64 / 60.0)[4].2)
+            .collect();
         assert!(sizes.len() >= 20, "{} sizes: {sizes:?}", sizes.len());
-        assert!(*sizes.first().unwrap() <= 8 && *sizes.last().unwrap() >= 28, "{sizes:?}");
+        assert!(
+            *sizes.first().unwrap() <= 8 && *sizes.last().unwrap() >= 28,
+            "{sizes:?}"
+        );
     }
 
     #[test]
@@ -719,16 +981,26 @@ mod tests {
         // Up front: the colours as they are.
         assert_eq!(deep(LETTER_UPPER, ZOOM_MAX), LETTER_UPPER);
         // Further back: darker, a step at a time, but never murky.
-        let row: Vec<u32> = (ZOOM_MIN..=ZOOM_MAX).map(|s| light(deep(LETTER_UPPER, s))).collect();
+        let row: Vec<u32> = (ZOOM_MIN..=ZOOM_MAX)
+            .map(|s| light(deep(LETTER_UPPER, s)))
+            .collect();
         assert!(row.windows(2).all(|w| w[0] <= w[1]), "{row:?}");
-        assert!(row[0] < light(LETTER_UPPER) && row[0] * 10 > light(LETTER_UPPER) * 6, "{row:?}");
+        assert!(
+            row[0] < light(LETTER_UPPER) && row[0] * 10 > light(LETTER_UPPER) * 6,
+            "{row:?}"
+        );
         // And on screen: a small letter's face is darker than a big one's.
         let s = Scroller::new(zoomed("MMMMMMMM", 0.0), SCROLLER_Y);
         let layers = Layers::new(ROWS).layer(Layer::paint(move |c| s.paint(c, c.width as f64)));
         let mut buf = FrameBuffer::new(200, ROWS);
         layers.render(&mut buf, 0);
-        let faces = (0..ROWS).flat_map(|y| (0..200).map(move |x| (x, y))).map(|(x, y)| buf.get(x, y).color);
-        assert!(faces.into_iter().any(|c| c != LETTER_UPPER && light(c) < light(LETTER_UPPER) && light(c) > light(LETTER_LOWER) / 2 && c.r > c.b));
+        let faces = (0..ROWS)
+            .flat_map(|y| (0..200).map(move |x| (x, y)))
+            .map(|(x, y)| buf.get(x, y).color);
+        assert!(faces.into_iter().any(|c| c != LETTER_UPPER
+            && light(c) < light(LETTER_UPPER)
+            && light(c) > light(LETTER_LOWER) / 2
+            && c.r > c.b));
     }
 
     #[test]
@@ -738,7 +1010,10 @@ mod tests {
             let px = painted(zoomed("MMMMMM", 0.0), 200, frame);
             let bottom = px.iter().map(|p| p.1).max().unwrap();
             let top = px.iter().map(|p| p.1).min().unwrap();
-            assert!(bottom < ROWS * 2, "frame {frame}: off the bottom at {bottom}");
+            assert!(
+                bottom < ROWS * 2,
+                "frame {frame}: off the bottom at {bottom}"
+            );
             tallest = tallest.max(bottom - top);
         }
         assert!(tallest >= 28, "{tallest}");

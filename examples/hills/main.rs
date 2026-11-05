@@ -997,14 +997,16 @@ mod tests {
     }
 
     #[test]
-    fn the_303_comes_in_as_the_text_starts_looping() {
+    fn the_303s_first_loop_comes_in_as_the_text_starts_looping() {
+        let first = music::clip_named("303", None).unwrap();
         for w in [100, 160, 260] {
             let stage = Stage::new(w);
             let session = music::Session::new(&stage.timeline);
             let start = when_scrolled(&stage, looping::ride(&stage.glyphs, w).unwrap().0);
-            // Not before; within a bar or so of the loop starting.
-            assert!(!session.plays(start - 2.5, "303"), "w {w}: the 303 before the loop");
-            assert!(session.plays(start + 2.5, "303"), "w {w}: no 303 in the loop");
+            // Not before (another 303 loop may play from the logo); within
+            // a bar or so of the loop starting.
+            assert_ne!(session.loop_at(start - 2.5, "303"), Some(first), "w {w}: before the loop");
+            assert_eq!(session.loop_at(start + 2.5, "303"), Some(first), "w {w}: not in the loop");
         }
     }
 
