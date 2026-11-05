@@ -9,7 +9,7 @@
 //! 3. "we've been expecting you" — in the terminal's own font, easing in
 //!    from the right, holding in the middle, easing out to the left.
 //! 4. "let's see if we can make this more entertaining, shall we?" — a
-//!    DYCP in the C64 letters, in colour, every letter on its own sine,
+//!    DYCP in the small letters, in colour, every letter on its own sine,
 //!    crossing a little above the scroller's line (the bass comes in with
 //!    it). It's a side scroller (`sides::Side`), painted with the scene,
 //!    and it may still be on its way out as "Welly well" comes in below.
@@ -79,14 +79,15 @@ impl Intro {
             name: "intro",
             text: LINE4,
             y: scroll_y - DYCP_ABOVE,
-            font: sides::Font::C64,
+            // Small letters, on a low, long, slow wave so they read.
+            font: sides::Font::Tiny,
             tone: (sides::CLOUD, 0.0),
             opacity: 1.0,
-            speed: 2.0,
+            speed: 1.5,
             z: sides::z::SCROLLER,
-            amp: 6.0,
-            spread: 0.5,
-            period: 1.1,
+            amp: 3.0,
+            spread: 0.15,
+            period: 2.0,
         };
         // The scroller's first code reaches the middle half a screen after
         // it sets off (a pixel a frame); a hair before the beat's bar.
