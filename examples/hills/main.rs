@@ -1009,6 +1009,18 @@ mod tests {
     }
 
     #[test]
+    fn welly_well_starts_the_beat_without_the_bass() {
+        let stage = Stage::new(160);
+        let session = music::Session::new(&stage.timeline);
+        let welly = stage.timeline.cues.iter().find(|c| matches!(c.code, script::Code::Play(_))).unwrap().t;
+        let logo = first_cue(&stage, script::Code::Logo);
+        // A bar after "Welly well" reaches the middle: the beat, no bass.
+        assert!(session.plays(welly + 2.1, "drums") && !session.plays(welly + 2.1, "bass"));
+        // The bass comes with the logo.
+        assert!(session.plays(logo + 2.1, "bass"));
+    }
+
+    #[test]
     fn the_music_follows_the_script_clock() {
         let stage = Stage::new(160);
         stage.seek_to(42.0);
