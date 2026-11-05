@@ -7,7 +7,7 @@
 //! and types the tagline under it. The effect panels (`stage.rs`,
 //! `panel.rs`) wait for codes of their own.
 //!
-//! Run: `cargo run --release --example hills`
+//! Run: `cargo run --release --example hills` (`-- --mute` for no music)
 //! Keys: → n space next code · ← p previous code · q quit
 
 mod dive;
@@ -17,6 +17,8 @@ mod intro;
 mod landscape;
 mod layout;
 mod looping;
+mod music;
+mod orbital3;
 mod panel;
 mod script;
 mod scroller;
@@ -495,6 +497,9 @@ async fn main() {
         );
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
+    // The music plays for as long as this lives; silent without a sound
+    // device, or with --mute.
+    let _music = if std::env::args().any(|a| a == "--mute") { None } else { music::play() };
     let stage = Stage::new(terminal_width());
     let seek = stage.seek.clone();
     Scene::new()
