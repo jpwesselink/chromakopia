@@ -1,17 +1,21 @@
 //! The demo's music: the loops of "orbital 3"'s Session View (see
 //! `orbital3.rs`, generated from the Ableton set), launched by the scroll
 //! text the way you launch clips in Ableton — `{play drums full}`,
-//! `{stop pad}`, `{stop all}` — each starting on the next bar. They play
-//! on three emulated C64 SIDs (MOS 6581s by reSID, "3SID"), the way a C64
-//! music routine does it: a player writes the chips' registers 200 times
-//! a second. The 606 part plays on an 808 (`drums.rs`), and it all goes
-//! through a hall (`reverb.rs`).
+//! `{play mallets volume:20}` (20 %), `{stop pad}`, `{stop all}` — each
+//! starting on the next bar. They play on emulated C64 SIDs (MOS 6581s by
+//! reSID), one chip to a track so each has its own level and filter, the
+//! way a C64 music routine does it: a player writes the chips' registers
+//! 200 times a second. The 606 part plays on an 808 (`drums.rs`), and it
+//! all goes through a hall (`reverb.rs`).
 //!
-//! | chip | voice 1 | voice 2 | voice 3 | filter |
-//! |---|---|---|---|---|
-//! | A, centre | 303 | marimba | thud bass | the 303's acid |
-//! | B, left | second 303, quieter | mallets, soft | mallets, soft | the second 303's |
-//! | C, right | pad | pad | pad | a slow, low pass |
+//! | chip | track | voices | filter |
+//! |---|---|---|---|
+//! | A, centre | 303 | 1 | its acid |
+//! | B, left | 303b, quieter | 1 | its acid |
+//! | C, right | pad and the bells' chords | 3 | a slow, low pass |
+//! | D, left | mallets, soft, taking turns | 2 | — |
+//! | E, right | marimba | 1 | — |
+//! | F, centre | thud bass | 1 | — |
 //!
 //! Chip C is one soft pad: the slow pad's notes and the bells' chords,
 //! a note to a voice, slow in and slow out, through its own low-pass.
@@ -72,15 +76,15 @@ const BAR: u64 = 400;
 /// Ticks between arpeggio steps — 50 Hz, the classic rate.
 const ARP: u64 = 4;
 /// How many SIDs.
-const CHIPS: usize = 3;
+const CHIPS: usize = 6;
 /// Each chip's share of the left and right channel — the pad chip
 /// kept back.
-const PAN: [(f32, f32); CHIPS] = [(0.5, 0.5), (0.65, 0.35), (0.08, 0.14)];
+const PAN: [(f32, f32); CHIPS] = [(0.5, 0.5), (0.65, 0.35), (0.08, 0.14), (0.65, 0.35), (0.45, 0.55), (0.5, 0.5)];
 /// The 808's level next to the chips (it sits in the middle).
 const KIT: f32 = 0.35;
 /// How much of each chip, and of the 808, goes into the hall — the pad
 /// most, the bass hardly — and how loud the hall comes back.
-const SEND: [f32; CHIPS] = [0.08, 0.5, 0.18];
+const SEND: [f32; CHIPS] = [0.08, 0.15, 0.18, 0.5, 0.2, 0.05];
 const KIT_SEND: f32 = 0.2;
 const WET: f32 = 1.2;
 /// The hall: how long it rings (0–1), how dark (0–1), ms before it answers.
@@ -91,7 +95,9 @@ const HALL_PRE_MS: f32 = 70.0;
 /// filter routing changes, so it never does. The 303s' voice 1 on A and
 /// B (their cutoffs move, their routing doesn't), the pad's three voices
 /// on C with a little resonance.
-const FILTERS: [u8; CHIPS] = [0xC1, 0xC1, 0x27];
+const FILTERS: [u8; CHIPS] = [0xC1, 0xC1, 0x27, 0x00, 0x00, 0x00];
+/// Samples a level change takes to settle, so volume changes don't click.
+const LEVEL_GLIDE: f32 = 2_000.0;
 const PAD_CUTOFF: u16 = 0x230;
 /// Beats a bells chord holds as a pad, so the chords run into each other.
 const CHORD_BEATS: f64 = 2.0;
@@ -129,13 +135,26 @@ const PULSE: u8 = 0x40;
 /// A voice: (chip, voice on that chip).
 type Slot = (usize, u8);
 const A1: Slot = (0, 0);
-const A2: Slot = (0, 1);
-const A3: Slot = (0, 2);
 const B1: Slot = (1, 0);
-const B2: Slot = (1, 1);
-const B3: Slot = (1, 2);
 /// The pad chip's three voices.
 const PADS: [Slot; 3] = [(2, 0), (2, 1), (2, 2)];
+/// The mallets' two voices, taking turns.
+const MALLET_SLOTS: [Slot; 2] = [(3, 0), (3, 1)];
+const MARIMBA_SLOT: Slot = (4, 0);
+const THUD_SLOT: Slot = (5, 0);
+
+/// The chip `track` plays on (None: the 808's drums).
+fn chip_of(track: u8) -> Option<usize> {
+    match track {
+        ACID => Some(0),
+        ACID_HIGH => Some(1),
+        PAD | BELLS => Some(2),
+        MALLETS => Some(3),
+        MARIMBA => Some(4),
+        THUD => Some(5),
+        _ => None,
+    }
+}
 
 /// The track the scroll text calls `name`.
 pub fn track_named(name: &str) -> Option<u8> {
@@ -176,12 +195,21 @@ fn ticks(beats: f64) -> u64 {
 /// A launch or a stop, from a code or the opening.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Launch {
-    Play(usize),
+    /// A loop, at a volume in percent.
+    Play(usize, u8),
     Stop(Option<u8>),
 }
 
-/// Per track: the loop it plays and the tick it started.
-type Playing = [Option<(usize, u64)>; TRACKS.len()];
+/// What a track plays: the loop, the tick it started, its volume (%).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Track {
+    clip: usize,
+    launch: u64,
+    volume: u8,
+}
+
+/// Per track, what it plays.
+type Playing = [Option<Track>; TRACKS.len()];
 
 /// The scroll text's loop launches, each on the bar after its code fires.
 #[derive(Debug, Clone, PartialEq)]
@@ -195,11 +223,11 @@ impl Session {
     pub fn new(timeline: &Timeline) -> Self {
         let opening = OPENING.iter().map(|&(t, w, secs)| {
             let at = (secs * TICKS as f64).ceil() as u64;
-            (at.div_ceil(BAR) * BAR, Launch::Play(clip_named(t, w).expect("opening loop")))
+            (at.div_ceil(BAR) * BAR, Launch::Play(clip_named(t, w).expect("opening loop"), 100))
         });
         let coded = timeline.cues.iter().filter_map(|cue| {
             let launch = match cue.code {
-                Code::Play(clip) => Launch::Play(clip),
+                Code::Play(clip, volume) => Launch::Play(clip, volume),
                 Code::Stop(track) => Launch::Stop(track),
                 _ => return None,
             };
@@ -222,13 +250,25 @@ impl Session {
     /// `CLIPS` (tests).
     #[cfg(test)]
     pub fn loop_at(&self, secs: f64, track: &str) -> Option<usize> {
-        self.at((secs * TICKS as f64) as u64)[track_named(track).unwrap() as usize].map(|p| p.0)
+        self.at((secs * TICKS as f64) as u64)[track_named(track).unwrap() as usize].map(|p| p.clip)
+    }
+
+    /// `track`'s volume (%) `secs` into the script (tests).
+    #[cfg(test)]
+    pub fn volume_at(&self, secs: f64, track: &str) -> Option<u8> {
+        self.at((secs * TICKS as f64) as u64)[track_named(track).unwrap() as usize].map(|p| p.volume)
     }
 
     /// Just these loops, from the start (tests).
     #[cfg(test)]
     fn only(clips: &[usize]) -> Self {
-        Session { launches: clips.iter().map(|&c| (0, Launch::Play(c))).collect() }
+        Session { launches: clips.iter().map(|&c| (0, Launch::Play(c, 100))).collect() }
+    }
+
+    /// These loops at these volumes, from the start (tests).
+    #[cfg(test)]
+    fn at_volumes(clips: &[(usize, u8)]) -> Self {
+        Session { launches: clips.iter().map(|&(c, v)| (0, Launch::Play(c, v))).collect() }
     }
 
     /// What plays at tick `now`.
@@ -236,13 +276,11 @@ impl Session {
         let mut playing: Playing = [None; TRACKS.len()];
         for &(at, launch) in self.launches.iter().take_while(|l| l.0 <= now) {
             match launch {
-                // Launching what already plays carries on.
-                Launch::Play(c) => {
-                    let track = &mut playing[CLIPS[c].track as usize];
-                    if track.is_none_or(|(p, _)| p != c) {
-                        *track = Some((c, at));
-                    }
-                }
+                // Launching what already plays carries on, at the new volume.
+                Launch::Play(clip, volume) => match &mut playing[CLIPS[clip].track as usize] {
+                    Some(t) if t.clip == clip => t.volume = volume,
+                    track => *track = Some(Track { clip, launch: at, volume }),
+                },
                 Launch::Stop(Some(t)) => playing[t as usize] = None,
                 Launch::Stop(None) => playing = [None; TRACKS.len()],
             }
@@ -303,11 +341,23 @@ pub struct Player {
     voices: [[Option<Voice>; 3]; CHIPS],
     /// Drums struck this tick, for the 808.
     pub strikes: Vec<(Drum, u8)>,
+    /// Each chip's level, and the 808's, 0–1, as the session has them.
+    pub levels: [f32; CHIPS],
+    pub kit_level: f32,
 }
 
 impl Player {
     pub fn new(session: Session) -> Self {
-        Player { session, now: None, held: Vec::new(), mallets: 0, voices: [[None; 3]; CHIPS], strikes: Vec::new() }
+        Player {
+            session,
+            now: None,
+            held: Vec::new(),
+            mallets: 0,
+            voices: [[None; 3]; CHIPS],
+            strikes: Vec::new(),
+            levels: [1.0; CHIPS],
+            kit_level: 1.0,
+        }
     }
 
     /// Advance one tick, the demo `demo_secs` into its script, writing
@@ -336,8 +386,19 @@ impl Player {
         };
         let playing = self.session.at(now);
         // Notes of loops that stopped, or were swapped, go.
-        self.held.retain(|h| h.end > now && playing[h.note.track as usize] == Some((h.clip, h.launch)));
-        for (c, launch) in playing.iter().flatten().copied() {
+        self.held.retain(|h| h.end > now && playing[h.note.track as usize].is_some_and(|t| (t.clip, t.launch) == (h.clip, h.launch)));
+        // Levels: each chip at its track's volume (the pad chip at the
+        // louder of the pad's and the bells').
+        self.levels = [0.0; CHIPS];
+        for (track, t) in playing.iter().enumerate() {
+            let Some(t) = t else { continue };
+            let level = t.volume as f32 / 100.0;
+            match chip_of(track as u8) {
+                Some(chip) => self.levels[chip] = self.levels[chip].max(level),
+                None => self.kit_level = level,
+            }
+        }
+        for (c, launch) in playing.iter().flatten().map(|t| (t.clip, t.launch)) {
             let clip = CLIPS[c];
             let length = ticks(clip.beats).max(1);
             if now < launch {
@@ -377,12 +438,12 @@ impl Player {
         // less far.
         self.acid(sid, B1, ACID_HIGH, 0.45, Patch { wave: SAW, ad: 0x06, sr: 0x50 }, now);
         let marimba = self.keys(|h| h.note.track == MARIMBA, 12);
-        self.tone(sid, A2, &marimba, Patch { wave: TRI, ad: 0x08, sr: 0x00 }, now);
+        self.tone(sid, MARIMBA_SLOT, &marimba, Patch { wave: TRI, ad: 0x08, sr: 0x00 }, now);
         let thud = self.keys(|h| h.note.track == THUD, 0);
-        self.tone(sid, A3, &thud, Patch { wave: TRI, ad: 0x09, sr: 0x00 }, now);
+        self.tone(sid, THUD_SLOT, &thud, Patch { wave: TRI, ad: 0x09, sr: 0x00 }, now);
         // The mallets, soft: triangles taking turns, each note ringing
         // out under the next.
-        for (turn, slot) in [B2, B3].into_iter().enumerate() {
+        for (turn, slot) in MALLET_SLOTS.into_iter().enumerate() {
             let keys = self.keys(|h| h.note.track == MALLETS && h.turn == turn as u8, 12);
             self.pad(sid, &[slot], &keys, Patch { wave: TRI, ad: 0x68, sr: 0x9A }, now);
         }
@@ -515,6 +576,9 @@ pub struct Synth {
     buffers: [Vec<i16>; CHIPS],
     kit: Kit,
     hall: Reverb,
+    /// Each chip's level and the 808's as heard, gliding to the player's.
+    levels: [f32; CHIPS],
+    kit_level: f32,
     read: usize,
     /// Cycles owed to the chips, in 1/TICKS of a cycle.
     carry: u32,
@@ -546,6 +610,8 @@ impl Synth {
             buffers: Default::default(),
             kit: Kit::new(sample_rate),
             hall: Reverb::new(sample_rate, HALL_ROOM, HALL_DAMP, HALL_PRE_MS),
+            levels: [1.0; CHIPS],
+            kit_level: 1.0,
             read: 0,
             carry: 0,
         }
@@ -576,13 +642,15 @@ impl Synth {
             }
         }
         let (mut l, mut r, mut send) = (0.0, 0.0, 0.0);
-        for ((buffer, (pl, pr)), to_hall) in self.buffers.iter().zip(PAN).zip(SEND) {
-            let s = buffer[self.read] as f32 / 32_768.0 * 2.0;
-            l += s * pl;
-            r += s * pr;
-            send += s * to_hall;
+        for (chip, buffer) in self.buffers.iter().enumerate() {
+            self.levels[chip] += (self.player.levels[chip] - self.levels[chip]) / LEVEL_GLIDE;
+            let s = buffer[self.read] as f32 / 32_768.0 * 2.0 * self.levels[chip];
+            l += s * PAN[chip].0;
+            r += s * PAN[chip].1;
+            send += s * SEND[chip];
         }
-        let kit = self.kit.next() * KIT;
+        self.kit_level += (self.player.kit_level - self.kit_level) / LEVEL_GLIDE;
+        let kit = self.kit.next() * KIT * self.kit_level;
         send += kit * KIT_SEND;
         let (hall_l, hall_r) = self.hall.run(send);
         self.read += 1;
@@ -727,7 +795,7 @@ mod tests {
     #[test]
     fn codes_launch_on_the_next_bar() {
         let (session, tl) = session_of("ab{play bass}cdefgh{play drums full}ijklmnopqrstuvwxyz{stop bass}abcdefghijklmnopqrstuvwxyz{stop all}abc");
-        let cue = |n: usize| tl.cues.iter().filter(|c| matches!(c.code, Code::Play(_) | Code::Stop(_))).nth(n).unwrap().t;
+        let cue = |n: usize| tl.cues.iter().filter(|c| matches!(c.code, Code::Play(..) | Code::Stop(_))).nth(n).unwrap().t;
         let tick = |t: f64| (t * TICKS as f64).ceil() as u64;
         let bar_after = |t: f64| tick(t).div_ceil(BAR) * BAR;
         let bass = THUD as usize;
@@ -736,11 +804,11 @@ mod tests {
         let launch = bar_after(cue(0));
         assert!(launch >= tick(cue(0)) && launch % BAR == 0);
         assert!(session.at(launch - 1)[bass].is_none());
-        assert_eq!(session.at(launch)[bass], Some((first("bass"), launch)));
+        assert_eq!(session.at(launch)[bass].map(|t| (t.clip, t.launch)), Some((first("bass"), launch)));
         // Drums come in later, bass carries on; then the bass stops; then all.
         let drums = bar_after(cue(1));
-        assert_eq!(session.at(drums)[DRUMS as usize].map(|p| CLIPS[p.0].name), Some("full"));
-        assert_eq!(session.at(drums)[bass], Some((first("bass"), launch)));
+        assert_eq!(session.at(drums)[DRUMS as usize].map(|p| CLIPS[p.clip].name), Some("full"));
+        assert_eq!(session.at(drums)[bass].map(|t| (t.clip, t.launch)), Some((first("bass"), launch)));
         assert!(session.at(bar_after(cue(2)))[bass].is_none());
         assert!(session.at(bar_after(cue(3))).iter().all(Option::is_none));
     }
@@ -858,6 +926,30 @@ mod tests {
             let s = render(&[i], 0.0, c.beats * 60.0 / BPM);
             assert!(rms(&s) > 0.005, "{} loop {i} ({}) is silent: {}", TRACK_NAMES[c.track as usize], c.name, rms(&s));
         }
+    }
+
+    #[test]
+    fn volume_turns_a_track_down_and_a_relaunch_only_changes_it() {
+        let (session, tl) = session_of("ab{play mallets volume:20}cdefghijklmnopqrstuvwxyz{play mallets}abc");
+        let cue = |n: usize| tl.cues.iter().filter(|c| matches!(c.code, Code::Play(..))).nth(n).unwrap().t;
+        assert_eq!(session.volume_at(cue(0) + 2.1, "mallets"), Some(20));
+        // Played again: back to full, the loop carrying on from where it was.
+        let later = cue(1) + 2.1;
+        assert_eq!(session.volume_at(later, "mallets"), Some(100));
+        assert_eq!(session.at((later * TICKS as f64) as u64)[MALLETS as usize].map(|t| t.launch), session.at(((cue(0) + 2.1) * TICKS as f64) as u64)[MALLETS as usize].map(|t| t.launch));
+        // And it sounds that much quieter.
+        let level = |volume| {
+            let time = clock();
+            let mut synth = Synth::new(RATE, Session::at_volumes(&[(first("mallets"), volume)]), time.clone());
+            let s: Vec<f32> = (0..RATE as usize * 8).map(|i| {
+                time.store((i as f64 / RATE as f64).to_bits(), Ordering::Relaxed);
+                let (l, r) = synth.next_stereo();
+                (l + r) / 2.0
+            }).collect();
+            rms(&s[RATE as usize..])
+        };
+        let (full, low) = (level(100), level(20));
+        assert!((0.12..0.3).contains(&(low / full)), "20 % came out at {:.0} %", 100.0 * low / full);
     }
 
     #[test]

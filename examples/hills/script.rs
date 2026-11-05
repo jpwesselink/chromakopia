@@ -56,8 +56,9 @@ pub enum Code {
     /// Side scroller `n` of `sides::SIDES` sets off across the screen.
     Side(usize),
     /// Start this loop (an index into `orbital3::CLIPS`) on the next bar,
-    /// in place of whatever its track plays.
-    Play(usize),
+    /// in place of whatever its track plays, at this volume (%) — the loop
+    /// already playing just changes volume.
+    Play(usize, u8),
     /// Stop this track's loop on the next bar (None: every track's).
     Stop(Option<u8>),
     /// A skip stop with nothing attached (set by `with_lead`, not typed).
@@ -119,8 +120,19 @@ pub fn parse(src: &str) -> Result<Script, String> {
             (Some("hills"), None, _) => Code::Hills,
             (Some("bye"), None, _) => Code::Bye,
             (Some("gap"), None, _) => Code::Gap,
-            (Some("play"), Some(track), which) => {
-                Code::Play(super::music::clip_named(track, which).map_err(|e| format!("{e} in {{{body}}}"))?)
+            (Some("play"), Some(track), _) => {
+                // `{play <track> [loop] [volume:N]}`, the volume in percent.
+                let (mut which, mut volume) = (None, 100);
+                for word in body.split_whitespace().skip(2) {
+                    match word.strip_prefix("volume:") {
+                        Some(v) => {
+                            volume = v.parse::<u8>().ok().filter(|&v| v <= 100).ok_or_else(|| format!("volume 0–100 in {{{body}}}"))?
+                        }
+                        None if which.is_none() => which = Some(word),
+                        None => return Err(format!("unknown code {{{body}}}")),
+                    }
+                }
+                Code::Play(super::music::clip_named(track, which).map_err(|e| format!("{e} in {{{body}}}"))?, volume)
             }
             (Some("stop"), Some("all"), None) => Code::Stop(None),
             (Some("stop"), Some(track), None) => {
