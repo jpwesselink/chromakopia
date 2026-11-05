@@ -12,6 +12,14 @@
 //!
 //! Chip C is one soft pad: the slow pad's notes and the bells' chords,
 //! a note to a voice, slow in and slow out, through its own low-pass.
+//!
+//! The 303s wait for the demo: with a cue (`play`'s flag), their whole
+//! section of the arrangement starts on the first bar after the flag goes
+//! up — when the scroll text starts looping round the big C — and stops
+//! if it comes down again.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use resid::{ChipModel, SamplingMethod, Sid};
 
@@ -44,19 +52,27 @@ const ARP: u64 = 4;
 const CHIPS: usize = 3;
 /// Each chip's share of the left and right channel — the pad chip
 /// kept back.
-const PAN: [(f32, f32); CHIPS] = [(0.5, 0.5), (0.65, 0.35), (0.15, 0.27)];
+const PAN: [(f32, f32); CHIPS] = [(0.5, 0.5), (0.65, 0.35), (0.08, 0.14)];
 /// The 808's level next to the chips (it sits in the middle).
 const KIT: f32 = 0.35;
 /// How much of each chip, and of the 808, goes into the hall — the pad
 /// most, the bass hardly — and how loud the hall comes back.
-const SEND: [f32; CHIPS] = [0.08, 0.35, 0.45];
-const KIT_SEND: f32 = 0.12;
-const WET: f32 = 0.9;
+const SEND: [f32; CHIPS] = [0.08, 0.5, 0.18];
+const KIT_SEND: f32 = 0.2;
+const WET: f32 = 1.2;
+/// The hall: how long it rings (0–1), how dark (0–1), ms before it answers.
+const HALL_ROOM: f32 = 0.98;
+const HALL_DAMP: f32 = 0.25;
+const HALL_PRE_MS: f32 = 70.0;
 /// The pad chip's filter at rest: resonance 2, all three voices.
 const PAD_FILTER: u8 = 0x27;
 const PAD_CUTOFF: u16 = 0x230;
 /// Beats a bells chord holds as a pad, so the chords run into each other.
 const CHORD_BEATS: f64 = 2.0;
+/// The arrangement's 303 section, in beats: on cue it plays from here.
+const ACID_FROM: f64 = 96.0;
+/// Ticks in a bar: cued 303s start on one, to stay on the drums' grid.
+const BAR: u64 = 400;
 
 // The tracks, by index into `TRACKS`.
 const PAD: u8 = 0;
@@ -143,9 +159,18 @@ struct Patch {
 /// The music routine: works out which notes sound and writes the SIDs'
 /// registers for them, one tick at a time.
 pub struct Player {
+    /// Ticks into the song (it starts over after `length`).
     tick: u64,
+    /// Ticks since the player started — notes are held in these, so they
+    /// ring on across the song starting over.
+    abs: u64,
     /// Next note to start.
     next: usize,
+    /// When set, the 303s wait for this to go up (see the module docs).
+    cue: Option<Arc<AtomicBool>>,
+    /// The absolute tick the cued 303 section starts at, and its next note.
+    acid_at: Option<u64>,
+    acid_next: usize,
     held: Vec<Held>,
     /// Mallet notes started, for taking turns between their two voices.
     mallets: u8,
@@ -167,7 +192,84 @@ fn ticks(beats: f64) -> u64 {
 
 impl Player {
     pub fn new() -> Self {
-        Player { tick: 0, next: 0, held: Vec::new(), mallets: 0, voices: [[None; 3]; CHIPS], strikes: Vec::new(), solo: None }
+        Player {
+            tick: 0,
+            abs: 0,
+            next: 0,
+            cue: None,
+            acid_at: None,
+            acid_next: 0,
+            held: Vec::new(),
+            mallets: 0,
+            voices: [[None; 3]; CHIPS],
+            strikes: Vec::new(),
+            solo: None,
+        }
+    }
+
+    /// The 303s wait for `cue`.
+    #[cfg(test)]
+    pub fn cued(mut self, cue: Arc<AtomicBool>) -> Self {
+        self.cue = Some(cue);
+        self
+    }
+
+    fn is_acid(track: u8) -> bool {
+        track == ACID || track == ACID_HIGH
+    }
+
+    /// Whether `track` is heard: muted tracks stay quiet — unless soloed,
+    /// to hear them anyway.
+    fn heard(&self, track: u8) -> bool {
+        match self.solo {
+            Some(s) => s == track,
+            None => !MUTED.contains(&track),
+        }
+    }
+
+    /// Hold `note` from now, absolute ticks.
+    fn hold(&mut self, note: Note) {
+        let now = self.abs;
+        if note.track == DRUMS {
+            self.strikes.extend(Drum::on(note.key).map(|d| (d, note.vel)));
+            return;
+        }
+        let mut turn = 0;
+        if note.track == MALLETS {
+            turn = self.mallets % 2;
+            self.mallets = self.mallets.wrapping_add(1);
+        }
+        let mut end = now + ticks(note.len).max(1);
+        if note.track == BELLS {
+            end = end.max(now + ticks(CHORD_BEATS));
+        }
+        self.held.push(Held { note, start: now, end, turn });
+    }
+
+    /// With a cue: start the 303 section on the first bar after it goes
+    /// up, feed it its notes, and drop it when the cue comes down.
+    fn cued_acid(&mut self) {
+        let Some(cue) = &self.cue else { return };
+        if !cue.load(Ordering::Relaxed) {
+            self.acid_at = None;
+            self.held.retain(|h| !Self::is_acid(h.note.track));
+            return;
+        }
+        let at = *self.acid_at.get_or_insert_with(|| {
+            self.acid_next = NOTES.iter().position(|n| n.at >= ACID_FROM).unwrap_or(NOTES.len());
+            self.abs + (BAR - self.tick % BAR) % BAR
+        });
+        if self.abs < at {
+            return;
+        }
+        let into = self.abs - at + ticks(ACID_FROM);
+        while self.acid_next < NOTES.len() && ticks(NOTES[self.acid_next].at) <= into {
+            let note = NOTES[self.acid_next];
+            self.acid_next += 1;
+            if Self::is_acid(note.track) && self.heard(note.track) {
+                self.hold(note);
+            }
+        }
     }
 
     /// Ticks in the whole song.
@@ -178,10 +280,11 @@ impl Player {
     /// Advance one tick, writing this tick's registers.
     pub fn tick(&mut self, sid: &mut impl Regs) {
         if self.tick >= Self::length() {
-            *self = Player { solo: self.solo, ..Player::new() };
+            self.tick = 0;
+            self.next = 0;
         }
-        let now = self.tick;
-        if now == 0 {
+        let now = self.abs;
+        if self.abs == 0 {
             for chip in 0..CHIPS {
                 // Volume up, low-pass, nothing filtered yet...
                 sid.poke(chip, MODE_VOL, 0x1F);
@@ -190,32 +293,15 @@ impl Player {
             // ...but the pad chip, all three voices, gently.
             sid.poke(PADS[0].0, RES_FILT, PAD_FILTER);
         }
-        while self.next < NOTES.len() && ticks(NOTES[self.next].at) <= now {
+        while self.next < NOTES.len() && ticks(NOTES[self.next].at) <= self.tick {
             let note = NOTES[self.next];
             self.next += 1;
-            // Muted tracks stay quiet — unless soloed, to hear them anyway.
-            let heard = match self.solo {
-                Some(s) => s == note.track,
-                None => !MUTED.contains(&note.track),
-            };
-            if !heard {
-                continue;
+            // Cued 303s come in through `cued_acid` instead.
+            if self.heard(note.track) && !(self.cue.is_some() && Self::is_acid(note.track)) {
+                self.hold(note);
             }
-            if note.track == DRUMS {
-                self.strikes.extend(Drum::on(note.key).map(|d| (d, note.vel)));
-                continue;
-            }
-            let mut turn = 0;
-            if note.track == MALLETS {
-                turn = self.mallets % 2;
-                self.mallets = self.mallets.wrapping_add(1);
-            }
-            let mut end = ticks(note.at + note.len).max(now + 1);
-            if note.track == BELLS {
-                end = end.max(now + ticks(CHORD_BEATS));
-            }
-            self.held.push(Held { note, start: now, end, turn });
         }
+        self.cued_acid();
         self.held.retain(|h| h.end > now);
 
         self.acid(sid, A1, ACID, 1.0, Patch { wave: SAW, ad: 0x08, sr: 0xA0 }, now);
@@ -242,6 +328,7 @@ impl Player {
         sid.poke(PADS[0].0, FC_LO, (fc & 7) as u8);
         sid.poke(PADS[0].0, FC_HI, (fc >> 3) as u8);
         self.tick += 1;
+        self.abs += 1;
     }
 
     /// The sounding keys of the held notes `which` picks, `shift`
@@ -392,7 +479,7 @@ impl Synth {
             }
             sid
         });
-        Synth { sids, player: Player::new(), buffers: Default::default(), kit: Kit::new(sample_rate), hall: Reverb::new(sample_rate, 0.85, 0.5), read: 0, carry: 0 }
+        Synth { sids, player: Player::new(), buffers: Default::default(), kit: Kit::new(sample_rate), hall: Reverb::new(sample_rate, HALL_ROOM, HALL_DAMP, HALL_PRE_MS), read: 0, carry: 0 }
     }
 
     #[cfg(test)]
@@ -449,13 +536,14 @@ impl Synth {
 /// Start the music on the default output device; it plays as long as the
 /// returned stream lives. None when there is no sound to be had (no
 /// device, an unusual sample format) — the demo just runs silent.
-pub fn play() -> Option<cpal::Stream> {
+pub fn play(cue: Arc<AtomicBool>) -> Option<cpal::Stream> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     let device = cpal::default_host().default_output_device()?;
     let supported = device.default_output_config().ok()?;
     let config: cpal::StreamConfig = supported.config();
     let channels = config.channels as usize;
     let mut synth = Synth::new(config.sample_rate.0);
+    synth.player.cue = Some(cue);
     // Left and right as the first two channels; any others get both.
     let mut frame = move |out: &mut dyn FnMut(usize, f32)| {
         let (l, r) = synth.next_stereo();
@@ -593,6 +681,41 @@ mod tests {
     }
 
     #[test]
+    fn the_303s_wait_for_their_cue_and_start_on_a_bar() {
+        let cue = Arc::new(AtomicBool::new(false));
+        let mut p = Player::new().cued(cue.clone());
+        let mut book = Book([[0; 32]; CHIPS]);
+        let gated = |b: &Book| [A1, B1].iter().any(|&(c, v)| b.0[c][7 * v as usize + CTRL as usize] & GATE != 0);
+        // A whole song without the cue: never a 303.
+        for _ in 0..Player::length() {
+            p.tick(&mut book);
+            assert!(!gated(&book), "a 303 before its cue, tick {}", p.abs);
+        }
+        // Up a little after a bar line: they wait for the next bar.
+        for _ in 0..37 {
+            p.tick(&mut book);
+        }
+        cue.store(true, Ordering::Relaxed);
+        let from = p.abs;
+        let mut first = None;
+        for _ in 0..BAR * 2 {
+            p.tick(&mut book);
+            if gated(&book) && first.is_none() {
+                first = Some(p.abs - 1);
+            }
+        }
+        let first = first.expect("no 303 after the cue");
+        assert!(first > from && first - from <= BAR + 2, "came in {} ticks after the cue", first - from);
+        assert!((first - 1) % BAR <= 1 || first % BAR <= 1, "not on a bar: tick {first}");
+        // Down again: they go.
+        cue.store(false, Ordering::Relaxed);
+        for _ in 0..3 {
+            p.tick(&mut book);
+        }
+        assert!(!gated(&book));
+    }
+
+    #[test]
     fn the_song_starts_over() {
         let mut p = Player::new();
         let mut book = Book([[0; 32]; CHIPS]);
@@ -682,9 +805,16 @@ mod tests {
         // The drums' first bars are just hats: the full groove too.
         let s = render(Synth::new(sr).solo(DRUMS), 40.0, 8.0);
         println!("{:>18}: rms {:.3} (8 s from 40 s)", TRACKS[DRUMS as usize].0, rms(&s));
+        // As in the demo: the 303s cued in when the loop starts, ~98 s.
+        let cue = Arc::new(AtomicBool::new(false));
         let mut synth = Synth::new(sr);
+        synth.player.cue = Some(cue.clone());
+        let secs = secs + 60.0;
         let mut samples: Vec<i16> = Vec::new();
-        for _ in 0..(secs * sr as f64) as usize {
+        for i in 0..(secs * sr as f64) as usize {
+            if i == 98 * sr as usize {
+                cue.store(true, Ordering::Relaxed);
+            }
             let (l, r) = synth.next_stereo();
             samples.extend([(l * 32_000.0) as i16, (r * 32_000.0) as i16]);
         }

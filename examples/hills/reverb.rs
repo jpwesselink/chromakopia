@@ -64,19 +64,26 @@ pub struct Reverb {
     right: Side,
     feedback: f32,
     damp: f32,
+    /// The send, delayed before the hall answers: the bigger the room,
+    /// the longer before its first reflections come back.
+    pre: Vec<f32>,
+    pre_at: usize,
 }
 
 impl Reverb {
     /// A hall at `sample_rate`: `room` 0–1 for how long it rings, `damp`
-    /// 0–1 for how dark its tail is.
-    pub fn new(sample_rate: u32, room: f32, damp: f32) -> Self {
+    /// 0–1 for how dark its tail is, `pre_ms` before it answers.
+    pub fn new(sample_rate: u32, room: f32, damp: f32, pre_ms: f32) -> Self {
         let scale = sample_rate as f32 / 44_100.0;
-        Reverb { left: Side::new(scale, 0), right: Side::new(scale, SPREAD), feedback: 0.7 + 0.28 * room, damp: damp * 0.4 }
+        let pre = vec![0.0; ((pre_ms / 1000.0 * sample_rate as f32) as usize).max(1)];
+        Reverb { left: Side::new(scale, 0), right: Side::new(scale, SPREAD), feedback: 0.7 + 0.28 * room, damp: damp * 0.4, pre, pre_at: 0 }
     }
 
     /// The hall's answer to a mono `send`, left and right.
     pub fn run(&mut self, send: f32) -> (f32, f32) {
-        (self.left.run(send, self.feedback, self.damp), self.right.run(send, self.feedback, self.damp))
+        let x = std::mem::replace(&mut self.pre[self.pre_at], send);
+        self.pre_at = (self.pre_at + 1) % self.pre.len();
+        (self.left.run(x, self.feedback, self.damp), self.right.run(x, self.feedback, self.damp))
     }
 }
 
@@ -87,7 +94,7 @@ mod tests {
     #[test]
     fn an_impulse_rings_on_in_stereo_and_dies_away() {
         let sr = 22_050;
-        let mut hall = Reverb::new(sr, 0.85, 0.5);
+        let mut hall = Reverb::new(sr, 0.85, 0.5, 45.0);
         let out: Vec<(f32, f32)> = (0..sr as usize * 6).map(|i| hall.run(if i == 0 { 1.0 } else { 0.0 })).collect();
         let level = |a: f32, b: f32| out[(a * sr as f32) as usize..(b * sr as f32) as usize].iter().map(|s| s.0.abs()).fold(0.0, f32::max);
         assert!(out.iter().all(|s| s.0.is_finite() && s.1.is_finite()));
@@ -96,5 +103,7 @@ mod tests {
         assert!(level(5.0, 6.0) < level(0.1, 0.6) / 10.0, "doesn't die away");
         // Left and right differ: width.
         assert!(out.iter().any(|s| (s.0 - s.1).abs() > 1e-4));
+        // Nothing comes back before the pre-delay.
+        assert!(out[..(0.04 * sr as f32) as usize].iter().all(|s| s.0 == 0.0 && s.1 == 0.0));
     }
 }
