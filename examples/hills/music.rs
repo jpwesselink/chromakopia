@@ -40,8 +40,9 @@ enum Instrument {
 fn voicing(track: u8) -> Option<(Instrument, i32, f32, bool)> {
     Some(match track {
         0 => (Instrument::Pad, 0, 0.16, false),
-        // Operator: transposed -4, carrier at twice the pitch.
-        1 => (Instrument::FmBell, 8, 0.9, true),
+        // Operator: transposed -4, carrier at twice the pitch — and an
+        // octave up again, so it rings rather than booms.
+        1 => (Instrument::FmBell, 20, 0.9, true),
         2 => (Instrument::Acid, 0, 0.55, false),
         3 => (Instrument::Drums, 0, 0.45, false),
         4 => (Instrument::Mallet, 12, 0.35, true),
@@ -105,11 +106,13 @@ impl Voice {
                 self.low * env
             }
             Instrument::FmBell => {
-                if t > 4.0 {
+                if t > 3.0 {
                     return None;
                 }
-                let m = (TAU * step(&mut self.phase[1], self.freq * 3.5)).sin() * 2.5 * (-t / 0.25).exp();
-                (TAU * step(&mut self.phase[0], self.freq) + m).sin() * (-t / 0.9).exp()
+                // Modulator at a whole multiple, so every overtone is in
+                // tune (3.5 made a gong); its shine goes quickly.
+                let m = (TAU * step(&mut self.phase[1], self.freq * 2.0)).sin() * 1.2 * (-t / 0.15).exp();
+                (TAU * step(&mut self.phase[0], self.freq) + m).sin() * (-t / 0.6).exp()
             }
             Instrument::Acid => {
                 if released > 0.08 {
