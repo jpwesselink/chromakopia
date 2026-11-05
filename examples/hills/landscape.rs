@@ -128,44 +128,54 @@ fn sky_floor() -> f64 {
     LAND_TOP + LAND_H * 0.38 - 8.0 - 15.0
 }
 
+/// Radius of a cloud's puffs, in pixels; puffs sit 1.5 radii apart.
+const PUFF_R: f64 = 9.0;
+
+/// How many equal puffs cloud number `slot` has: 1, 2 or 3.
+fn puffs_in(slot: f64) -> usize {
+    1 + ((slot * 7.3 + 0.4).sin().abs() * 3.0).floor().min(2.0) as usize
+}
+
+/// Half the width of a cloud of `n` puffs.
+fn cloud_half(n: usize) -> f64 {
+    PUFF_R * (1.0 + 0.75 * (n - 1) as f64)
+}
+
 /// Cloud number `slot` (one every 64 pixels): where across it `x` is
-/// (-1..1), and a fixed -1..1 that varies its size and height. None
-/// outside it.
-fn cloud_at(x: f64, grow: f64) -> Option<(f64, f64)> {
+/// (-1..1), how many puffs it has, and a fixed -1..1 that varies its
+/// height. None outside it.
+fn cloud_at(x: f64, grow: f64) -> Option<(f64, usize, f64)> {
     if grow <= 0.0 {
         return None;
     }
     let slot = (x / 64.0).floor();
+    let n = puffs_in(slot);
     let vary = (slot * 2.3).sin();
-    let dx = (x - slot * 64.0 - 32.0) / ((16.0 + 5.0 * vary) * grow);
-    (dx.abs() < 1.0).then_some((dx, vary))
+    let dx = (x - slot * 64.0 - 32.0) / (cloud_half(n) * grow);
+    (dx.abs() < 1.0).then_some((dx, n, vary))
 }
 
 /// The cloud at column `x`, high in the open sky: its top and flat
-/// bottom in pixel rows. A cumulus: a big round puff in the middle, a
-/// smaller one either side, as wide together as the shadow below.
+/// bottom in pixel rows. A Mario cloud: a row of one, two or three equal
+/// round puffs on a flat bottom, as wide as the shadow below.
 fn puff(x: f64, grow: f64) -> Option<(f64, f64)> {
-    let (dx, vary) = cloud_at(x, grow)?;
-    let half = (16.0 + 5.0 * vary) * grow;
+    let (dx, n, vary) = cloud_at(x, grow)?;
     let bottom = LAND_TOP + 4.0 + 2.0 * vary;
-    // More fixed -1..1 per cloud, so no two clouds puff up alike.
-    let slot = (x / 64.0).floor();
-    let [v2, v3, v4] = [(5.1, 1.0), (7.7, 2.0), (3.7, 0.5)].map(|(k, p)| (slot * k + p).sin());
-    // (centre, radius) as fractions of the half width; the side puffs
-    // reach the cloud's ends. Varied just so much that each side puff still
-    // stands out from the middle one by a pixel or more.
-    let (left, right) = (0.45 + 0.05 * v2, 0.45 + 0.05 * v3);
-    let height = [(0.0, 0.6 + 0.03 * v4), (left - 1.0, left), (1.0 - right, right)]
-        .iter()
-        .map(|&(c, r): &(f64, f64)| (r * r - (dx - c).powi(2)).max(0.0).sqrt() * half)
+    // Across the cloud in pixels from its middle; the puffs' centres.
+    let px = dx * cloud_half(n) * grow;
+    let r = PUFF_R * grow;
+    let height = (0..n)
+        .map(|i| (i as f64 - (n - 1) as f64 / 2.0) * 1.5 * r)
+        .map(|c| (r * r - (px - c).powi(2)).max(0.0).sqrt())
         .fold(0.0, f64::max);
-    Some((bottom - height, bottom))
+    // A little body under the puffs, so the cloud has a floor.
+    Some((bottom - height - 2.0 * grow, bottom))
 }
 
 /// The cloud's shadow at column `x`, straight below it on the land: an
 /// oval's top and bottom in pixel rows.
 fn shadow(x: f64, grow: f64) -> Option<(f64, f64)> {
-    let (dx, vary) = cloud_at(x, grow)?;
+    let (dx, _, vary) = cloud_at(x, grow)?;
     let centre = LAND_TOP + LAND_H * (0.72 + 0.06 * vary);
     let half = 6.0 * grow * (1.0 - dx * dx).sqrt();
     Some((centre - half, centre + half))
@@ -283,7 +293,7 @@ pub fn landscape_layers(since: impl Fn() -> Option<f64> + Clone + Send + 'static
         }
     })
     .swing(30.0, 9.0, Easing::EaseInOut)
-    .opacity(0.9);
+    .opacity(0.6);
     let shadow_since = since;
     let shadows = Layer::paint(move |c| {
         let Some(t) = shadow_since() else { return };
@@ -371,51 +381,43 @@ mod tests {
         }
     }
 
-    #[test]
-    fn clouds_are_puffy_on_top() {
-        // Per cloud: tall for its width, with a lump either side of a big
-        // middle one.
-        let mut cloud: Vec<(f64, f64)> = Vec::new();
-        for x in 0..400 {
-            let x = x as f64 + 0.5;
-            match puff(x, 1.0) {
-                Some((top, bottom)) => cloud.push((top, bottom)),
-                None if !cloud.is_empty() => {
-                    let tallest = cloud.iter().map(|(t, b)| b - t).fold(0.0, f64::max);
-                    assert!(tallest >= 0.25 * cloud.len() as f64, "{tallest} tall, {} wide", cloud.len());
-                    let tops: Vec<f64> = cloud.iter().map(|c| c.0).collect();
-                    let peaks = tops.windows(3).filter(|w| w[1] < w[0] && w[1] <= w[2]).count();
-                    assert_eq!(peaks, 3, "{tops:?}");
-                    cloud.clear();
-                }
+    /// Each cloud across 0..`width` pixels, as its (top, bottom) per
+    /// column (pixel rows).
+    fn cloud_tops(width: usize) -> Vec<Vec<(f64, f64)>> {
+        let (mut clouds, mut cloud) = (Vec::new(), Vec::new());
+        for x in 0..width {
+            match puff(x as f64 + 0.5, 1.0) {
+                Some(column) => cloud.push(column),
+                None if !cloud.is_empty() => clouds.push(std::mem::take(&mut cloud)),
                 None => {}
             }
+        }
+        clouds
+    }
+
+    /// The tops of a cloud's puffs: where its outline peaks.
+    fn peaks(cloud: &[(f64, f64)]) -> Vec<f64> {
+        cloud.windows(3).filter(|w| w[1].0 < w[0].0 && w[1].0 <= w[2].0).map(|w| w[1].0).collect()
+    }
+
+    #[test]
+    fn clouds_are_rows_of_equal_puffs() {
+        // Mario clouds: one, two or three round puffs, all as tall.
+        for cloud in cloud_tops(1200) {
+            let p = peaks(&cloud);
+            assert!((1..=3).contains(&p.len()), "{} puffs: {cloud:?}", p.len());
+            let (lo, hi) = p.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+            assert!(hi - lo < 0.5, "puffs not alike: {p:?}");
+            // Properly round: the puffs stand well up off the flat bottom.
+            assert!(cloud[0].1 - lo >= 6.0, "flat: {cloud:?}");
+            assert!(cloud.iter().all(|c| c.1 == cloud[0].1), "bottom not flat");
         }
     }
 
     #[test]
-    fn every_cloud_has_its_own_puffs() {
-        // Each cloud's three puffs: heights relative to the cloud's tallest.
-        let mut shapes: Vec<Vec<f64>> = Vec::new();
-        let mut cloud: Vec<f64> = Vec::new();
-        for x in 0..1200 {
-            match puff(x as f64 + 0.5, 1.0) {
-                Some((top, bottom)) => cloud.push(bottom - top),
-                None if !cloud.is_empty() => {
-                    let peaks: Vec<f64> = cloud.windows(3).filter(|w| w[1] > w[0] && w[1] >= w[2]).map(|w| w[1]).collect();
-                    let tallest = peaks.iter().cloned().fold(0.0, f64::max);
-                    shapes.push(peaks.iter().map(|p| p / tallest).collect());
-                    cloud.clear();
-                }
-                None => {}
-            }
-        }
-        assert!(shapes.len() >= 10);
-        // (The middle one is always the tallest: the sides vary against it.)
-        for i in [0, 2] {
-            let (lo, hi) = shapes.iter().map(|s| s[i]).fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
-            assert!(hi - lo > 0.1, "puff {i} the same in every cloud: {lo}..{hi}");
-        }
+    fn clouds_come_in_ones_twos_and_threes() {
+        let counts: std::collections::BTreeSet<usize> = cloud_tops(2400).iter().map(|t| peaks(t).len()).collect();
+        assert_eq!(counts, [1, 2, 3].into_iter().collect(), "{counts:?}");
     }
 
     #[test]
