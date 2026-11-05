@@ -8,20 +8,21 @@
 //!    (`AlphaIn` / `AlphaOut`).
 //! 3. "we've been expecting you" — in the terminal's own font, easing in
 //!    from the right, holding in the middle, easing out to the left.
-//! 4. "let's see if we can make this more entertaining, shall we?" — a
-//!    huge DYCP in the C64 letters, in colour, every letter on its own sine,
-//!    crossing a little above the scroller's line (the bass comes in with
-//!    it). It's a side scroller (`sides::Side`), painted with the scene,
-//!    and it may still be on its way out as "Welly well" comes in below.
+//! 4. "let's see if we can make this more entertaining, shall we?" — in
+//!    the terminal's own font too, in the letters' colours, the letters on
+//!    a rope: whipped down onto the table it slides in on a wave that dies
+//!    away until the line lies flat and still to be read; then another
+//!    crack of the whip runs a wave down it as it's yanked off to the left.
 //!
-//! Lines 1–3 are a library `Timeline` of cell effects on the scroller's
-//! line.
+//! All four are a library `Timeline` of cell effects around the
+//! scroller's line.
 
 use chromakopia::animate::framebuffer::FPS;
 use chromakopia::prelude::*;
 
+use chromakopia::animate::Cell;
+
 use super::glyphs;
-use super::sides::{self, Side};
 
 const LINE1: &str = "hey there";
 const LINE2: &str = "how nice of you to come along";
@@ -37,26 +38,32 @@ const STEP3_START: f64 = 8.2;
 const IN_SECS: f64 = 1.2;
 const HOLD_SECS: f64 = 1.2;
 const OUT_SECS: f64 = 0.8;
-/// Step 4, the DYCP, sets off on the fourth swell.
+/// Step 4, the whip, comes in on the fourth swell.
 pub const STEP4_START: f64 = 12.0;
 /// The fifth swell: the beat. The scroller sets off so that its first
 /// code — "Welly well" starting the beat — reaches the middle just
 /// before it, and the beat lands on this bar.
 pub const BEAT_AT: f64 = 16.0;
-/// Pixels above the scroller's glyph top the DYCP rides, and how far up
-/// and down it swings — clear of the scroller's line at its lowest.
-const DYCP_ABOVE: i64 = 34;
-const DYCP_AMP: f64 = 22.0;
+/// Step 4, the whip: seconds sliding in (the wave dying away as it
+/// comes), lying still, and being yanked out.
+const WHIP_IN: f64 = 1.0;
+const WHIP_HOLD: f64 = 1.8;
+const WHIP_OUT: f64 = 0.6;
+/// Rows the rope's wave reaches up and down at its biggest, how fast it
+/// dies away coming in (seconds), radians from one letter to the next,
+/// and how fast it runs along the rope (radians a second).
+const WHIP_AMP: f64 = 6.0;
+const WHIP_DAMP: f64 = 0.3;
+const WHIP_K: f64 = 0.35;
+const WHIP_RUN: f64 = 14.0;
 
 /// The cold open laid out for one screen.
 pub struct Intro {
-    /// Lines 1–3.
     pub timeline: Timeline,
-    /// Line 4, from `STEP4_START`.
-    pub dycp: Side,
     /// Seconds before the scroller starts.
     pub secs: f64,
-    /// Seconds until the last of it has gone (the DYCP may outlast `secs`).
+    /// Seconds until the last of it has gone (line 4 may still be on its
+    /// way out as the scroller sets off).
     pub shown: f64,
     /// When steps 2, 3 and 4 start — skip stops.
     pub marks: [f64; 3],
@@ -71,34 +78,88 @@ impl Intro {
         let row = (scroll_y.max(0) as usize + 4) / 2;
         let centred = |line: &str| text(line, glyphs::LETTER_HIGHLIGHT).pad(row, 0, 0, width.saturating_sub(line.len()) / 2);
         let step3_end = STEP3_START + IN_SECS + HOLD_SECS + OUT_SECS;
-        let timeline = Timeline::from_buffer(FrameBuffer::new(width, height), step3_end)
+        let step4_end = STEP4_START + WHIP_IN + WHIP_HOLD + WHIP_OUT;
+        let timeline = Timeline::from_buffer(FrameBuffer::new(width, height), step4_end)
             .at(STEP1.0..STEP1.1, centred(LINE1))
             .at(STEP2.0..STEP2.1, centred(LINE2))
             .at(STEP2.0..STEP2.0 + FADE_SECS, AlphaIn::new(FADE_SECS))
             .at(STEP2.1 - FADE_SECS..STEP2.1, AlphaOut::new(FADE_SECS))
-            .at(STEP3_START..step3_end, Slide { inner: Box::new(text(LINE3, glyphs::LETTER_HIGHLIGHT)), width, top: row as i64 });
-        let dycp = Side {
-            name: "intro",
-            text: LINE4,
-            y: scroll_y - DYCP_ABOVE,
-            // The C64's own letters on a huge wave: big enough that every
-            // letter moves nearly every frame — a small, slow one stalls
-            // and hops a pixel at a time. Two whole pixels a frame across,
-            // never a fraction: no stutter.
-            font: sides::Font::C64,
-            tone: (sides::CLOUD, 0.0),
-            opacity: 1.0,
-            speed: 2.0,
-            z: sides::z::SCROLLER,
-            amp: DYCP_AMP,
-            spread: 0.25,
-            period: 1.4,
-        };
+            .at(STEP3_START..step3_end, Slide { inner: Box::new(text(LINE3, glyphs::LETTER_HIGHLIGHT)), width, top: row as i64 })
+            .at(STEP4_START..step4_end, Whip { line: LINE4, width, row });
         // The scroller's first code reaches the middle half a screen after
         // it sets off (a pixel a frame); a hair before the beat's bar.
         let secs = (BEAT_AT - 0.05 - width as f64 / 2.0 / FPS).max(step3_end + 0.2);
-        let shown = (STEP4_START + dycp.secs(width)).max(secs);
-        Self { timeline, dycp, secs, shown, marks: [STEP2.0, STEP3_START, STEP4_START] }
+        let shown = step4_end.max(secs);
+        Self { timeline, secs, shown, marks: [STEP2.0, STEP3_START, STEP4_START] }
+    }
+}
+
+/// `line` as letters on a rope, on row `row` of a screen `width` wide:
+/// whipped in from the right on a wave that dies away until it lies flat
+/// in the middle, then cracked again and yanked off to the left.
+struct Whip {
+    line: &'static str,
+    width: usize,
+    row: usize,
+}
+
+impl Whip {
+    /// Left column of the line, `t` seconds in.
+    fn x(&self, t: f64) -> f64 {
+        let len = self.line.chars().count() as f64;
+        let (right, mid, gone) = (self.width as f64, (self.width as f64 - len) / 2.0, -len);
+        if t < WHIP_IN {
+            right + (mid - right) * Easing::EaseOut.apply(t / WHIP_IN)
+        } else if t < WHIP_IN + WHIP_HOLD {
+            mid
+        } else {
+            mid + (gone - mid) * Easing::EaseIn.apply(((t - WHIP_IN - WHIP_HOLD) / WHIP_OUT).min(1.0))
+        }
+    }
+
+    /// Rows letter `i` is off the line, `t` seconds in: the throw's wave
+    /// running down the rope and dying away, nothing while it lies still,
+    /// then the crack — a wave growing as it runs down from the handle
+    /// (the first letter) while the rope is pulled away.
+    fn lift(i: usize, t: f64) -> f64 {
+        let i = i as f64;
+        let out = t - WHIP_IN - WHIP_HOLD;
+        if out < 0.0 {
+            WHIP_AMP * (-t / WHIP_DAMP).exp() * (WHIP_K * i - WHIP_RUN * t).sin()
+        } else {
+            let p = (out / WHIP_OUT).min(1.0);
+            // The crack's front: letters past it haven't felt it yet.
+            let front = WHIP_RUN * out / WHIP_K;
+            if i > front {
+                return 0.0;
+            }
+            WHIP_AMP * p.sqrt() * (WHIP_K * (front - i)).sin()
+        }
+    }
+}
+
+impl Effect for Whip {
+    fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        let t = frame as f64 / FPS;
+        let x0 = self.x(t).round() as i64;
+        let palette = [glyphs::LETTER_UPPER, glyphs::LETTER_HIGHLIGHT, glyphs::LETTER_LOWER];
+        for (i, ch) in self.line.chars().enumerate() {
+            if ch == ' ' {
+                continue;
+            }
+            // The colour flows along the line.
+            let k = (i as f64 * 0.25 + t * 2.0).rem_euclid(palette.len() as f64);
+            let (a, b) = (palette[k as usize], palette[(k as usize + 1) % palette.len()]);
+            let color = Color::lerp_rgb(a, b, k.fract());
+            let (x, y) = (x0 + i as i64, self.row as i64 - Self::lift(i, t).round() as i64);
+            if x >= 0 && y >= 0 && (x as usize) < buf.width && (y as usize) < buf.height {
+                buf.set(x as usize, y as usize, Cell::new(ch, color));
+            }
+        }
+    }
+
+    fn size(&self) -> (usize, usize) {
+        (self.width, self.row + WHIP_AMP as usize + 1)
     }
 }
 
@@ -232,20 +293,34 @@ mod tests {
         assert_eq!(text_of(&frame_at(&intro, STEP4_START)), "");
     }
 
+    /// Rows the line's letters are on, `t` seconds into the cold open.
+    fn rows_at(intro: &Intro, t: f64) -> std::collections::BTreeSet<usize> {
+        let buf = frame_at(intro, t);
+        (0..H).filter(|&y| (0..W).any(|x| buf.get(x, y).ch != ' ')).collect()
+    }
+
     #[test]
-    fn step_four_is_a_dycp_crossing_above_the_scroller() {
+    fn step_four_is_whipped_in_lies_still_and_is_cracked_away() {
         let intro = Intro::new(W, H, SCROLL_Y);
-        assert_eq!(intro.dycp.text, LINE4);
-        assert!(intro.dycp.y + intro.dycp.amp as i64 + 8 < SCROLL_Y, "clear of the scroller's line");
-        assert!(intro.dycp.y - intro.dycp.amp as i64 >= 4, "clear of the top");
-        // No stutter: whole pixels across every frame, and a wave big
-        // enough that a letter at its fastest moves at least a pixel a frame.
-        assert_eq!(intro.dycp.speed.fract(), 0.0);
-        assert!(intro.dycp.amp * std::f64::consts::TAU / intro.dycp.period / FPS >= 1.0);
-        // It crosses once, from the fourth swell, and the cold open lasts
-        // until it's gone.
-        assert!((intro.shown - (STEP4_START + intro.dycp.secs(W))).abs() < 1e-9);
-        assert!(intro.dycp.crossing(1.0, W) && !intro.dycp.crossing(intro.shown - STEP4_START + 0.1, W));
+        let row = (SCROLL_Y as usize + 4) / 2;
+        // Coming in: the rope's wave spreads the letters over rows.
+        assert!(rows_at(&intro, STEP4_START + 0.15).len() >= 4, "{:?}", rows_at(&intro, STEP4_START + 0.15));
+        // Then it lies flat and still, whole and centred, to be read —
+        // for well over a second.
+        for t in [STEP4_START + WHIP_IN + 0.1, STEP4_START + WHIP_IN + WHIP_HOLD - 0.1] {
+            let buf = frame_at(&intro, t);
+            assert_eq!(line_at(&buf, LINE4), Some(((W - LINE4.len()) / 2, row)), "at {t}");
+        }
+        assert!(WHIP_HOLD >= 1.5);
+        // The crack: a wave again as it goes, and then gone.
+        let cracked = STEP4_START + WHIP_IN + WHIP_HOLD + 0.25;
+        assert!(rows_at(&intro, cracked).len() >= 3, "{:?}", rows_at(&intro, cracked));
+        assert_eq!(text_of(&frame_at(&intro, STEP4_START + WHIP_IN + WHIP_HOLD + WHIP_OUT + 0.05)), "");
+        // In colour: not all one.
+        let buf = frame_at(&intro, STEP4_START + WHIP_IN + 0.5);
+        let colours: std::collections::BTreeSet<(u8, u8, u8)> =
+            (0..W).map(|x| buf.get(x, row)).filter(|c| c.ch != ' ').map(|c| (c.color.r, c.color.g, c.color.b)).collect();
+        assert!(colours.len() > 3);
     }
 
     #[test]

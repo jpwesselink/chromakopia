@@ -237,7 +237,7 @@ impl Stage {
         let view = Arc::new(Mutex::new(script_view(&timeline, cold_open.shown, 0.0)));
         let scroller = Arc::new(scroller::Scroller::new(placed.glyphs.clone(), SCROLLER_Y));
         let ride = looping::ride(&placed.glyphs, screen_w);
-        let layers = build_layers(screen_w, view.clone(), steps.clone(), scroller.clone(), ride, cold_open.dycp);
+        let layers = build_layers(screen_w, view.clone(), steps.clone(), scroller.clone(), ride);
         let heading = build_heading(view.clone());
         Self {
             steps,
@@ -415,7 +415,6 @@ fn build_layers(
     steps: Vec<Step>,
     scroller: Arc<scroller::Scroller>,
     ride: Option<(f64, f64)>,
-    dycp: sides::Side,
 ) -> Layers {
     let word = wordmark::Wordmark::placed(screen_w);
     // Baseline high enough that the scroller's wave plus extrusion stays on screen.
@@ -452,16 +451,6 @@ fn build_layers(
         Layer::paint(move |c| {
             let view = *scroll_view.lock().unwrap();
             scroller.paint_dived(c, view.scroll, view.dive.zoom)
-        }),
-    ));
-    // The cold open's last line, a DYCP, from its swell on.
-    let intro_view = side_view.clone();
-    layers.push((
-        dycp.z,
-        Layer::paint(move |c| {
-            if let Some(t) = intro_view.lock().unwrap().intro {
-                dycp.paint(c, t - intro::STEP4_START);
-            }
         }),
     ));
     // Side scrollers, each at its own depth and see-through as it says.
@@ -1020,16 +1009,18 @@ mod tests {
     }
 
     #[test]
-    fn pads_four_times_the_bass_with_the_dycp_then_the_beat_on_welly_well() {
+    fn pads_alone_then_the_808_on_welly_well_then_the_bass_with_the_colour() {
         for w in [100, 160, 260] {
             let stage = Stage::new(w);
             let session = music::Session::new(&stage.timeline);
-            // The pad from the start, nothing else for three swells.
-            assert!(session.plays(0.0, "pad") && !session.plays(intro::STEP4_START - 0.1, "bass"));
-            // The bass with the DYCP, on the fourth swell.
-            assert!(session.plays(intro::STEP4_START, "bass"), "w {w}");
-            // The beat exactly on the fifth: "Welly well" in the middle.
-            assert!(!session.plays(intro::BEAT_AT - 0.01, "drums") && session.plays(intro::BEAT_AT, "drums"), "w {w}");
+            // The pad alone through the cold open.
+            assert!(session.plays(0.0, "pad") && !session.plays(intro::BEAT_AT - 0.01, "drums"));
+            // The 808 exactly on the fifth swell: "Welly well" in the middle.
+            assert!(session.plays(intro::BEAT_AT, "drums"), "w {w}");
+            // The bass not yet; it comes with the coloured text, by the logo.
+            assert!(!session.plays(intro::BEAT_AT + 0.5, "bass"), "w {w}");
+            let logo = first_cue(&stage, script::Code::Logo);
+            assert!(session.plays(logo + 2.0, "bass"), "w {w}");
         }
     }
 
@@ -1065,15 +1056,13 @@ mod tests {
     }
 
     #[test]
-    fn the_dycp_crosses_with_the_scene() {
+    fn the_dycp_line_is_on_screen_on_its_swell() {
         let stage = Stage::new(160);
         stage.seek_to(intro::STEP4_START + 2.0);
         let mut buf = FrameBuffer::new(160, ROWS);
         stage.render(&mut buf, 0);
-        // Its letters in pixels above the scroller's line.
-        let row = ((stage.intro.dycp.y + 4) / 2) as usize;
-        let ink = (row.saturating_sub(4)..row + 4).flat_map(|y| (0..160).map(move |x| (x, y))).filter(|&(x, y)| matches!(buf.get(x, y).ch, '▀' | '▄')).count();
-        assert!(ink > 50, "only {ink} cells of DYCP");
+        let letters = (0..ROWS).flat_map(|y| (0..160).map(move |x| (x, y))).filter(|&(x, y)| buf.get(x, y).ch.is_ascii_alphabetic()).count();
+        assert!(letters > 40, "only {letters} letters");
     }
 
     #[test]
@@ -1377,12 +1366,14 @@ mod tests {
         assert_eq!(next(0).intro, Some(stage.intro.marks[2]));
         let v = next(0);
         assert_eq!(v.hills, None);
-        // Then the hills come in.
+        // Then the hills come in (and the 808 is launched).
         let v = next(0);
         assert_eq!((v.hills, v.logo), (Some(0.0), LogoPhase::Hidden));
+        // The bass's code, with the coloured text.
+        assert_eq!(next(0).logo, LogoPhase::Hidden);
         // Then the logo drops — and the jump sticks: a second later it's a second in.
-        assert_eq!(next(60).logo, LogoPhase::Enter(0.0));
-        assert_eq!(stage.view_at(120).logo, LogoPhase::Enter(1.0));
+        assert_eq!(next(0).logo, LogoPhase::Enter(0.0));
+        assert_eq!(stage.view_at(60).logo, LogoPhase::Enter(1.0));
     }
 
     #[test]

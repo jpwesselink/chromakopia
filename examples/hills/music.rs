@@ -60,9 +60,8 @@ pub struct Clip {
 /// What the scroll text calls each track, in track order.
 const TRACK_NAMES: [&str; 9] = ["pad", "bells", "303", "drums", "mallets", "marimba", "303b", "bass", "toy"];
 /// The cold open's music, before any code: (track, loop, seconds) — the
-/// pad from the start, the bass joining as the cold open's DYCP sets off
-/// (`intro::STEP4_START`).
-const OPENING: [(&str, Option<&str>, f64); 2] = [("pad", None, 0.0), ("bass", None, super::intro::STEP4_START)];
+/// pad, from the start.
+const OPENING: [(&str, Option<&str>, f64); 1] = [("pad", None, 0.0)];
 
 /// A PAL C64's clock, cycles a second.
 const CLOCK: u32 = 985_248;
