@@ -20,6 +20,7 @@ mod layout;
 mod looping;
 mod music;
 mod orbital3;
+mod reverb;
 mod panel;
 mod script;
 mod scroller;

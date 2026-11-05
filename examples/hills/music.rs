@@ -7,13 +7,17 @@
 //! | chip | voice 1 | voice 2 | voice 3 | filter |
 //! |---|---|---|---|---|
 //! | A, centre | 303 | — | thud bass | the 303's acid |
-//! | B, left | second 303, quieter | bells, arpeggiated | mallets | the second 303's |
-//! | C, right | pad, low note | pad, the rest | the mallets' echo | — |
+//! | B, left | second 303, quieter | mallets, soft | mallets, soft | the second 303's |
+//! | C, right | pad | pad | pad | a slow, low pass |
+//!
+//! Chip C is one soft pad: the slow pad's notes and the bells' chords,
+//! a note to a voice, slow in and slow out, through its own low-pass.
 
 use resid::{ChipModel, SamplingMethod, Sid};
 
 use super::drums::{Drum, Kit};
 use super::orbital3::{BEATS, BPM, NOTES};
+use super::reverb::Reverb;
 
 /// One note of the arrangement.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -38,10 +42,21 @@ const TICKS: u32 = 200;
 const ARP: u64 = 4;
 /// How many SIDs.
 const CHIPS: usize = 3;
-/// Each chip's share of the left and right channel.
-const PAN: [(f32, f32); CHIPS] = [(0.5, 0.5), (0.65, 0.35), (0.35, 0.65)];
+/// Each chip's share of the left and right channel — the pad chip
+/// kept back.
+const PAN: [(f32, f32); CHIPS] = [(0.5, 0.5), (0.65, 0.35), (0.15, 0.27)];
 /// The 808's level next to the chips (it sits in the middle).
 const KIT: f32 = 0.35;
+/// How much of each chip, and of the 808, goes into the hall — the pad
+/// most, the bass hardly — and how loud the hall comes back.
+const SEND: [f32; CHIPS] = [0.08, 0.35, 0.45];
+const KIT_SEND: f32 = 0.12;
+const WET: f32 = 0.9;
+/// The pad chip's filter at rest: resonance 2, all three voices.
+const PAD_FILTER: u8 = 0x27;
+const PAD_CUTOFF: u16 = 0x230;
+/// Beats a bells chord holds as a pad, so the chords run into each other.
+const CHORD_BEATS: f64 = 2.0;
 
 // The tracks, by index into `TRACKS`.
 const PAD: u8 = 0;
@@ -51,13 +66,9 @@ const DRUMS: u8 = 3;
 const MALLETS: u8 = 4;
 const ACID_HIGH: u8 = 6;
 const THUD: u8 = 7;
-/// Tracks left out of the mix: both bell leads (and so the mallets'
-/// echo). Their voices stay wired — take a track off to bring it back.
-const MUTED: [u8; 2] = [BELLS, MALLETS];
-/// Not a track: the mallets again, later and quieter.
-const ECHO: u8 = 100;
-/// Ticks the echo comes after: a dotted eighth.
-const ECHO_DELAY: u64 = 75;
+/// Tracks left out of the mix (none just now); put a track here to
+/// silence it.
+const MUTED: [u8; 0] = [];
 
 // SID registers: voice `v`'s are at 7·v.
 const FREQ: u8 = 0;
@@ -83,9 +94,8 @@ const A3: Slot = (0, 2);
 const B1: Slot = (1, 0);
 const B2: Slot = (1, 1);
 const B3: Slot = (1, 2);
-const C1: Slot = (2, 0);
-const C2: Slot = (2, 1);
-const C3: Slot = (2, 2);
+/// The pad chip's three voices.
+const PADS: [Slot; 3] = [(2, 0), (2, 1), (2, 2)];
 
 /// The SID's frequency register for MIDI `key`.
 fn freq(key: f64) -> u16 {
@@ -110,6 +120,8 @@ struct Held {
     note: Note,
     start: u64,
     end: u64,
+    /// Which of its track's voices it goes to, where they take turns.
+    turn: u8,
 }
 
 /// What a voice is playing: which note (for retriggering) and since when.
@@ -135,8 +147,8 @@ pub struct Player {
     /// Next note to start.
     next: usize,
     held: Vec<Held>,
-    /// Echo notes waiting for their turn.
-    later: Vec<Held>,
+    /// Mallet notes started, for taking turns between their two voices.
+    mallets: u8,
     voices: [[Option<Playing>; 3]; CHIPS],
     /// Drums struck this tick, for the 808.
     pub strikes: Vec<(Drum, u8)>,
@@ -155,7 +167,7 @@ fn ticks(beats: f64) -> u64 {
 
 impl Player {
     pub fn new() -> Self {
-        Player { tick: 0, next: 0, held: Vec::new(), later: Vec::new(), voices: [[None; 3]; CHIPS], strikes: Vec::new(), solo: None }
+        Player { tick: 0, next: 0, held: Vec::new(), mallets: 0, voices: [[None; 3]; CHIPS], strikes: Vec::new(), solo: None }
     }
 
     /// Ticks in the whole song.
@@ -171,10 +183,12 @@ impl Player {
         let now = self.tick;
         if now == 0 {
             for chip in 0..CHIPS {
-                // Volume up, low-pass, nothing filtered yet.
+                // Volume up, low-pass, nothing filtered yet...
                 sid.poke(chip, MODE_VOL, 0x1F);
                 sid.poke(chip, RES_FILT, 0x00);
             }
+            // ...but the pad chip, all three voices, gently.
+            sid.poke(PADS[0].0, RES_FILT, PAD_FILTER);
         }
         while self.next < NOTES.len() && ticks(NOTES[self.next].at) <= now {
             let note = NOTES[self.next];
@@ -191,39 +205,49 @@ impl Player {
                 self.strikes.extend(Drum::on(note.key).map(|d| (d, note.vel)));
                 continue;
             }
-            let held = Held { note, start: now, end: ticks(note.at + note.len).max(now + 1) };
-            self.held.push(held);
+            let mut turn = 0;
             if note.track == MALLETS {
-                let echo = Note { track: ECHO, ..note };
-                self.later.push(Held { note: echo, start: now + ECHO_DELAY, end: held.end + ECHO_DELAY });
+                turn = self.mallets % 2;
+                self.mallets = self.mallets.wrapping_add(1);
             }
+            let mut end = ticks(note.at + note.len).max(now + 1);
+            if note.track == BELLS {
+                end = end.max(now + ticks(CHORD_BEATS));
+            }
+            self.held.push(Held { note, start: now, end, turn });
         }
-        let (due, wait): (Vec<Held>, Vec<Held>) = self.later.iter().partition(|h| h.start <= now);
-        self.later = wait;
-        self.held.extend(due);
         self.held.retain(|h| h.end > now);
 
         self.acid(sid, A1, ACID, 1.0, Patch { wave: SAW, ad: 0x08, sr: 0xA0 }, now);
         // The second 303: quieter — a lower sustain, its filter opening
         // less far.
         self.acid(sid, B1, ACID_HIGH, 0.45, Patch { wave: SAW, ad: 0x06, sr: 0x50 }, now);
-        let keys = |track: u8, shift: u8| -> Vec<(u8, u64)> { self.keys(track, shift) };
-        let (thud, bells, mallets, pad, echo) = (keys(THUD, 0), keys(BELLS, 20), keys(MALLETS, 12), keys(PAD, 12), keys(ECHO, 12));
+        let thud = self.keys(|h| h.note.track == THUD, 0);
         self.tone(sid, A3, &thud, Patch { wave: TRI, ad: 0x09, sr: 0x00 }, now);
-        self.tone(sid, B2, &bells, Patch { wave: PULSE, ad: 0x09, sr: 0x00 }, now);
-        self.tone(sid, B3, &mallets, Patch { wave: TRI, ad: 0x0A, sr: 0x00 }, now);
-        // The pad's lowest note on one voice, the rest on the next.
-        let (low, rest) = pad.split_at(pad.len().min(1));
-        self.tone(sid, C1, low, Patch { wave: PULSE, ad: 0x8A, sr: 0xA9 }, now);
-        self.tone(sid, C2, rest, Patch { wave: PULSE, ad: 0x8A, sr: 0xA9 }, now);
-        self.tone(sid, C3, &echo, Patch { wave: TRI, ad: 0x0A, sr: 0x00 }, now);
+        // The mallets, soft: triangles taking turns, each note ringing
+        // out under the next.
+        for (turn, slot) in [B2, B3].into_iter().enumerate() {
+            let keys = self.keys(|h| h.note.track == MALLETS && h.turn == turn as u8, 12);
+            self.pad(sid, &[slot], &keys, Patch { wave: TRI, ad: 0x68, sr: 0x9A }, now);
+        }
+        // The pad: the slow pad's notes and the bells' chords together,
+        // a note to a voice.
+        let mut chord = self.keys(|h| h.note.track == PAD, 12);
+        chord.extend(self.keys(|h| h.note.track == BELLS, 24));
+        chord.sort_unstable();
+        chord.dedup_by_key(|k| k.0);
+        self.pad(sid, &PADS, &chord, Patch { wave: PULSE, ad: 0xA0, sr: 0x9B }, now);
+        // Its filter breathes, slowly.
+        let fc = (PAD_CUTOFF as f64 + 0x90 as f64 * (now as f64 / 400.0).sin()) as u16;
+        sid.poke(PADS[0].0, FC_LO, (fc & 7) as u8);
+        sid.poke(PADS[0].0, FC_HI, (fc >> 3) as u8);
         self.tick += 1;
     }
 
-    /// `track`'s sounding keys, `shift` semitones up, lowest first, each
-    /// with the tick it started.
-    fn keys(&self, track: u8, shift: u8) -> Vec<(u8, u64)> {
-        let mut keys: Vec<(u8, u64)> = self.held.iter().filter(|h| h.note.track == track).map(|h| (h.note.key + shift, h.start)).collect();
+    /// The sounding keys of the held notes `which` picks, `shift`
+    /// semitones up, lowest first, each with the tick it started.
+    fn keys(&self, which: impl Fn(&Held) -> bool, shift: u8) -> Vec<(u8, u64)> {
+        let mut keys: Vec<(u8, u64)> = self.held.iter().filter(|h| which(h)).map(|h| (h.note.key + shift, h.start)).collect();
         keys.sort_unstable();
         keys.dedup_by_key(|k| k.0);
         keys
@@ -284,6 +308,33 @@ impl Player {
         sid.poke(chip, RES_FILT, 0xC0 | 1 << slot.1);
     }
 
+    /// Soft voices: `keys` one to a slot, lowest first (any beyond the
+    /// slots left out). A slot that goes from silence to a note fades in
+    /// with the patch's attack — no hard restart, nothing snaps; one whose
+    /// note changes just changes pitch; one left without a note fades out
+    /// with the patch's release. Each slot's pulse width drifts on its own.
+    fn pad(&mut self, sid: &mut impl Regs, slots: &[Slot], keys: &[(u8, u64)], patch: Patch, now: u64) {
+        for (i, &(chip, v)) in slots.iter().enumerate() {
+            let Some(&(key, start)) = keys.get(i) else {
+                self.release(sid, (chip, v), patch.wave);
+                continue;
+            };
+            let base = 7 * v;
+            if self.voices[chip][v as usize].is_none() {
+                sid.poke(chip, base + AD, patch.ad);
+                sid.poke(chip, base + SR, patch.sr);
+                sid.poke(chip, base + CTRL, patch.wave | GATE);
+            }
+            self.voices[chip][v as usize] = Some(Playing { track: 0, key, start });
+            let f = freq(key as f64);
+            sid.poke(chip, base + FREQ, f as u8);
+            sid.poke(chip, base + FREQ + 1, (f >> 8) as u8);
+            let pw = 0x600 + ((now as f64 / 90.0 + i as f64 * 2.1).sin() * 0x280 as f64) as i32;
+            sid.poke(chip, base + PW, pw as u8);
+            sid.poke(chip, base + PW + 1, (pw >> 8) as u8 & 0x0F);
+        }
+    }
+
     /// `keys` on `slot`: one held, several arpeggiated; retriggered when
     /// the first of them is new.
     fn tone(&mut self, sid: &mut impl Regs, slot: Slot, keys: &[(u8, u64)], patch: Patch, now: u64) {
@@ -314,6 +365,7 @@ pub struct Synth {
     /// Each chip's samples for the current tick.
     buffers: [Vec<i16>; CHIPS],
     kit: Kit,
+    hall: Reverb,
     read: usize,
     /// Cycles owed to the chips, in 1/TICKS of a cycle.
     carry: u32,
@@ -321,12 +373,18 @@ pub struct Synth {
 
 impl Synth {
     pub fn new(sample_rate: u32) -> Self {
-        let sids = std::array::from_fn(|_| {
+        let sids = std::array::from_fn(|chip| {
             let mut sid = Sid::new(ChipModel::Mos6581);
             sid.set_sampling_parameters(SamplingMethod::Fast, CLOCK, sample_rate);
-            // Volume up and a tenth of a second to settle, unheard: the
-            // 6581 pops when its volume jumps, so it mustn't jump on air.
+            // Volume up (and the pad chip's filter on) and a tenth of a
+            // second to settle, unheard: the 6581 pops when its volume or
+            // filter routing jumps, so they mustn't jump on air.
             sid.write(MODE_VOL, 0x1F);
+            if chip == PADS[0].0 {
+                sid.write(RES_FILT, PAD_FILTER);
+                sid.write(FC_LO, (PAD_CUTOFF & 7) as u8);
+                sid.write(FC_HI, (PAD_CUTOFF >> 3) as u8);
+            }
             let mut scratch = [0i16; 1024];
             let mut left = CLOCK / 10;
             while left > 0 {
@@ -334,7 +392,7 @@ impl Synth {
             }
             sid
         });
-        Synth { sids, player: Player::new(), buffers: Default::default(), kit: Kit::new(sample_rate), read: 0, carry: 0 }
+        Synth { sids, player: Player::new(), buffers: Default::default(), kit: Kit::new(sample_rate), hall: Reverb::new(sample_rate, 0.85, 0.5), read: 0, carry: 0 }
     }
 
     #[cfg(test)]
@@ -366,15 +424,18 @@ impl Synth {
                 }
             }
         }
-        let (mut l, mut r) = (0.0, 0.0);
-        for (buffer, (pl, pr)) in self.buffers.iter().zip(PAN) {
-            let s = buffer[self.read] as f32 / 32_768.0;
+        let (mut l, mut r, mut send) = (0.0, 0.0, 0.0);
+        for ((buffer, (pl, pr)), to_hall) in self.buffers.iter().zip(PAN).zip(SEND) {
+            let s = buffer[self.read] as f32 / 32_768.0 * 2.0;
             l += s * pl;
             r += s * pr;
+            send += s * to_hall;
         }
         let kit = self.kit.next() * KIT;
+        send += kit * KIT_SEND;
+        let (hall_l, hall_r) = self.hall.run(send);
         self.read += 1;
-        ((l * 2.0 + kit).tanh(), (r * 2.0 + kit).tanh())
+        ((l + kit + hall_l * WET).tanh(), (r + kit + hall_r * WET).tanh())
     }
 
     /// The next sample, both channels together (tests measure this).
@@ -532,22 +593,6 @@ mod tests {
     }
 
     #[test]
-    fn the_mallets_echo_a_dotted_eighth_later() {
-        let mut p = Player::new().only(MALLETS);
-        let mut book = Book([[0; 32]; CHIPS]);
-        let first = (first_secs(MALLETS) * TICKS as f64).round() as u64;
-        let gated = |b: &Book, (chip, v): Slot| b.0[chip][7 * v as usize + CTRL as usize] & GATE != 0;
-        for _ in 0..first + 2 {
-            p.tick(&mut book);
-        }
-        assert!(gated(&book, B3) && !gated(&book, C3));
-        for _ in 0..ECHO_DELAY {
-            p.tick(&mut book);
-        }
-        assert!(gated(&book, C3));
-    }
-
-    #[test]
     fn the_song_starts_over() {
         let mut p = Player::new();
         let mut book = Book([[0; 32]; CHIPS]);
@@ -559,15 +604,26 @@ mod tests {
     }
 
     #[test]
-    fn the_bell_leads_are_out_of_the_mix() {
+    fn the_pad_is_a_slow_soft_chord() {
         let mut p = Player::new();
         let mut book = Book([[0; 32]; CHIPS]);
-        for _ in 0..Player::length() {
+        // Beat 66.5: the slow pad and the bells' chords both play.
+        for _ in 0..=ticks(66.5) {
             p.tick(&mut book);
-            for (chip, v) in [B2, B3, C3] {
-                assert_eq!(book.0[chip][7 * v as usize + CTRL as usize] & GATE, 0, "voice ({chip}, {v}) plays at tick {}", p.tick);
-            }
         }
+        let regs = &book.0[PADS[0].0];
+        let gated: Vec<u16> = (0..3)
+            .filter(|v| regs[7 * v + CTRL as usize] & GATE != 0)
+            .map(|v| u16::from_le_bytes([regs[7 * v], regs[7 * v + 1]]))
+            .collect();
+        assert_eq!(gated.len(), 3, "a chord on all three voices: {gated:?}");
+        assert!(gated[0] != gated[1] && gated[1] != gated[2], "three different notes: {gated:?}");
+        for v in 0..3 {
+            // Attack at least half a second, release over two.
+            assert!(regs[7 * v + AD as usize] >> 4 >= 0xA && regs[7 * v + SR as usize] & 0x0F >= 0xB);
+        }
+        // Through the chip's own low-pass.
+        assert_eq!(regs[RES_FILT as usize] & 0x07, 0x07);
     }
 
     #[test]
@@ -590,7 +646,9 @@ mod tests {
     #[test]
     fn every_track_sounds_when_it_plays() {
         for track in VOICED {
-            let s = render(Synth::new(RATE).solo(track), first_secs(track), 2.0);
+            // The drums open on quiet hats: hear them in the full groove.
+            let from = if track == DRUMS { 40.0 } else { first_secs(track) };
+            let s = render(Synth::new(RATE).solo(track), from, 2.0);
             assert!(rms(&s) > 0.01, "{} is silent: {}", TRACKS[track as usize].0, rms(&s));
         }
     }
