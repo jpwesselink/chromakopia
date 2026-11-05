@@ -11,7 +11,7 @@
 //! 4. "let's see if we can make this more entertaining, shall we?" — in
 //!    the terminal's own font too, in the letters' colours, coming in from
 //!    above like the greetings' long wave: letter after letter drops from
-//!    the top and eases down onto the line, so the line rolls down the
+//!    the top and bounces on the line before it settles, so the line rolls down the
 //!    screen as one long wave; it lies still to be read; then the wave
 //!    rolls back up and off, right to left, clearing the way for the
 //!    scroller coming in from the right.
@@ -51,7 +51,7 @@ pub const BEAT_AT: f64 = 16.0;
 /// the step it lies still until; then seconds between one letter lifting
 /// off (from the right) and the next, and each letter's rise.
 const DROP_STAGGER: f64 = 0.008;
-const DROP_FALL: f64 = 0.8;
+const DROP_FALL: f64 = 1.0;
 const DROP_REST: f64 = 2.7;
 const RISE_STAGGER: f64 = 0.006;
 const RISE: f64 = 0.5;
@@ -123,8 +123,8 @@ impl Drop {
             // Lifting off: slow, then away, past the top.
             row - (row - top + 2.0) * rise.min(1.0).powi(3)
         } else {
-            // Falling: fast from the top, easing onto the line.
-            top + (row - top) * (1.0 - (1.0 - fall.min(1.0)).powi(3))
+            // Falling from the top and bouncing on the line before it settles.
+            top + (row - top) * Easing::BounceOut.apply(fall.min(1.0))
         };
         (y >= 0.0).then_some(y)
     }

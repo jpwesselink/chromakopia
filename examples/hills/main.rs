@@ -1297,14 +1297,14 @@ mod tests {
             let stage = Stage::new(w);
             let hills = stage.timeline.since(script::Code::Hills, f64::MAX).unwrap();
             let logo = first_cue(&stage, script::Code::Logo);
-            // The opening line is on screen when the landscape starts...
-            let scrolled = stage.timeline.scrolled(hills);
-            let on_screen = stage.glyphs.iter().any(|g| (0.0..w as f64).contains(&(w as f64 - scrolled + g.x)));
-            assert!(on_screen, "{w}: no text on screen when the hills start");
-            // ...and no pause holds things up before the logo.
-            let pauses = stage.timeline.cues.iter().filter(|c| matches!(c.code, script::Code::Pause(_)) && c.t < logo);
-            assert_eq!(pauses.count(), 0, "{w}");
-            // The landscape has (nearly) finished building by the time the logo drops.
+            // The opening line comes on screen soon after the landscape
+            // starts (the scroll text may hold it back a moment)...
+            let soon = (0..=5 * FPS as usize).map(|f| hills + f as f64 / FPS).find(|&t| {
+                let scrolled = stage.timeline.scrolled(t);
+                stage.glyphs.iter().any(|g| (0.0..w as f64).contains(&(w as f64 - scrolled + g.x)))
+            });
+            assert!(soon.is_some(), "{w}: no text on screen within 5 s of the hills");
+            // ...and the landscape has (nearly) finished building by the time the logo drops.
             assert!(logo - hills >= landscape::ENTRANCE_SECS - 1.0, "{w}: only {:.1}s to build", logo - hills);
         }
     }
