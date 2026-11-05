@@ -9,12 +9,10 @@
 //! 3. "we've been expecting you" — in the terminal's own font, easing in
 //!    from the right, holding in the middle, easing out to the left.
 //! 4. "let's see if we can make this more entertaining, shall we?" — in
-//!    the terminal's own font too, in the letters' colours, coming in from
-//!    above like the greetings' long wave: letter after letter drops from
-//!    the top and bounces on the line before it settles, so the line rolls down the
-//!    screen as one long wave; it lies still to be read; then the wave
-//!    rolls back up and off, right to left, clearing the way for the
-//!    scroller coming in from the right.
+//!    the terminal's own font too, in the letters' colours: sliding in from
+//!    the right on a DYCP wave that dies down as it arrives, lying still in
+//!    the middle to be read, then sliding off to the left as the wave
+//!    swells again.
 //!
 //! All four are a library `Timeline` of cell effects around the
 //! scroller's line.
@@ -46,17 +44,17 @@ pub const STEP4_START: f64 = 12.0;
 /// code — "Welly well" starting the beat — reaches the middle just
 /// before it, and the beat lands on this bar.
 pub const BEAT_AT: f64 = 16.0;
-/// Step 4, the long wave: seconds between one letter setting off from the
-/// top and the next, and each letter's fall onto the line; seconds into
-/// the step it lies still until; then seconds between one letter lifting
-/// off (from the right) and the next, and each letter's rise.
-const DROP_STAGGER: f64 = 0.008;
-const DROP_FALL: f64 = 1.0;
-const DROP_REST: f64 = 2.7;
-const RISE_STAGGER: f64 = 0.006;
-const RISE: f64 = 0.5;
-/// The row the letters fall from: just under the screen's top border.
-const DROP_TOP: f64 = 1.0;
+/// Step 4, the DYCP: seconds sliding in (the wave dying down), lying
+/// still, sliding out (the wave swelling).
+const SWAY_IN: f64 = 1.2;
+const SWAY_HOLD: f64 = 1.6;
+const SWAY_OUT: f64 = 0.8;
+/// The wave: rows up and down at its biggest, radians from one letter to
+/// the next (gentle enough that neighbours are never more than a row
+/// apart: one wave, not scattered letters), and seconds a swing.
+const SWAY_AMP: f64 = 3.0;
+const SWAY_SPREAD: f64 = 0.22;
+const SWAY_PERIOD: f64 = 0.8;
 
 /// The cold open laid out for one screen.
 pub struct Intro {
@@ -79,14 +77,14 @@ impl Intro {
         let row = (scroll_y.max(0) as usize + 4) / 2;
         let centred = |line: &str| text(line, glyphs::LETTER_HIGHLIGHT).pad(row, 0, 0, width.saturating_sub(line.len()) / 2);
         let step3_end = STEP3_START + IN_SECS + HOLD_SECS + OUT_SECS;
-        let step4_end = STEP4_START + Drop::secs(LINE4.chars().count());
+        let step4_end = STEP4_START + SWAY_IN + SWAY_HOLD + SWAY_OUT;
         let timeline = Timeline::from_buffer(FrameBuffer::new(width, height), step4_end)
             .at(STEP1.0..STEP1.1, centred(LINE1))
             .at(STEP2.0..STEP2.1, centred(LINE2))
             .at(STEP2.0..STEP2.0 + FADE_SECS, AlphaIn::new(FADE_SECS))
             .at(STEP2.1 - FADE_SECS..STEP2.1, AlphaOut::new(FADE_SECS))
             .at(STEP3_START..step3_end, Slide { inner: Box::new(text(LINE3, glyphs::LETTER_HIGHLIGHT)), width, top: row as i64 })
-            .at(STEP4_START..step4_end, Drop { line: LINE4, width, row });
+            .at(STEP4_START..step4_end, Sway { line: LINE4, width, row });
         // The scroller's first code reaches the middle half a screen after
         // it sets off (a pixel a frame); a hair before the beat's bar.
         let secs = (BEAT_AT - 0.05 - width as f64 / 2.0 / FPS).max(step3_end + 0.2);
@@ -95,38 +93,46 @@ impl Intro {
     }
 }
 
-/// `line` centred on row `row` of a screen `width` wide, coming in from
-/// above on a long wave — letter after letter falling from the top and
-/// easing down onto the line — lying still, then rising back up and off,
-/// right to left.
-struct Drop {
+/// `line` on row `row` of a screen `width` wide, as a DYCP: sliding in
+/// from the right on a wave that dies down as it arrives, lying still in
+/// the middle, sliding off to the left as the wave swells again.
+struct Sway {
     line: &'static str,
     width: usize,
     row: usize,
 }
 
-impl Drop {
-    /// Seconds from the first letter setting off to the last one gone.
-    fn secs(len: usize) -> f64 {
-        DROP_REST + len.saturating_sub(1) as f64 * RISE_STAGGER + RISE
+impl Sway {
+    /// Left column of the line, `t` seconds in.
+    fn x(&self, t: f64) -> f64 {
+        let len = self.line.chars().count() as f64;
+        let (right, mid, gone) = (self.width as f64, (self.width as f64 - len) / 2.0, -len);
+        if t < SWAY_IN {
+            right + (mid - right) * Easing::EaseOut.apply(t / SWAY_IN)
+        } else if t < SWAY_IN + SWAY_HOLD {
+            mid
+        } else {
+            mid + (gone - mid) * Easing::EaseIn.apply(((t - SWAY_IN - SWAY_HOLD) / SWAY_OUT).min(1.0))
+        }
     }
 
-    /// Row of letter `i` of `len`, `t` seconds in (None: off the top).
-    fn y(&self, i: usize, len: usize, t: f64) -> Option<f64> {
-        let (top, row) = (DROP_TOP, self.row as f64);
-        let fall = (t - i as f64 * DROP_STAGGER) / DROP_FALL;
-        if fall < 0.0 {
-            return None;
-        }
-        let rise = (t - DROP_REST - (len - 1 - i) as f64 * RISE_STAGGER) / RISE;
-        let y = if rise > 0.0 {
-            // Lifting off: slow, then away, past the top.
-            row - (row - top + 2.0) * rise.min(1.0).powi(3)
+    /// How big the wave is, 0–1, `t` seconds in.
+    fn swell(t: f64) -> f64 {
+        if t < SWAY_IN {
+            // Waving all the way in, settling only as it arrives.
+            (1.0 - t / SWAY_IN).max(0.0).sqrt()
+        } else if t < SWAY_IN + SWAY_HOLD {
+            0.0
         } else {
-            // Falling from the top and bouncing on the line before it settles.
-            top + (row - top) * Easing::BounceOut.apply(fall.min(1.0))
-        };
-        (y >= 0.0).then_some(y)
+            // Swelling quickly, so it waves the moment it moves.
+            ((t - SWAY_IN - SWAY_HOLD) / SWAY_OUT).clamp(0.0, 1.0).sqrt()
+        }
+    }
+
+    /// Rows letter `i` rides off the line, `t` seconds in.
+    fn lift(i: usize, t: f64) -> f64 {
+        let swing = (std::f64::consts::TAU * t / SWAY_PERIOD + i as f64 * SWAY_SPREAD).sin();
+        SWAY_AMP * Self::swell(t) * swing
     }
 
     /// Letter `i`'s colour: a calm run along the line, pink to cream to
@@ -141,22 +147,21 @@ impl Drop {
     }
 }
 
-impl Effect for Drop {
+impl Effect for Sway {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
         let t = frame as f64 / FPS;
         let len = self.line.chars().count();
-        let x0 = self.width.saturating_sub(len) / 2;
+        let x0 = self.x(t).round() as i64;
         for (i, ch) in self.line.chars().enumerate() {
-            let Some(y) = self.y(i, len, t) else { continue };
-            let (x, y) = (x0 + i, y.round() as usize);
-            if ch != ' ' && x < buf.width && y < buf.height {
-                buf.set(x, y, Cell::new(ch, Self::colour(i, len)));
+            let (x, y) = (x0 + i as i64, self.row as i64 - Self::lift(i, t).round() as i64);
+            if ch != ' ' && x >= 0 && y >= 0 && (x as usize) < buf.width && (y as usize) < buf.height {
+                buf.set(x as usize, y as usize, Cell::new(ch, Self::colour(i, len)));
             }
         }
     }
 
     fn size(&self) -> (usize, usize) {
-        (self.width, self.row + 1)
+        (self.width, self.row + SWAY_AMP as usize + 1)
     }
 }
 
@@ -296,38 +301,40 @@ mod tests {
         (0..H).filter(|&y| (0..W).any(|x| buf.get(x, y).ch != ' ')).collect()
     }
 
+    /// Leftmost column with ink, `t` seconds into the cold open.
+    fn leftmost(intro: &Intro, t: f64) -> Option<usize> {
+        let buf = frame_at(intro, t);
+        (0..W).find(|&x| (0..H).any(|y| buf.get(x, y).ch != ' '))
+    }
+
     #[test]
-    fn step_four_comes_down_from_above_on_a_long_wave_and_goes_back_up() {
+    fn step_four_slides_in_and_out_as_a_dycp_and_lies_still_between() {
         let intro = Intro::new(W, H, SCROLL_Y);
         let row = (SCROLL_Y as usize + 4) / 2;
         let len = LINE4.len();
-        let drop = Drop { line: LINE4, width: W, row };
-        // Coming in: spread down the screen from near the top, never below the line.
-        let early = rows_at(&intro, STEP4_START + 0.4);
-        assert!(early.len() >= 8 && *early.iter().next().unwrap() <= 6 && *early.iter().last().unwrap() <= row, "{early:?}");
-        // One long wave, not scattered letters: neighbours close together.
-        for f in 0..(Drop::secs(len) * FPS) as usize {
+        // Sliding in from the right, waving.
+        let coming = STEP4_START + 0.3;
+        assert!(leftmost(&intro, coming).unwrap() > (W - len) / 2, "not coming from the right");
+        assert!(rows_at(&intro, coming).len() >= 3, "{:?}", rows_at(&intro, coming));
+        // One wave, never scattered letters: neighbours at most a row apart.
+        for f in 0..((SWAY_IN + SWAY_HOLD + SWAY_OUT) * FPS) as usize {
             let t = f as f64 / FPS;
             for i in 1..len {
-                if let (Some(a), Some(b)) = (drop.y(i - 1, len, t), drop.y(i, len, t)) {
-                    assert!((a.round() - b.round()).abs() <= 2.0, "letters {} and {i} at {t:.2}s: rows {a:.1} and {b:.1}", i - 1);
-                }
+                let (a, b) = (Sway::lift(i - 1, t).round(), Sway::lift(i, t).round());
+                assert!((a - b).abs() <= 1.0, "letters {} and {i} at {t:.2}s: {a} and {b}", i - 1);
             }
         }
-        // Lying still, whole and centred, for over a second.
-        let landed = STEP4_START + (len - 1) as f64 * DROP_STAGGER + DROP_FALL;
-        assert!(STEP4_START + DROP_REST - landed >= 1.2);
-        for t in [landed + 0.05, STEP4_START + DROP_REST - 0.05] {
+        // Still, whole and centred, for over a second and a half.
+        for t in [STEP4_START + SWAY_IN + 0.05, STEP4_START + SWAY_IN + SWAY_HOLD - 0.05] {
             assert_eq!(line_at(&frame_at(&intro, t), LINE4), Some(((W - len) / 2, row)), "at {t}");
         }
-        // Going: back up, the right end first.
-        let going = STEP4_START + DROP_REST + 0.3;
-        let buf = frame_at(&intro, going);
-        let first_up = (0..len).rev().find(|&i| (0..row).any(|y| buf.get((W - len) / 2 + i, y).ch != ' ')).unwrap();
-        assert!(first_up > len / 2, "lifts from the right: letter {first_up}");
-        assert_eq!(text_of(&frame_at(&intro, STEP4_START + Drop::secs(len) + 0.05)), "");
+        // Sliding out to the left, waving again; then gone.
+        let going = STEP4_START + SWAY_IN + SWAY_HOLD + 0.4;
+        assert!(leftmost(&intro, going).unwrap() < (W - len) / 2, "not going left");
+        assert!(rows_at(&intro, going).len() >= 3, "{:?}", rows_at(&intro, going));
+        assert_eq!(text_of(&frame_at(&intro, STEP4_START + SWAY_IN + SWAY_HOLD + SWAY_OUT + 0.05)), "");
         // In colour: not all one.
-        let buf = frame_at(&intro, landed + 0.2);
+        let buf = frame_at(&intro, STEP4_START + SWAY_IN + 0.5);
         let colours: std::collections::BTreeSet<(u8, u8, u8)> =
             (0..W).map(|x| buf.get(x, row)).filter(|c| c.ch != ' ').map(|c| (c.color.r, c.color.g, c.color.b)).collect();
         assert!(colours.len() > 3);
