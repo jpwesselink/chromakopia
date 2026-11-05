@@ -51,6 +51,9 @@ const DRUMS: u8 = 3;
 const MALLETS: u8 = 4;
 const ACID_HIGH: u8 = 6;
 const THUD: u8 = 7;
+/// Tracks left out of the mix: both bell leads (and so the mallets'
+/// echo). Their voices stay wired — take a track off to bring it back.
+const MUTED: [u8; 2] = [BELLS, MALLETS];
 /// Not a track: the mallets again, later and quieter.
 const ECHO: u8 = 100;
 /// Ticks the echo comes after: a dotted eighth.
@@ -176,7 +179,12 @@ impl Player {
         while self.next < NOTES.len() && ticks(NOTES[self.next].at) <= now {
             let note = NOTES[self.next];
             self.next += 1;
-            if self.solo.is_some_and(|s| s != note.track) {
+            // Muted tracks stay quiet — unless soloed, to hear them anyway.
+            let heard = match self.solo {
+                Some(s) => s == note.track,
+                None => !MUTED.contains(&note.track),
+            };
+            if !heard {
                 continue;
             }
             if note.track == DRUMS {
@@ -369,7 +377,8 @@ impl Synth {
         ((l * 2.0 + kit).tanh(), (r * 2.0 + kit).tanh())
     }
 
-    /// The next sample, both channels together.
+    /// The next sample, both channels together (tests measure this).
+    #[cfg(test)]
     pub fn next(&mut self) -> f32 {
         let (l, r) = self.next_stereo();
         (l + r) / 2.0
@@ -547,6 +556,18 @@ mod tests {
         }
         assert_eq!(p.tick, 10);
         assert!(p.next < 20, "at note {}", p.next);
+    }
+
+    #[test]
+    fn the_bell_leads_are_out_of_the_mix() {
+        let mut p = Player::new();
+        let mut book = Book([[0; 32]; CHIPS]);
+        for _ in 0..Player::length() {
+            p.tick(&mut book);
+            for (chip, v) in [B2, B3, C3] {
+                assert_eq!(book.0[chip][7 * v as usize + CTRL as usize] & GATE, 0, "voice ({chip}, {v}) plays at tick {}", p.tick);
+            }
+        }
     }
 
     #[test]
