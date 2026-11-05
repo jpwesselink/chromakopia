@@ -522,9 +522,9 @@ fn flat(c: &mut Canvas, rows: &[u8], (x, y): (i64, i64), scale: i64) {
 
 /// The scroll text, cracktro style: brag about what's on screen, never
 /// explain how.
-pub const PITCH: &str = "{hills}{play drums little}{style flat}Welly well, what do we have here?{play bass}{style candy}{gap}{logo}{play drums full}{play mallets}{pause 3}{gap}\
+pub const PITCH: &str = "{hills}{play drums little}{style flat}Welly well, what do we have here?{play bass}{style candy}{gap}{logo}{play drums full}{play mallets volume:20}{pause 3}{gap}\
 ...and yes, before you ask: this is a TERMINAL. No browser, no video, no tricks you can see, just the good old terminal you have known and loved...   which you will now love a little bit more.   {font tiny}(psst... the small print: no pixels were harmed in the making of this demo - because there are no pixels, just text and ANSI escape codes!){font c64}   \
-{side hide}{play 303 2}Count the layers behind me: eight bands of clouds and hills, all swinging to their own beat.   \
+{side hide}{play 303 2}Count the layers behind me: {stop 303 2}eight bands of clouds and hills, all swinging to their own beat.   \
 {side far}Clouds that drift and throw shadows on the land. Never shade. They're above that.   \
 A logo that will not sit still, bouncing every letter on its own little wave...   in fact, it won't{logo away} even stay.    \
 {play 303}{path loop}And all of it at a silky 60 frames per second.{path off}{dive in}{play drums little}{play marimba}{path spin}Round and round we go - and not a single drop spilled!{path off}Down in the C where the colours spill: sky blue, mint and a coral hill!{dive out}{play drums full}{stop marimba}{font big}BENDING THE RULES{font c64}   {logo}{zoom on}Zoom in, zoom out...{zoom off}   \

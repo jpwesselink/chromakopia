@@ -61,6 +61,9 @@ pub enum Code {
     Play(usize, u8),
     /// Stop this track's loop on the next bar (None: every track's).
     Stop(Option<u8>),
+    /// Stop this loop (an index into `orbital3::CLIPS`) on the next bar —
+    /// if it's what its track is playing then.
+    StopLoop(usize),
     /// A skip stop with nothing attached (set by `with_lead`, not typed).
     Mark,
     /// Dived in, the liquid's layers spread into waves (set by `place`,
@@ -135,6 +138,9 @@ pub fn parse(src: &str) -> Result<Script, String> {
                 Code::Play(super::music::clip_named(track, which).map_err(|e| format!("{e} in {{{body}}}"))?, volume)
             }
             (Some("stop"), Some("all"), None) => Code::Stop(None),
+            (Some("stop"), Some(track), Some(which)) => {
+                Code::StopLoop(super::music::clip_named(track, Some(which)).map_err(|e| format!("{e} in {{{body}}}"))?)
+            }
             (Some("stop"), Some(track), None) => {
                 Code::Stop(Some(super::music::track_named(track).ok_or_else(|| format!("unknown track in {{{body}}}"))?))
             }

@@ -198,6 +198,8 @@ enum Launch {
     /// A loop, at a volume in percent.
     Play(usize, u8),
     Stop(Option<u8>),
+    /// Stop the track if it's playing this loop.
+    StopLoop(usize),
 }
 
 /// What a track plays: the loop, the tick it started, its volume (%).
@@ -229,6 +231,7 @@ impl Session {
             let launch = match cue.code {
                 Code::Play(clip, volume) => Launch::Play(clip, volume),
                 Code::Stop(track) => Launch::Stop(track),
+                Code::StopLoop(clip) => Launch::StopLoop(clip),
                 _ => return None,
             };
             // The next bar line at or after the code.
@@ -282,6 +285,12 @@ impl Session {
                     track => *track = Some(Track { clip, launch: at, volume }),
                 },
                 Launch::Stop(Some(t)) => playing[t as usize] = None,
+                Launch::StopLoop(clip) => {
+                    let track = &mut playing[CLIPS[clip].track as usize];
+                    if track.is_some_and(|t| t.clip == clip) {
+                        *track = None;
+                    }
+                }
                 Launch::Stop(None) => playing = [None; TRACKS.len()],
             }
         }
@@ -950,6 +959,21 @@ mod tests {
         };
         let (full, low) = (level(100), level(20));
         assert!((0.12..0.3).contains(&(low / full)), "20 % came out at {:.0} %", 100.0 * low / full);
+    }
+
+    #[test]
+    fn stopping_a_loop_stops_its_track_only_if_it_plays_that_loop() {
+        let two = clip_named("303", Some("2")).unwrap();
+        // Playing loop 2: stopped.
+        let (session, tl) = session_of("ab{play 303 2}cdefghijklmnopqrstuvwxyz{stop 303 2}abcdefghijklmnopqrstuvwxyz");
+        let last = tl.cues.iter().filter(|c| matches!(c.code, Code::StopLoop(_))).next().unwrap().t;
+        assert_eq!(session.loop_at(last - 0.1, "303"), Some(two));
+        assert_eq!(session.loop_at(last + 2.1, "303"), None);
+        // Playing loop 1: carries on.
+        let (session, tl) = session_of("ab{play 303}cdefghijklmnopqrstuvwxyz{stop 303 2}abcdefghijklmnopqrstuvwxyz");
+        let last = tl.cues.iter().filter(|c| matches!(c.code, Code::StopLoop(_))).next().unwrap().t;
+        assert_eq!(session.loop_at(last + 2.1, "303"), Some(first("303")));
+        assert!(script::parse("{stop 303 9}").is_err());
     }
 
     #[test]
