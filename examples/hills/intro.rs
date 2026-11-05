@@ -9,7 +9,7 @@
 //! 3. "we've been expecting you" — in the terminal's own font, easing in
 //!    from the right, holding in the middle, easing out to the left.
 //! 4. "let's see if we can make this more entertaining, shall we?" — a
-//!    DYCP in the small letters, in colour, every letter on its own sine,
+//!    huge DYCP in the C64 letters, in colour, every letter on its own sine,
 //!    crossing a little above the scroller's line (the bass comes in with
 //!    it). It's a side scroller (`sides::Side`), painted with the scene,
 //!    and it may still be on its way out as "Welly well" comes in below.
@@ -43,8 +43,10 @@ pub const STEP4_START: f64 = 12.0;
 /// code — "Welly well" starting the beat — reaches the middle just
 /// before it, and the beat lands on this bar.
 pub const BEAT_AT: f64 = 16.0;
-/// Pixels above the scroller's glyph top the DYCP rides.
-const DYCP_ABOVE: i64 = 24;
+/// Pixels above the scroller's glyph top the DYCP rides, and how far up
+/// and down it swings — clear of the scroller's line at its lowest.
+const DYCP_ABOVE: i64 = 34;
+const DYCP_AMP: f64 = 22.0;
 
 /// The cold open laid out for one screen.
 pub struct Intro {
@@ -79,15 +81,18 @@ impl Intro {
             name: "intro",
             text: LINE4,
             y: scroll_y - DYCP_ABOVE,
-            // Small letters, on a low, long, slow wave so they read.
-            font: sides::Font::Tiny,
+            // The C64's own letters on a huge wave: big enough that every
+            // letter moves nearly every frame — a small, slow one stalls
+            // and hops a pixel at a time. Two whole pixels a frame across,
+            // never a fraction: no stutter.
+            font: sides::Font::C64,
             tone: (sides::CLOUD, 0.0),
             opacity: 1.0,
-            speed: 1.5,
+            speed: 2.0,
             z: sides::z::SCROLLER,
-            amp: 3.0,
-            spread: 0.15,
-            period: 2.0,
+            amp: DYCP_AMP,
+            spread: 0.25,
+            period: 1.4,
         };
         // The scroller's first code reaches the middle half a screen after
         // it sets off (a pixel a frame); a hair before the beat's bar.
@@ -232,6 +237,11 @@ mod tests {
         let intro = Intro::new(W, H, SCROLL_Y);
         assert_eq!(intro.dycp.text, LINE4);
         assert!(intro.dycp.y + intro.dycp.amp as i64 + 8 < SCROLL_Y, "clear of the scroller's line");
+        assert!(intro.dycp.y - intro.dycp.amp as i64 >= 4, "clear of the top");
+        // No stutter: whole pixels across every frame, and a wave big
+        // enough that a letter at its fastest moves at least a pixel a frame.
+        assert_eq!(intro.dycp.speed.fract(), 0.0);
+        assert!(intro.dycp.amp * std::f64::consts::TAU / intro.dycp.period / FPS >= 1.0);
         // It crosses once, from the fourth swell, and the cold open lasts
         // until it's gone.
         assert!((intro.shown - (STEP4_START + intro.dycp.secs(W))).abs() < 1e-9);
