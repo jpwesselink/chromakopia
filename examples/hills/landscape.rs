@@ -155,10 +155,10 @@ fn cloud_at(x: f64, grow: f64) -> Option<(f64, usize, f64)> {
     (dx.abs() < 1.0).then_some((dx, n, vary))
 }
 
-/// The cloud at column `x`, high in the open sky: its top and flat
-/// bottom in pixel rows. A Mario cloud: a row of one, two or three equal
-/// round puffs on a flat bottom, as wide as the shadow below.
-fn puff(x: f64, grow: f64) -> Option<(f64, f64)> {
+/// The cloud at column `x`, high in the open sky, as a smooth shape: its
+/// top and flat bottom in pixel rows. A Mario cloud: a row of one, two or
+/// three equal round puffs on a flat bottom, as wide as the shadow below.
+fn puff_shape(x: f64, grow: f64) -> Option<(f64, f64)> {
     let (dx, n, vary) = cloud_at(x, grow)?;
     let bottom = LAND_TOP + 4.0 + 2.0 * vary;
     // Across the cloud in pixels from its middle; the puffs' centres.
@@ -170,6 +170,14 @@ fn puff(x: f64, grow: f64) -> Option<(f64, f64)> {
         .fold(0.0, f64::max);
     // A little body under the puffs, so the cloud has a floor.
     Some((bottom - height - 2.0 * grow, bottom))
+}
+
+/// `puff_shape` with the front cloud bank's scalloped edge (see
+/// `cumulus`): the sky's clouds are bits of our own cloud layer.
+fn puff(x: f64, grow: f64) -> Option<(f64, f64)> {
+    let (top, bottom) = puff_shape(x, grow)?;
+    let scallop = 0.85 + 0.15 * (PI * x / 6.0).sin().abs();
+    Some((bottom - (bottom - top) * scallop, bottom))
 }
 
 /// The cloud's shadow at column `x`, straight below it on the land: an
@@ -285,10 +293,13 @@ pub fn landscape_layers(since: impl Fn() -> Option<f64> + Clone + Send + 'static
         let grow = shadow_grow(t);
         for sx in 0..c.width {
             let Some((top, bottom)) = puff(sx as f64 - c.offset, grow) else { continue };
-            for y in top.round() as i64..bottom.round() as i64 {
-                // A pink underside under the blush.
-                let fill = if y + 1 == bottom.round() as i64 { CLOUD_PINK } else { CLOUD_BLUSH };
-                c.set(sx as i64, y, fill);
+            let (top, bottom) = (top.round() as i64, bottom.round() as i64);
+            // Our cloud layer's colours: the front bank's blush on top,
+            // the back bank's lilac-and-pink dither underneath.
+            let under = bottom - ((bottom - top) * 2 / 5).max(1);
+            for y in top..bottom {
+                let fill = if y < under { RIDGE_FILLS[1] } else { RIDGE_FILLS[0] };
+                c.set(sx as i64, y, dither(fill.0, fill.1, fill.2, sx, y.max(0) as usize));
             }
         }
     })
@@ -386,7 +397,7 @@ mod tests {
     fn cloud_tops(width: usize) -> Vec<Vec<(f64, f64)>> {
         let (mut clouds, mut cloud) = (Vec::new(), Vec::new());
         for x in 0..width {
-            match puff(x as f64 + 0.5, 1.0) {
+            match puff_shape(x as f64 + 0.5, 1.0) {
                 Some(column) => cloud.push(column),
                 None if !cloud.is_empty() => clouds.push(std::mem::take(&mut cloud)),
                 None => {}
@@ -412,6 +423,17 @@ mod tests {
             assert!(cloud[0].1 - lo >= 6.0, "flat: {cloud:?}");
             assert!(cloud.iter().all(|c| c.1 == cloud[0].1), "bottom not flat");
         }
+    }
+
+    #[test]
+    fn clouds_have_our_cloud_banks_scalloped_edge() {
+        // The edge dips a little every few pixels, never more than a fifth.
+        let dips = (0..1200)
+            .filter_map(|x| Some((puff(x as f64 + 0.5, 1.0)?, puff_shape(x as f64 + 0.5, 1.0)?)))
+            .map(|((top, bottom), (smooth, _))| (top - smooth) / (bottom - smooth))
+            .collect::<Vec<f64>>();
+        assert!(dips.iter().all(|&d| (-1e-9..=0.16).contains(&d)));
+        assert!(dips.iter().any(|&d| d > 0.1));
     }
 
     #[test]
