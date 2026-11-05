@@ -48,17 +48,20 @@ pub const BEAT_AT: f64 = 16.0;
 /// waving on in the middle, settling, lying still to be read, and
 /// sliding out to the left as the wave swells again.
 const SWAY_IN: f64 = 0.9;
-const SWAY_WAVE: f64 = 0.5;
+const SWAY_WAVE: f64 = 1.0;
 const SWAY_SETTLE: f64 = 0.4;
-const SWAY_REST: f64 = 1.2;
+const SWAY_REST: f64 = 0.8;
 const SWAY_OUT: f64 = 0.8;
 /// From arriving in the middle to setting off again.
 const SWAY_HOLD: f64 = SWAY_WAVE + SWAY_SETTLE + SWAY_REST;
-/// The wave: huge — rows up and down at its biggest, radians from one
-/// letter to the next (neighbours at most two rows apart: one wave, not
-/// scattered letters), and seconds a swing.
-const SWAY_AMP: f64 = 6.0;
-const SWAY_SPREAD: f64 = 0.28;
+/// The wave: huge — rows up and down at its biggest, riding this many
+/// rows above the line while it waves (so the troughs stay on screen),
+/// radians from one letter to the next (a long wave: neighbours at most
+/// two rows apart, one sweeping wave, not scattered letters), and seconds
+/// a swing.
+const SWAY_AMP: f64 = 11.0;
+const SWAY_ABOVE: f64 = 5.0;
+const SWAY_SPREAD: f64 = 0.14;
 const SWAY_PERIOD: f64 = 1.3;
 
 /// The cold open laid out for one screen.
@@ -140,7 +143,7 @@ impl Sway {
     /// Rows letter `i` rides off the line, `t` seconds in.
     fn lift(i: usize, t: f64) -> f64 {
         let swing = (std::f64::consts::TAU * t / SWAY_PERIOD + i as f64 * SWAY_SPREAD).sin();
-        SWAY_AMP * Self::swell(t) * swing
+        Self::swell(t) * (SWAY_ABOVE + SWAY_AMP * swing)
     }
 
     /// Letter `i`'s colour: a calm run along the line, pink to cream to
@@ -169,7 +172,7 @@ impl Effect for Sway {
     }
 
     fn size(&self) -> (usize, usize) {
-        (self.width, self.row + SWAY_AMP as usize + 1)
+        (self.width, self.row + (SWAY_AMP - SWAY_ABOVE) as usize + 1)
     }
 }
 
@@ -331,11 +334,15 @@ mod tests {
                 let (a, b) = (Sway::lift(i - 1, t).round(), Sway::lift(i, t).round());
                 assert!((a - b).abs() <= 2.0, "letters {} and {i} at {t:.2}s: {a} and {b}", i - 1);
             }
+            // On screen, inside the border, crests and troughs alike.
+            for i in 0..len {
+                let y = row as f64 - Sway::lift(i, t).round();
+                assert!((1.0..(H - 1) as f64).contains(&y), "letter {i} off screen at {t:.2}s: row {y}");
+            }
         }
-        // Still, whole and centred, for over a second.
-        // Waving on in the middle first...
+        // Waving on in the middle first — a huge wave, well over 15 rows...
         let waving = STEP4_START + SWAY_IN + SWAY_WAVE / 2.0;
-        assert!(rows_at(&intro, waving).len() >= 8, "{:?}", rows_at(&intro, waving));
+        assert!(rows_at(&intro, waving).len() >= 15, "{:?}", rows_at(&intro, waving));
         // ...then still.
         for t in [STEP4_START + SWAY_IN + SWAY_WAVE + SWAY_SETTLE + 0.05, STEP4_START + SWAY_IN + SWAY_HOLD - 0.05] {
             assert_eq!(line_at(&frame_at(&intro, t), LINE4), Some(((W - len) / 2, row)), "at {t}");
