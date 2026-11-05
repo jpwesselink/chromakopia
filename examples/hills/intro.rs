@@ -44,11 +44,16 @@ pub const STEP4_START: f64 = 12.0;
 /// code — "Welly well" starting the beat — reaches the middle just
 /// before it, and the beat lands on this bar.
 pub const BEAT_AT: f64 = 16.0;
-/// Step 4, the DYCP: seconds sliding in (the wave dying down), lying
-/// still, sliding out (the wave swelling).
-const SWAY_IN: f64 = 1.2;
-const SWAY_HOLD: f64 = 1.6;
+/// Step 4, the DYCP: seconds sliding in from the right on the full wave,
+/// waving on in the middle, settling, lying still to be read, and
+/// sliding out to the left as the wave swells again.
+const SWAY_IN: f64 = 0.9;
+const SWAY_WAVE: f64 = 0.5;
+const SWAY_SETTLE: f64 = 0.4;
+const SWAY_REST: f64 = 1.2;
 const SWAY_OUT: f64 = 0.8;
+/// From arriving in the middle to setting off again.
+const SWAY_HOLD: f64 = SWAY_WAVE + SWAY_SETTLE + SWAY_REST;
 /// The wave: huge — rows up and down at its biggest, radians from one
 /// letter to the next (neighbours at most two rows apart: one wave, not
 /// scattered letters), and seconds a swing.
@@ -118,9 +123,12 @@ impl Sway {
 
     /// How big the wave is, 0–1, `t` seconds in.
     fn swell(t: f64) -> f64 {
-        if t < SWAY_IN {
-            // Waving all the way in, settling only as it arrives.
-            (1.0 - t / SWAY_IN).max(0.0).sqrt()
+        let settle = t - SWAY_IN - SWAY_WAVE;
+        if settle < 0.0 {
+            // The full wave all the way in, and a moment more in the middle.
+            1.0
+        } else if settle < SWAY_SETTLE {
+            1.0 - Easing::EaseInOut.apply(settle / SWAY_SETTLE)
         } else if t < SWAY_IN + SWAY_HOLD {
             0.0
         } else {
@@ -324,8 +332,12 @@ mod tests {
                 assert!((a - b).abs() <= 2.0, "letters {} and {i} at {t:.2}s: {a} and {b}", i - 1);
             }
         }
-        // Still, whole and centred, for over a second and a half.
-        for t in [STEP4_START + SWAY_IN + 0.05, STEP4_START + SWAY_IN + SWAY_HOLD - 0.05] {
+        // Still, whole and centred, for over a second.
+        // Waving on in the middle first...
+        let waving = STEP4_START + SWAY_IN + SWAY_WAVE / 2.0;
+        assert!(rows_at(&intro, waving).len() >= 8, "{:?}", rows_at(&intro, waving));
+        // ...then still.
+        for t in [STEP4_START + SWAY_IN + SWAY_WAVE + SWAY_SETTLE + 0.05, STEP4_START + SWAY_IN + SWAY_HOLD - 0.05] {
             assert_eq!(line_at(&frame_at(&intro, t), LINE4), Some(((W - len) / 2, row)), "at {t}");
         }
         // Sliding out to the left, waving again; then gone.
@@ -334,7 +346,7 @@ mod tests {
         assert!(rows_at(&intro, going).len() >= 3, "{:?}", rows_at(&intro, going));
         assert_eq!(text_of(&frame_at(&intro, STEP4_START + SWAY_IN + SWAY_HOLD + SWAY_OUT + 0.05)), "");
         // In colour: not all one.
-        let buf = frame_at(&intro, STEP4_START + SWAY_IN + 0.5);
+        let buf = frame_at(&intro, STEP4_START + SWAY_IN + SWAY_WAVE + SWAY_SETTLE + 0.3);
         let colours: std::collections::BTreeSet<(u8, u8, u8)> =
             (0..W).map(|x| buf.get(x, row)).filter(|c| c.ch != ' ').map(|c| (c.color.r, c.color.g, c.color.b)).collect();
         assert!(colours.len() > 3);
