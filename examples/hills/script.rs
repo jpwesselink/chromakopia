@@ -55,6 +55,11 @@ pub enum Code {
     Bye,
     /// Side scroller `n` of `sides::SIDES` sets off across the screen.
     Side(usize),
+    /// Start this loop (an index into `orbital3::CLIPS`) on the next bar,
+    /// in place of whatever its track plays.
+    Play(usize),
+    /// Stop this track's loop on the next bar (None: every track's).
+    Stop(Option<u8>),
     /// A skip stop with nothing attached (set by `with_lead`, not typed).
     Mark,
     /// Dived in, the liquid's layers spread into waves (set by `place`,
@@ -114,6 +119,13 @@ pub fn parse(src: &str) -> Result<Script, String> {
             (Some("hills"), None, _) => Code::Hills,
             (Some("bye"), None, _) => Code::Bye,
             (Some("gap"), None, _) => Code::Gap,
+            (Some("play"), Some(track), which) => {
+                Code::Play(super::music::clip_named(track, which).map_err(|e| format!("{e} in {{{body}}}"))?)
+            }
+            (Some("stop"), Some("all"), None) => Code::Stop(None),
+            (Some("stop"), Some(track), None) => {
+                Code::Stop(Some(super::music::track_named(track).ok_or_else(|| format!("unknown track in {{{body}}}"))?))
+            }
             (Some("side"), Some(name), None) => {
                 Code::Side(super::sides::named(name).ok_or_else(|| format!("unknown side scroller {{{body}}}"))?)
             }

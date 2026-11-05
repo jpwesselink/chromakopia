@@ -33,7 +33,7 @@ mod tiny;
 mod wordmark;
 
 use chromakopia::prelude::*;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chromakopia::animate::framebuffer::FPS;
@@ -209,11 +209,8 @@ struct Stage {
     /// Wall time at which script time was 0.
     origin: Mutex<f64>,
     seek: Arc<Mutex<Option<Seek>>>,
-    /// Up while the scroll text loops round the big C and after: the
-    /// music's 303s wait for it.
-    acid: Arc<AtomicBool>,
-    /// Script time the loop starts.
-    loop_at: f64,
+    /// The script time, as f64 bits, each frame: the music follows it.
+    clock: Arc<AtomicU64>,
     /// Tests: show the storyboard from this time instead of the script.
     #[cfg(test)]
     story: Mutex<Option<f64>>,
@@ -240,10 +237,6 @@ impl Stage {
         let view = Arc::new(Mutex::new(script_view(&timeline, cold_open.secs, 0.0)));
         let scroller = Arc::new(scroller::Scroller::new(placed.glyphs.clone(), SCROLLER_Y));
         let ride = looping::ride(&placed.glyphs, screen_w);
-        // When the first letter enters the loop.
-        let loop_at = ride.map_or(f64::INFINITY, |(start, _)| {
-            (0..).map(|f| f as f64 / FPS).take_while(|&t| t < timeline.total).find(|&t| timeline.scrolled(t) >= start).unwrap_or(f64::INFINITY)
-        });
         let layers = build_layers(screen_w, view.clone(), steps.clone(), scroller.clone(), ride);
         let heading = build_heading(view.clone());
         Self {
@@ -260,8 +253,7 @@ impl Stage {
             timeline,
             origin: Mutex::new(0.0),
             seek: Arc::new(Mutex::new(None)),
-            acid: Arc::new(AtomicBool::new(false)),
-            loop_at,
+            clock: Arc::new(AtomicU64::new(0f64.to_bits())),
             #[cfg(test)]
             story: Mutex::new(None),
         }
@@ -305,7 +297,7 @@ impl Stage {
             return View { scroll: (t0 + now) * FPS, ..view_for(&self.steps, i, local) };
         }
         let t = self.script_time(now);
-        self.acid.store(t >= self.loop_at, Ordering::Relaxed);
+        self.clock.store(t.to_bits(), Ordering::Relaxed);
         script_view(&self.timeline, self.intro.secs, t)
     }
 }
@@ -514,9 +506,10 @@ async fn main() {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
     let stage = Stage::new(terminal_width());
-    // The music plays for as long as this lives; silent without a sound
-    // device, or with --mute. Its 303s wait for the loop.
-    let _music = if std::env::args().any(|a| a == "--mute") { None } else { music::play(stage.acid.clone()) };
+    // The music plays for as long as this lives, the scroll text
+    // launching its loops; silent without a sound device, or with --mute.
+    let session = music::Session::new(&stage.timeline);
+    let _music = if std::env::args().any(|a| a == "--mute") { None } else { music::play(session, stage.clock.clone()) };
     let seek = stage.seek.clone();
     Scene::new()
         .add(stage)
@@ -1004,20 +997,23 @@ mod tests {
     }
 
     #[test]
-    fn the_303_cue_goes_up_as_the_text_starts_looping() {
-        let w = 160;
-        let stage = Stage::new(w);
-        let start = when_scrolled(&stage, looping::ride(&stage.glyphs, w).unwrap().0);
-        assert!((stage.loop_at - start).abs() < 1.0 / FPS);
-        for (t, up) in [(start - 1.0, false), (start + 0.1, true), (start + 30.0, true)] {
-            stage.seek_to(t);
-            stage.view_at(0);
-            assert_eq!(stage.acid.load(Ordering::Relaxed), up, "at {t:.1}s (loop at {start:.1}s)");
+    fn the_303_comes_in_as_the_text_starts_looping() {
+        for w in [100, 160, 260] {
+            let stage = Stage::new(w);
+            let session = music::Session::new(&stage.timeline);
+            let start = when_scrolled(&stage, looping::ride(&stage.glyphs, w).unwrap().0);
+            // Not before; within a bar or so of the loop starting.
+            assert!(!session.plays(start - 2.5, "303"), "w {w}: the 303 before the loop");
+            assert!(session.plays(start + 2.5, "303"), "w {w}: no 303 in the loop");
         }
-        // Back before the loop (or round to the start): down again.
-        stage.seek_to(5.0);
+    }
+
+    #[test]
+    fn the_music_follows_the_script_clock() {
+        let stage = Stage::new(160);
+        stage.seek_to(42.0);
         stage.view_at(0);
-        assert!(!stage.acid.load(Ordering::Relaxed));
+        assert!((f64::from_bits(stage.clock.load(Ordering::Relaxed)) - 42.0).abs() < 1e-9);
     }
 
     #[test]

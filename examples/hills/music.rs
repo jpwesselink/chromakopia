@@ -1,36 +1,39 @@
-//! The demo's music: "orbital 3", played from its notes (see
-//! `orbital3.rs`, generated from the Ableton set) on three emulated C64
-//! SIDs — MOS 6581s by reSID — the way a C64 music routine does it: a
-//! player writes the chips' registers 200 times a second. Nine voices,
-//! three filters ("3SID"), and the 606 part on an 808 (`drums.rs`):
+//! The demo's music: the loops of "orbital 3"'s Session View (see
+//! `orbital3.rs`, generated from the Ableton set), launched by the scroll
+//! text the way you launch clips in Ableton — `{play drums full}`,
+//! `{stop pad}`, `{stop all}` — each starting on the next bar. They play
+//! on three emulated C64 SIDs (MOS 6581s by reSID, "3SID"), the way a C64
+//! music routine does it: a player writes the chips' registers 200 times
+//! a second. The 606 part plays on an 808 (`drums.rs`), and it all goes
+//! through a hall (`reverb.rs`).
 //!
 //! | chip | voice 1 | voice 2 | voice 3 | filter |
 //! |---|---|---|---|---|
-//! | A, centre | 303 | — | thud bass | the 303's acid |
+//! | A, centre | 303 | marimba | thud bass | the 303's acid |
 //! | B, left | second 303, quieter | mallets, soft | mallets, soft | the second 303's |
 //! | C, right | pad | pad | pad | a slow, low pass |
 //!
 //! Chip C is one soft pad: the slow pad's notes and the bells' chords,
 //! a note to a voice, slow in and slow out, through its own low-pass.
 //!
-//! The 303s wait for the demo: with a cue (`play`'s flag), their whole
-//! section of the arrangement starts on the first bar after the flag goes
-//! up — when the scroll text starts looping round the big C — and stops
-//! if it comes down again.
+//! What plays is worked out from the demo's script time alone (`Session`),
+//! so skipping back and forth, or the show starting over, always lands on
+//! the right loops at the right point in their bars.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use resid::{ChipModel, SamplingMethod, Sid};
 
 use super::drums::{Drum, Kit};
-use super::orbital3::{BEATS, BPM, NOTES};
+use super::orbital3::{BPM, CLIPS, TRACKS};
 use super::reverb::Reverb;
+use super::script::{Code, Timeline};
 
-/// One note of the arrangement.
+/// One note of a loop.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Note {
-    /// Beats from the start of the song.
+    /// Beats from the start of its loop.
     pub at: f64,
     /// Beats it is held.
     pub len: f64,
@@ -42,10 +45,29 @@ pub struct Note {
     pub vel: u8,
 }
 
+/// A loop from the Session View.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Clip {
+    /// Index into `TRACKS`.
+    pub track: u8,
+    /// Its name in Ableton (often none).
+    pub name: &'static str,
+    /// Beats before it comes round again.
+    pub beats: f64,
+    pub notes: &'static [Note],
+}
+
+/// What the scroll text calls each track, in track order.
+const TRACK_NAMES: [&str; 9] = ["pad", "bells", "303", "drums", "mallets", "marimba", "303b", "bass", "toy"];
+/// Loops playing from the very start, before any code: (track, loop).
+const OPENING: [(&str, Option<&str>); 1] = [("pad", None)];
+
 /// A PAL C64's clock, cycles a second.
 const CLOCK: u32 = 985_248;
 /// Player calls a second ("4× speed"): a 16th at 120 BPM is 25 of them.
 const TICKS: u32 = 200;
+/// Ticks in a bar: loops start on one.
+const BAR: u64 = 400;
 /// Ticks between arpeggio steps — 50 Hz, the classic rate.
 const ARP: u64 = 4;
 /// How many SIDs.
@@ -64,15 +86,17 @@ const WET: f32 = 1.2;
 const HALL_ROOM: f32 = 0.98;
 const HALL_DAMP: f32 = 0.25;
 const HALL_PRE_MS: f32 = 70.0;
-/// The pad chip's filter at rest: resonance 2, all three voices.
-const PAD_FILTER: u8 = 0x27;
+/// Each chip's filter, set before anything plays: the 6581 pops when its
+/// filter routing changes, so it never does. The 303s' voice 1 on A and
+/// B (their cutoffs move, their routing doesn't), the pad's three voices
+/// on C with a little resonance.
+const FILTERS: [u8; CHIPS] = [0xC1, 0xC1, 0x27];
 const PAD_CUTOFF: u16 = 0x230;
 /// Beats a bells chord holds as a pad, so the chords run into each other.
 const CHORD_BEATS: f64 = 2.0;
-/// The arrangement's 303 section, in beats: on cue it plays from here.
-const ACID_FROM: f64 = 96.0;
-/// Ticks in a bar: cued 303s start on one, to stay on the drums' grid.
-const BAR: u64 = 400;
+/// The demo's time and the music's drifting further apart than this
+/// (a skip, the show starting over): the music jumps to the demo.
+const RESYNC: u64 = TICKS as u64 / 10;
 
 // The tracks, by index into `TRACKS`.
 const PAD: u8 = 0;
@@ -80,11 +104,9 @@ const BELLS: u8 = 1;
 const ACID: u8 = 2;
 const DRUMS: u8 = 3;
 const MALLETS: u8 = 4;
+const MARIMBA: u8 = 5;
 const ACID_HIGH: u8 = 6;
 const THUD: u8 = 7;
-/// Tracks left out of the mix (none just now); put a track here to
-/// silence it.
-const MUTED: [u8; 0] = [];
 
 // SID registers: voice `v`'s are at 7·v.
 const FREQ: u8 = 0;
@@ -106,6 +128,7 @@ const PULSE: u8 = 0x40;
 /// A voice: (chip, voice on that chip).
 type Slot = (usize, u8);
 const A1: Slot = (0, 0);
+const A2: Slot = (0, 1);
 const A3: Slot = (0, 2);
 const B1: Slot = (1, 0);
 const B2: Slot = (1, 1);
@@ -113,10 +136,108 @@ const B3: Slot = (1, 2);
 /// The pad chip's three voices.
 const PADS: [Slot; 3] = [(2, 0), (2, 1), (2, 2)];
 
+/// The track the scroll text calls `name`.
+pub fn track_named(name: &str) -> Option<u8> {
+    TRACK_NAMES.iter().position(|&n| n.eq_ignore_ascii_case(name)).map(|i| i as u8)
+}
+
+/// The loop `{play <track> <which>}` means, as an index into `CLIPS`:
+/// `which` is a loop's name or its number on the track (from 1); none is
+/// the track's first.
+pub fn clip_named(track: &str, which: Option<&str>) -> Result<usize, String> {
+    let t = track_named(track).ok_or_else(|| format!("no track {track:?} (tracks: {})", TRACK_NAMES.join(", ")))?;
+    let mut loops = CLIPS.iter().enumerate().filter(|(_, c)| c.track == t);
+    let found = match which {
+        None => loops.next(),
+        Some(w) => match w.parse::<usize>() {
+            Ok(n) => loops.nth(n.max(1) - 1),
+            Err(_) => loops.find(|(_, c)| c.name.eq_ignore_ascii_case(w)),
+        },
+    };
+    found.map(|(i, _)| i).ok_or_else(|| format!("{track} has no loop {:?}", which.unwrap_or("1")))
+}
+
 /// The SID's frequency register for MIDI `key`.
 fn freq(key: f64) -> u16 {
     let hz = 440.0 * 2f64.powf((key - 69.0) / 12.0);
     (hz * 16_777_216.0 / CLOCK as f64).round().min(65_535.0) as u16
+}
+
+/// Ticks in one beat.
+fn per_beat() -> f64 {
+    TICKS as f64 * 60.0 / BPM
+}
+
+fn ticks(beats: f64) -> u64 {
+    (beats * per_beat()).round() as u64
+}
+
+/// A launch or a stop, from a code or the opening.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Launch {
+    Play(usize),
+    Stop(Option<u8>),
+}
+
+/// Per track: the loop it plays and the tick it started.
+type Playing = [Option<(usize, u64)>; TRACKS.len()];
+
+/// The scroll text's loop launches, each on the bar after its code fires.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Session {
+    /// (tick it takes effect, launch), in order.
+    launches: Vec<(u64, Launch)>,
+}
+
+impl Session {
+    /// The launches in `timeline`'s codes, after the opening's.
+    pub fn new(timeline: &Timeline) -> Self {
+        let opening = OPENING.iter().map(|&(t, w)| (0, Launch::Play(clip_named(t, w).expect("opening loop"))));
+        let coded = timeline.cues.iter().filter_map(|cue| {
+            let launch = match cue.code {
+                Code::Play(clip) => Launch::Play(clip),
+                Code::Stop(track) => Launch::Stop(track),
+                _ => return None,
+            };
+            // The next bar line at or after the code.
+            let at = (cue.t * TICKS as f64).ceil() as u64;
+            Some((at.div_ceil(BAR) * BAR, launch))
+        });
+        let mut launches: Vec<(u64, Launch)> = opening.chain(coded).collect();
+        launches.sort_by_key(|l| l.0);
+        Session { launches }
+    }
+
+    /// Whether `track` has a loop going `secs` into the script (tests).
+    #[cfg(test)]
+    pub fn plays(&self, secs: f64, track: &str) -> bool {
+        self.at((secs * TICKS as f64) as u64)[track_named(track).unwrap() as usize].is_some()
+    }
+
+    /// Just these loops, from the start (tests).
+    #[cfg(test)]
+    fn only(clips: &[usize]) -> Self {
+        Session { launches: clips.iter().map(|&c| (0, Launch::Play(c))).collect() }
+    }
+
+    /// What plays at tick `now`.
+    fn at(&self, now: u64) -> Playing {
+        let mut playing: Playing = [None; TRACKS.len()];
+        for &(at, launch) in self.launches.iter().take_while(|l| l.0 <= now) {
+            match launch {
+                // Launching what already plays carries on.
+                Launch::Play(c) => {
+                    let track = &mut playing[CLIPS[c].track as usize];
+                    if track.is_none_or(|(p, _)| p != c) {
+                        *track = Some((c, at));
+                    }
+                }
+                Launch::Stop(Some(t)) => playing[t as usize] = None,
+                Launch::Stop(None) => playing = [None; TRACKS.len()],
+            }
+        }
+        playing
+    }
 }
 
 /// Something with SID registers: the chips, or a test's notebook.
@@ -130,19 +251,22 @@ impl Regs for [Sid; CHIPS] {
     }
 }
 
-/// A note sounding, from tick `start` to `end`.
+/// A note sounding, from tick `start` to `end`, out of loop `clip`
+/// launched at `launch`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Held {
     note: Note,
     start: u64,
     end: u64,
+    clip: usize,
+    launch: u64,
     /// Which of its track's voices it goes to, where they take turns.
     turn: u8,
 }
 
 /// What a voice is playing: which note (for retriggering) and since when.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Playing {
+struct Voice {
     track: u8,
     key: u8,
     start: u64,
@@ -156,80 +280,69 @@ struct Patch {
     sr: u8,
 }
 
-/// The music routine: works out which notes sound and writes the SIDs'
-/// registers for them, one tick at a time.
+/// The music routine: follows the demo's clock, plays the loops the
+/// session has going, and writes the SIDs' registers, one tick at a time.
 pub struct Player {
-    /// Ticks into the song (it starts over after `length`).
-    tick: u64,
-    /// Ticks since the player started — notes are held in these, so they
-    /// ring on across the song starting over.
-    abs: u64,
-    /// Next note to start.
-    next: usize,
-    /// When set, the 303s wait for this to go up (see the module docs).
-    cue: Option<Arc<AtomicBool>>,
-    /// The absolute tick the cued 303 section starts at, and its next note.
-    acid_at: Option<u64>,
-    acid_next: usize,
+    session: Session,
+    /// Script time in ticks; None before the first tick.
+    now: Option<u64>,
     held: Vec<Held>,
     /// Mallet notes started, for taking turns between their two voices.
     mallets: u8,
-    voices: [[Option<Playing>; 3]; CHIPS],
+    voices: [[Option<Voice>; 3]; CHIPS],
     /// Drums struck this tick, for the 808.
     pub strikes: Vec<(Drum, u8)>,
-    /// Play only this track (tests and balancing).
-    solo: Option<u8>,
-}
-
-/// Ticks in one beat.
-fn per_beat() -> f64 {
-    TICKS as f64 * 60.0 / BPM
-}
-
-fn ticks(beats: f64) -> u64 {
-    (beats * per_beat()).round() as u64
 }
 
 impl Player {
-    pub fn new() -> Self {
-        Player {
-            tick: 0,
-            abs: 0,
-            next: 0,
-            cue: None,
-            acid_at: None,
-            acid_next: 0,
-            held: Vec::new(),
-            mallets: 0,
-            voices: [[None; 3]; CHIPS],
-            strikes: Vec::new(),
-            solo: None,
+    pub fn new(session: Session) -> Self {
+        Player { session, now: None, held: Vec::new(), mallets: 0, voices: [[None; 3]; CHIPS], strikes: Vec::new() }
+    }
+
+    /// Advance one tick, the demo `demo_secs` into its script, writing
+    /// this tick's registers.
+    pub fn tick(&mut self, sid: &mut impl Regs, demo_secs: f64) {
+        let demo = (demo_secs.max(0.0) * TICKS as f64).round() as u64;
+        let now = match self.now {
+            Some(n) if n.abs_diff(demo) <= RESYNC => n,
+            first_or_jump => {
+                if first_or_jump.is_none() {
+                    for (chip, &filter) in FILTERS.iter().enumerate() {
+                        sid.poke(chip, MODE_VOL, 0x1F);
+                        sid.poke(chip, RES_FILT, filter);
+                    }
+                }
+                // Jumped: what rang stops; the loops pick up where the
+                // demo is now.
+                self.held.clear();
+                for chip in 0..CHIPS {
+                    for v in 0..3 {
+                        self.release(sid, (chip, v), 0);
+                    }
+                }
+                demo
+            }
+        };
+        let playing = self.session.at(now);
+        // Notes of loops that stopped, or were swapped, go.
+        self.held.retain(|h| h.end > now && playing[h.note.track as usize] == Some((h.clip, h.launch)));
+        for (c, launch) in playing.iter().flatten().copied() {
+            let clip = CLIPS[c];
+            let length = ticks(clip.beats).max(1);
+            if now < launch {
+                continue;
+            }
+            let phase = (now - launch) % length;
+            for &note in clip.notes.iter().filter(|n| ticks(n.at) % length == phase) {
+                self.hold(note, c, launch, now);
+            }
         }
+        self.voices(sid, now);
+        self.now = Some(now + 1);
     }
 
-    /// The 303s wait for `cue`.
-    #[cfg(test)]
-    pub fn cued(mut self, cue: Arc<AtomicBool>) -> Self {
-        self.cue = Some(cue);
-        self
-    }
-
-    fn is_acid(track: u8) -> bool {
-        track == ACID || track == ACID_HIGH
-    }
-
-    /// Whether `track` is heard: muted tracks stay quiet — unless soloed,
-    /// to hear them anyway.
-    fn heard(&self, track: u8) -> bool {
-        match self.solo {
-            Some(s) => s == track,
-            None => !MUTED.contains(&track),
-        }
-    }
-
-    /// Hold `note` from now, absolute ticks.
-    fn hold(&mut self, note: Note) {
-        let now = self.abs;
+    /// Hold `note` (of loop `clip`, launched at `launch`) from `now`.
+    fn hold(&mut self, note: Note, clip: usize, launch: u64, now: u64) {
         if note.track == DRUMS {
             self.strikes.extend(Drum::on(note.key).map(|d| (d, note.vel)));
             return;
@@ -243,71 +356,17 @@ impl Player {
         if note.track == BELLS {
             end = end.max(now + ticks(CHORD_BEATS));
         }
-        self.held.push(Held { note, start: now, end, turn });
+        self.held.push(Held { note, start: now, end, clip, launch, turn });
     }
 
-    /// With a cue: start the 303 section on the first bar after it goes
-    /// up, feed it its notes, and drop it when the cue comes down.
-    fn cued_acid(&mut self) {
-        let Some(cue) = &self.cue else { return };
-        if !cue.load(Ordering::Relaxed) {
-            self.acid_at = None;
-            self.held.retain(|h| !Self::is_acid(h.note.track));
-            return;
-        }
-        let at = *self.acid_at.get_or_insert_with(|| {
-            self.acid_next = NOTES.iter().position(|n| n.at >= ACID_FROM).unwrap_or(NOTES.len());
-            self.abs + (BAR - self.tick % BAR) % BAR
-        });
-        if self.abs < at {
-            return;
-        }
-        let into = self.abs - at + ticks(ACID_FROM);
-        while self.acid_next < NOTES.len() && ticks(NOTES[self.acid_next].at) <= into {
-            let note = NOTES[self.acid_next];
-            self.acid_next += 1;
-            if Self::is_acid(note.track) && self.heard(note.track) {
-                self.hold(note);
-            }
-        }
-    }
-
-    /// Ticks in the whole song.
-    pub fn length() -> u64 {
-        ticks(BEATS)
-    }
-
-    /// Advance one tick, writing this tick's registers.
-    pub fn tick(&mut self, sid: &mut impl Regs) {
-        if self.tick >= Self::length() {
-            self.tick = 0;
-            self.next = 0;
-        }
-        let now = self.abs;
-        if self.abs == 0 {
-            for chip in 0..CHIPS {
-                // Volume up, low-pass, nothing filtered yet...
-                sid.poke(chip, MODE_VOL, 0x1F);
-                sid.poke(chip, RES_FILT, 0x00);
-            }
-            // ...but the pad chip, all three voices, gently.
-            sid.poke(PADS[0].0, RES_FILT, PAD_FILTER);
-        }
-        while self.next < NOTES.len() && ticks(NOTES[self.next].at) <= self.tick {
-            let note = NOTES[self.next];
-            self.next += 1;
-            // Cued 303s come in through `cued_acid` instead.
-            if self.heard(note.track) && !(self.cue.is_some() && Self::is_acid(note.track)) {
-                self.hold(note);
-            }
-        }
-        self.cued_acid();
-        self.held.retain(|h| h.end > now);
-
+    /// Every voice's registers for this tick.
+    fn voices(&mut self, sid: &mut impl Regs, now: u64) {
         self.acid(sid, A1, ACID, 1.0, Patch { wave: SAW, ad: 0x08, sr: 0xA0 }, now);
         // The second 303: quieter — a lower sustain, its filter opening
         // less far.
         self.acid(sid, B1, ACID_HIGH, 0.45, Patch { wave: SAW, ad: 0x06, sr: 0x50 }, now);
+        let marimba = self.keys(|h| h.note.track == MARIMBA, 12);
+        self.tone(sid, A2, &marimba, Patch { wave: TRI, ad: 0x08, sr: 0x00 }, now);
         let thud = self.keys(|h| h.note.track == THUD, 0);
         self.tone(sid, A3, &thud, Patch { wave: TRI, ad: 0x09, sr: 0x00 }, now);
         // The mallets, soft: triangles taking turns, each note ringing
@@ -327,8 +386,6 @@ impl Player {
         let fc = (PAD_CUTOFF as f64 + 0x90 as f64 * (now as f64 / 400.0).sin()) as u16;
         sid.poke(PADS[0].0, FC_LO, (fc & 7) as u8);
         sid.poke(PADS[0].0, FC_HI, (fc >> 3) as u8);
-        self.tick += 1;
-        self.abs += 1;
     }
 
     /// The sounding keys of the held notes `which` picks, `shift`
@@ -348,11 +405,11 @@ impl Player {
     /// Start a note on `slot` if it isn't already playing it: one tick of
     /// hard restart (gate off, oscillator held in test, envelope zeroed),
     /// the note itself from the next. True on the restart tick.
-    fn retrigger(&mut self, sid: &mut impl Regs, (chip, v): Slot, playing: Playing) -> bool {
-        if self.voices[chip][v as usize] == Some(playing) {
+    fn retrigger(&mut self, sid: &mut impl Regs, (chip, v): Slot, voice: Voice) -> bool {
+        if self.voices[chip][v as usize] == Some(voice) {
             return false;
         }
-        self.voices[chip][v as usize] = Some(playing);
+        self.voices[chip][v as usize] = Some(voice);
         sid.poke(chip, 7 * v + AD, 0x00);
         sid.poke(chip, 7 * v + SR, 0x00);
         sid.poke(chip, 7 * v + CTRL, TEST);
@@ -383,7 +440,7 @@ impl Player {
             self.release(sid, slot, patch.wave);
             return;
         };
-        if self.retrigger(sid, slot, Playing { track, key: h.note.key, start: h.start }) {
+        if self.retrigger(sid, slot, Voice { track, key: h.note.key, start: h.start }) {
             return;
         }
         Self::sound(sid, slot, h.note.key as f64, patch, true);
@@ -392,7 +449,6 @@ impl Player {
         let fc = (0x0C0 as f64 + 0x500 as f64 * open * vel * (-since / 30.0).exp()) as u16;
         sid.poke(chip, FC_LO, (fc & 7) as u8);
         sid.poke(chip, FC_HI, (fc >> 3) as u8);
-        sid.poke(chip, RES_FILT, 0xC0 | 1 << slot.1);
     }
 
     /// Soft voices: `keys` one to a slot, lowest first (any beyond the
@@ -412,7 +468,7 @@ impl Player {
                 sid.poke(chip, base + SR, patch.sr);
                 sid.poke(chip, base + CTRL, patch.wave | GATE);
             }
-            self.voices[chip][v as usize] = Some(Playing { track: 0, key, start });
+            self.voices[chip][v as usize] = Some(Voice { track: 0, key, start });
             let f = freq(key as f64);
             sid.poke(chip, base + FREQ, f as u8);
             sid.poke(chip, base + FREQ + 1, (f >> 8) as u8);
@@ -423,32 +479,27 @@ impl Player {
     }
 
     /// `keys` on `slot`: one held, several arpeggiated; retriggered when
-    /// the first of them is new.
+    /// the newest of them is new.
     fn tone(&mut self, sid: &mut impl Regs, slot: Slot, keys: &[(u8, u64)], patch: Patch, now: u64) {
         let Some(&(_, start)) = keys.iter().max_by_key(|k| k.1) else {
             self.release(sid, slot, patch.wave);
             return;
         };
-        if self.retrigger(sid, slot, Playing { track: 0, key: 0, start }) {
+        if self.retrigger(sid, slot, Voice { track: 0, key: 0, start }) {
             return;
         }
         let key = keys[((now / ARP) % keys.len() as u64) as usize].0;
-        let (chip, v) = slot;
-        if patch.wave == PULSE {
-            // A slow pulse-width sweep.
-            let pw = 0x400 + ((now as f64 / 40.0).sin() * 0x300 as f64) as i32;
-            sid.poke(chip, 7 * v + PW, pw as u8);
-            sid.poke(chip, 7 * v + PW + 1, (pw >> 8) as u8 & 0x0F);
-        }
         Self::sound(sid, slot, key as f64, patch, true);
     }
 }
 
-/// Plays the song on three emulated SIDs, sample by sample, round and
-/// round.
+/// Plays the session on three emulated SIDs and the 808, through the
+/// hall, sample by sample, following the demo's clock.
 pub struct Synth {
     sids: [Sid; CHIPS],
     player: Player,
+    /// The demo's script time, as f64 bits, written each frame.
+    clock: Arc<AtomicU64>,
     /// Each chip's samples for the current tick.
     buffers: [Vec<i16>; CHIPS],
     kit: Kit,
@@ -459,19 +510,17 @@ pub struct Synth {
 }
 
 impl Synth {
-    pub fn new(sample_rate: u32) -> Self {
+    pub fn new(sample_rate: u32, session: Session, clock: Arc<AtomicU64>) -> Self {
         let sids = std::array::from_fn(|chip| {
             let mut sid = Sid::new(ChipModel::Mos6581);
             sid.set_sampling_parameters(SamplingMethod::Fast, CLOCK, sample_rate);
-            // Volume up (and the pad chip's filter on) and a tenth of a
-            // second to settle, unheard: the 6581 pops when its volume or
-            // filter routing jumps, so they mustn't jump on air.
+            // Volume up and filters set, and a tenth of a second to
+            // settle, unheard: the 6581 pops when its volume or filter
+            // routing jumps, so they mustn't jump on air.
             sid.write(MODE_VOL, 0x1F);
-            if chip == PADS[0].0 {
-                sid.write(RES_FILT, PAD_FILTER);
-                sid.write(FC_LO, (PAD_CUTOFF & 7) as u8);
-                sid.write(FC_HI, (PAD_CUTOFF >> 3) as u8);
-            }
+            sid.write(RES_FILT, FILTERS[chip]);
+            sid.write(FC_LO, (PAD_CUTOFF & 7) as u8);
+            sid.write(FC_HI, (PAD_CUTOFF >> 3) as u8);
             let mut scratch = [0i16; 1024];
             let mut left = CLOCK / 10;
             while left > 0 {
@@ -479,19 +528,23 @@ impl Synth {
             }
             sid
         });
-        Synth { sids, player: Player::new(), buffers: Default::default(), kit: Kit::new(sample_rate), hall: Reverb::new(sample_rate, HALL_ROOM, HALL_DAMP, HALL_PRE_MS), read: 0, carry: 0 }
-    }
-
-    #[cfg(test)]
-    fn solo(mut self, track: u8) -> Self {
-        self.player.solo = Some(track);
-        self
+        Synth {
+            sids,
+            player: Player::new(session),
+            clock,
+            buffers: Default::default(),
+            kit: Kit::new(sample_rate),
+            hall: Reverb::new(sample_rate, HALL_ROOM, HALL_DAMP, HALL_PRE_MS),
+            read: 0,
+            carry: 0,
+        }
     }
 
     /// The next sample, left and right, -1..1.
     pub fn next_stereo(&mut self) -> (f32, f32) {
         while self.read >= self.buffers.iter().map(Vec::len).min().unwrap_or(0) {
-            self.player.tick(&mut self.sids);
+            let demo = f64::from_bits(self.clock.load(Ordering::Relaxed));
+            self.player.tick(&mut self.sids, demo);
             for (drum, vel) in self.player.strikes.drain(..) {
                 self.kit.strike(drum, vel);
             }
@@ -524,26 +577,19 @@ impl Synth {
         self.read += 1;
         ((l + kit + hall_l * WET).tanh(), (r + kit + hall_r * WET).tanh())
     }
-
-    /// The next sample, both channels together (tests measure this).
-    #[cfg(test)]
-    pub fn next(&mut self) -> f32 {
-        let (l, r) = self.next_stereo();
-        (l + r) / 2.0
-    }
 }
 
-/// Start the music on the default output device; it plays as long as the
-/// returned stream lives. None when there is no sound to be had (no
-/// device, an unusual sample format) — the demo just runs silent.
-pub fn play(cue: Arc<AtomicBool>) -> Option<cpal::Stream> {
+/// Start the music on the default output device, following the demo's
+/// `clock` (its script time as f64 bits) through `session`; it plays as
+/// long as the returned stream lives. None when there is no sound to be
+/// had (no device, an unusual sample format) — the demo just runs silent.
+pub fn play(session: Session, clock: Arc<AtomicU64>) -> Option<cpal::Stream> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     let device = cpal::default_host().default_output_device()?;
     let supported = device.default_output_config().ok()?;
     let config: cpal::StreamConfig = supported.config();
     let channels = config.channels as usize;
-    let mut synth = Synth::new(config.sample_rate.0);
-    synth.player.cue = Some(cue);
+    let mut synth = Synth::new(config.sample_rate.0, session, clock);
     // Left and right as the first two channels; any others get both.
     let mut frame = move |out: &mut dyn FnMut(usize, f32)| {
         let (l, r) = synth.next_stereo();
@@ -582,14 +628,23 @@ pub fn play(cue: Arc<AtomicBool>) -> Option<cpal::Stream> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::orbital3::TRACKS;
+    use super::super::script;
     use super::*;
 
     const RATE: u32 = 22_050;
-    const VOICED: [u8; 7] = [PAD, BELLS, ACID, DRUMS, MALLETS, ACID_HIGH, THUD];
 
     /// The registers as the player leaves them, per chip.
     struct Book([[u8; 32]; CHIPS]);
+
+    impl Book {
+        fn new() -> Self {
+            Book([[0; 32]; CHIPS])
+        }
+
+        fn gated(&self, (chip, v): Slot) -> bool {
+            self.0[chip][7 * v as usize + CTRL as usize] & GATE != 0
+        }
+    }
 
     impl Regs for Book {
         fn poke(&mut self, chip: usize, reg: u8, value: u8) {
@@ -597,224 +652,226 @@ mod tests {
         }
     }
 
-    /// `secs` of `synth`, from `from` seconds in: the player alone runs up
-    /// to there (no chip time to emulate), then hands the chips their
-    /// registers and a moment to settle.
-    fn render(mut synth: Synth, from: f64, secs: f64) -> Vec<f32> {
-        let skip = ((from - 0.5).max(0.0) * TICKS as f64) as u64;
-        let mut book = Book([[0; 32]; CHIPS]);
-        for _ in 0..skip {
-            synth.player.tick(&mut book);
-        }
-        synth.player.strikes.clear();
-        for (sid, regs) in synth.sids.iter_mut().zip(&book.0) {
-            for (reg, &value) in regs.iter().enumerate().take(0x19) {
-                sid.write(reg as u8, value);
+    /// The session `src` (a scroll text) launches on a screen 100 wide.
+    fn session_of(src: &str) -> (Session, Timeline) {
+        let placed = script::parse(src).unwrap().place(100).unwrap();
+        let tl = Timeline::new(&placed, 100);
+        (Session::new(&tl), tl)
+    }
+
+    fn clock() -> Arc<AtomicU64> {
+        Arc::new(AtomicU64::new(0f64.to_bits()))
+    }
+
+    /// `secs` of `loops` playing from the start, from `from` seconds in.
+    fn render(loops: &[usize], from: f64, secs: f64) -> Vec<f32> {
+        let time = clock();
+        let mut synth = Synth::new(RATE, Session::only(loops), time.clone());
+        let mut out = Vec::new();
+        for i in 0..((from + secs) * RATE as f64) as usize {
+            time.store((i as f64 / RATE as f64).to_bits(), Ordering::Relaxed);
+            let (l, r) = synth.next_stereo();
+            if i as f64 >= from * RATE as f64 {
+                out.push((l + r) / 2.0);
             }
         }
-        let settle = ((from - skip as f64 / TICKS as f64) * RATE as f64) as usize;
-        for _ in 0..settle {
-            synth.next();
-        }
-        (0..(secs * RATE as f64) as usize).map(|_| synth.next()).collect()
+        out
     }
 
     fn rms(s: &[f32]) -> f32 {
         (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).sqrt()
     }
 
-    fn first_secs(track: u8) -> f64 {
-        NOTES.iter().find(|n| n.track == track).unwrap().at * 60.0 / BPM
+    fn first(track: &str) -> usize {
+        clip_named(track, None).unwrap()
     }
 
     #[test]
-    fn notes_are_in_order_and_in_the_song() {
-        assert!(NOTES.windows(2).all(|w| w[0].at <= w[1].at));
-        assert!(NOTES.iter().all(|n| n.at >= 0.0 && n.at < BEATS && n.len > 0.0 && (n.track as usize) < TRACKS.len()));
-        for n in NOTES {
-            assert!(VOICED.contains(&n.track), "track {} ({}) unvoiced", n.track, TRACKS[n.track as usize].0);
+    fn loops_are_tidy() {
+        assert!(!CLIPS.is_empty());
+        for (i, c) in CLIPS.iter().enumerate() {
+            assert!(c.beats > 0.0 && (c.track as usize) < TRACKS.len(), "loop {i}");
+            assert!(c.notes.iter().all(|n| n.track == c.track && n.at >= 0.0 && n.at < c.beats && n.len > 0.0), "loop {i}");
         }
     }
 
     #[test]
-    fn a_sixteenth_is_a_whole_number_of_ticks() {
-        assert_eq!(per_beat() / 4.0, 25.0);
-        assert!(NOTES.iter().all(|n| (n.at * per_beat()).fract().abs() < 1e-6), "notes off the tick grid");
+    fn loops_by_track_and_name_or_number() {
+        let drums: Vec<usize> = (0..CLIPS.len()).filter(|&i| CLIPS[i].track == DRUMS).collect();
+        assert_eq!(clip_named("drums", None), Ok(drums[0]));
+        assert_eq!(clip_named("drums", Some("2")), Ok(drums[1]));
+        assert_eq!(clip_named("DRUMS", Some("full")).map(|i| CLIPS[i].name), Ok("full"));
+        assert!(clip_named("drums", Some("9")).is_err());
+        assert!(clip_named("kazoo", None).is_err());
+        assert_eq!(track_named("303b"), Some(ACID_HIGH));
     }
 
     #[test]
     fn frequencies_are_pal_sid_values() {
         // f_reg = Hz · 2^24 / 985248: A-4 (440 Hz) is $1D45 on a PAL C64.
         assert_eq!(freq(69.0), 0x1D45);
-        // An octave doubles it (within rounding).
         assert!((freq(81.0) as i32 - 2 * freq(69.0) as i32).abs() <= 1);
-        assert!((2 * freq(57.0) as i32 - freq(69.0) as i32).abs() <= 1);
+    }
+
+    #[test]
+    fn codes_launch_on_the_next_bar() {
+        let (session, tl) = session_of("ab{play bass}cdefgh{play drums full}ijklmnopqrstuvwxyz{stop bass}abcdefghijklmnopqrstuvwxyz{stop all}abc");
+        let cue = |n: usize| tl.cues.iter().filter(|c| matches!(c.code, Code::Play(_) | Code::Stop(_))).nth(n).unwrap().t;
+        let tick = |t: f64| (t * TICKS as f64).ceil() as u64;
+        let bar_after = |t: f64| tick(t).div_ceil(BAR) * BAR;
+        let bass = THUD as usize;
+        // The opening pad from the start; the bass not until the bar after its code.
+        assert!(session.at(0)[PAD as usize].is_some());
+        let launch = bar_after(cue(0));
+        assert!(launch >= tick(cue(0)) && launch % BAR == 0);
+        assert!(session.at(launch - 1)[bass].is_none());
+        assert_eq!(session.at(launch)[bass], Some((first("bass"), launch)));
+        // Drums come in later, bass carries on; then the bass stops; then all.
+        let drums = bar_after(cue(1));
+        assert_eq!(session.at(drums)[DRUMS as usize].map(|p| CLIPS[p.0].name), Some("full"));
+        assert_eq!(session.at(drums)[bass], Some((first("bass"), launch)));
+        assert!(session.at(bar_after(cue(2)))[bass].is_none());
+        assert!(session.at(bar_after(cue(3))).iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn a_loop_plays_its_notes_round_and_round() {
+        let bass = first("bass");
+        let mut p = Player::new(Session::only(&[bass]));
+        let mut book = Book::new();
+        let first_note = ticks(CLIPS[bass].notes[0].at);
+        let length = ticks(CLIPS[bass].beats);
+        let mut starts = Vec::new();
+        for t in 0..length * 3 {
+            p.tick(&mut book, t as f64 / TICKS as f64);
+            if p.held.iter().any(|h| h.start == t && h.note == CLIPS[bass].notes[0]) {
+                starts.push(t);
+            }
+        }
+        assert_eq!(starts, [first_note, first_note + length, first_note + 2 * length]);
     }
 
     #[test]
     fn new_notes_hard_restart_then_gate() {
-        let mut p = Player::new().only(ACID);
-        let mut book = Book([[0; 32]; CHIPS]);
-        let first = (first_secs(ACID) * TICKS as f64).round() as u64;
-        for _ in 0..=first {
-            p.tick(&mut book);
+        let acid = first("303");
+        let mut p = Player::new(Session::only(&[acid]));
+        let mut book = Book::new();
+        let at = ticks(CLIPS[acid].notes[0].at);
+        for t in 0..=at {
+            p.tick(&mut book, t as f64 / TICKS as f64);
         }
-        // The first 303 note: a tick of test bit with the envelope zeroed...
+        // A tick of test bit with the envelope zeroed...
         assert_eq!((book.0[0][CTRL as usize], book.0[0][AD as usize]), (TEST, 0));
-        p.tick(&mut book);
+        p.tick(&mut book, (at + 1) as f64 / TICKS as f64);
         // ...then the gate.
-        assert_eq!(book.0[0][CTRL as usize] & GATE, GATE);
+        assert!(book.gated(A1));
+    }
+
+    #[test]
+    fn skipping_jumps_the_music_to_the_demo() {
+        let mut p = Player::new(Session::only(&[first("bass"), first("pad")]));
+        let mut book = Book::new();
+        for t in 0..300 {
+            p.tick(&mut book, t as f64 / TICKS as f64);
+        }
+        // Small wobble: the music keeps its own steady count...
+        p.tick(&mut book, 300.0 / TICKS as f64 + 0.03);
+        assert_eq!(p.now, Some(301));
+        // ...a skip: it jumps, and what rang is cut.
+        p.tick(&mut book, 40.0);
+        assert_eq!(p.now, Some(40 * TICKS as u64 + 1));
+        assert!(p.held.iter().all(|h| h.start == 40 * TICKS as u64));
     }
 
     #[test]
     fn the_drums_go_to_the_808_not_the_chips() {
-        let mut p = Player::new().only(DRUMS);
-        let mut book = Book([[0; 32]; CHIPS]);
+        let mut p = Player::new(Session::only(&[clip_named("drums", Some("full")).unwrap()]));
+        let mut book = Book::new();
         let mut struck = Vec::new();
-        for _ in 0..TICKS * 30 {
-            p.tick(&mut book);
+        for t in 0..BAR {
+            p.tick(&mut book, t as f64 / TICKS as f64);
             struck.append(&mut p.strikes);
         }
         assert!(struck.iter().any(|&(d, _)| d == Drum::Kick), "{struck:?}");
-        // No voice gated on any chip.
         assert!(book.0.iter().all(|regs| (0..3).all(|v| regs[7 * v + CTRL as usize] & GATE == 0)));
     }
 
     #[test]
-    fn the_303s_wait_for_their_cue_and_start_on_a_bar() {
-        let cue = Arc::new(AtomicBool::new(false));
-        let mut p = Player::new().cued(cue.clone());
-        let mut book = Book([[0; 32]; CHIPS]);
-        let gated = |b: &Book| [A1, B1].iter().any(|&(c, v)| b.0[c][7 * v as usize + CTRL as usize] & GATE != 0);
-        // A whole song without the cue: never a 303.
-        for _ in 0..Player::length() {
-            p.tick(&mut book);
-            assert!(!gated(&book), "a 303 before its cue, tick {}", p.abs);
-        }
-        // Up a little after a bar line: they wait for the next bar.
-        for _ in 0..37 {
-            p.tick(&mut book);
-        }
-        cue.store(true, Ordering::Relaxed);
-        let from = p.abs;
-        let mut first = None;
-        for _ in 0..BAR * 2 {
-            p.tick(&mut book);
-            if gated(&book) && first.is_none() {
-                first = Some(p.abs - 1);
-            }
-        }
-        let first = first.expect("no 303 after the cue");
-        assert!(first > from && first - from <= BAR + 2, "came in {} ticks after the cue", first - from);
-        assert!((first - 1) % BAR <= 1 || first % BAR <= 1, "not on a bar: tick {first}");
-        // Down again: they go.
-        cue.store(false, Ordering::Relaxed);
-        for _ in 0..3 {
-            p.tick(&mut book);
-        }
-        assert!(!gated(&book));
-    }
-
-    #[test]
-    fn the_song_starts_over() {
-        let mut p = Player::new();
-        let mut book = Book([[0; 32]; CHIPS]);
-        for _ in 0..Player::length() + 10 {
-            p.tick(&mut book);
-        }
-        assert_eq!(p.tick, 10);
-        assert!(p.next < 20, "at note {}", p.next);
-    }
-
-    #[test]
     fn the_pad_is_a_slow_soft_chord() {
-        let mut p = Player::new();
-        let mut book = Book([[0; 32]; CHIPS]);
-        // Beat 66.5: the slow pad and the bells' chords both play.
-        for _ in 0..=ticks(66.5) {
-            p.tick(&mut book);
+        let mut p = Player::new(Session::only(&[first("pad"), first("bells")]));
+        let mut book = Book::new();
+        for t in 0..BAR {
+            p.tick(&mut book, t as f64 / TICKS as f64);
         }
         let regs = &book.0[PADS[0].0];
-        let gated: Vec<u16> = (0..3)
-            .filter(|v| regs[7 * v + CTRL as usize] & GATE != 0)
-            .map(|v| u16::from_le_bytes([regs[7 * v], regs[7 * v + 1]]))
-            .collect();
+        let gated: Vec<u16> =
+            (0..3).filter(|v| regs[7 * v + CTRL as usize] & GATE != 0).map(|v| u16::from_le_bytes([regs[7 * v], regs[7 * v + 1]])).collect();
         assert_eq!(gated.len(), 3, "a chord on all three voices: {gated:?}");
         assert!(gated[0] != gated[1] && gated[1] != gated[2], "three different notes: {gated:?}");
         for v in 0..3 {
             // Attack at least half a second, release over two.
             assert!(regs[7 * v + AD as usize] >> 4 >= 0xA && regs[7 * v + SR as usize] & 0x0F >= 0xB);
         }
-        // Through the chip's own low-pass.
         assert_eq!(regs[RES_FILT as usize] & 0x07, 0x07);
     }
 
     #[test]
-    fn plays_cleanly() {
-        // From the start, where it's drums and bass, and the busy middle.
-        for from in [0.0, 70.0] {
-            let s = render(Synth::new(RATE), from, 3.0);
-            assert!(s.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
-            assert!(rms(&s) > 0.02, "silent from {from}s: {}", rms(&s));
+    fn filters_are_set_before_anything_plays() {
+        let mut p = Player::new(Session::only(&[]));
+        let mut book = Book::new();
+        p.tick(&mut book, 0.0);
+        for (chip, &filter) in FILTERS.iter().enumerate() {
+            assert_eq!(book.0[chip][RES_FILT as usize], filter);
         }
     }
 
     #[test]
-    fn no_pop_when_the_chips_come_on() {
-        let s = render(Synth::new(RATE), 0.0, 0.02);
-        let peak = s.iter().fold(0f32, |a, x| a.max(x.abs()));
-        assert!(peak < 0.4, "a {peak} pop at the start");
+    fn plays_cleanly() {
+        let all: Vec<usize> = (0..CLIPS.len()).filter(|&i| CLIPS[i].track != DRUMS || CLIPS[i].name == "full").collect();
+        let s = render(&all, 0.0, 3.0);
+        assert!(s.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
+        assert!(rms(&s) > 0.02, "silent: {}", rms(&s));
     }
 
     #[test]
-    fn every_track_sounds_when_it_plays() {
-        for track in VOICED {
-            // The drums open on quiet hats: hear them in the full groove.
-            let from = if track == DRUMS { 40.0 } else { first_secs(track) };
-            let s = render(Synth::new(RATE).solo(track), from, 2.0);
-            assert!(rms(&s) > 0.01, "{} is silent: {}", TRACKS[track as usize].0, rms(&s));
+    fn no_pop_when_the_chips_come_on() {
+        // Nothing playing: the chips switched on and settled are silent.
+        let s = render(&[], 0.0, 0.5);
+        let peak = s.iter().fold(0f32, |a, x| a.max(x.abs()));
+        assert!(peak < 0.02, "a {peak} pop");
+    }
+
+    #[test]
+    fn every_loop_sounds() {
+        for (i, c) in CLIPS.iter().enumerate() {
+            let s = render(&[i], 0.0, c.beats * 60.0 / BPM);
+            assert!(rms(&s) > 0.005, "{} loop {i} ({}) is silent: {}", TRACK_NAMES[c.track as usize], c.name, rms(&s));
         }
     }
 
     #[test]
     fn the_second_303_is_quieter_than_the_first() {
-        let level = |track| rms(&render(Synth::new(RATE).solo(track), first_secs(track), 4.0));
-        let (first, second) = (level(ACID), level(ACID_HIGH));
-        assert!(second < first * 0.8, "first {first}, second {second}");
+        let level = |track| rms(&render(&[first(track)], 0.0, 4.0));
+        let (one, two) = (level("303"), level("303b"));
+        assert!(two < one * 0.8, "first {one}, second {two}");
     }
 
-    impl Player {
-        fn only(mut self, track: u8) -> Self {
-            self.solo = Some(track);
-            self
-        }
-    }
-
-    /// The whole song as a stereo WAV to listen to without the demo:
-    /// `cargo test --release --example hills render_song -- --ignored`,
-    /// then open `target/orbital3.wav`. Prints each track's level.
+    /// The demo's soundtrack as a stereo WAV, codes and all, on a screen
+    /// 160 wide: `cargo test --release --example hills render_song --
+    /// --ignored`, then open `target/orbital3.wav`.
     #[test]
     #[ignore]
     fn render_song() {
         let sr = 44_100;
-        let secs = Player::length() as f64 / TICKS as f64;
-        for track in VOICED {
-            let s = render(Synth::new(sr).solo(track), first_secs(track), 8.0);
-            println!("{:>18}: rms {:.3} (8 s from its first note)", TRACKS[track as usize].0, rms(&s));
-        }
-        // The drums' first bars are just hats: the full groove too.
-        let s = render(Synth::new(sr).solo(DRUMS), 40.0, 8.0);
-        println!("{:>18}: rms {:.3} (8 s from 40 s)", TRACKS[DRUMS as usize].0, rms(&s));
-        // As in the demo: the 303s cued in when the loop starts, ~98 s.
-        let cue = Arc::new(AtomicBool::new(false));
-        let mut synth = Synth::new(sr);
-        synth.player.cue = Some(cue.clone());
-        let secs = secs + 60.0;
+        let w = 160;
+        let placed = script::parse(super::super::scroller::PITCH).unwrap().place(w).unwrap();
+        let cold_open = super::super::intro::Intro::new(w, super::super::ROWS, super::super::SCROLLER_Y);
+        let tl = Timeline::new(&placed, w).with_lead(cold_open.secs, &cold_open.marks);
+        let time = clock();
+        let mut synth = Synth::new(sr, Session::new(&tl), time.clone());
         let mut samples: Vec<i16> = Vec::new();
-        for i in 0..(secs * sr as f64) as usize {
-            if i == 98 * sr as usize {
-                cue.store(true, Ordering::Relaxed);
-            }
+        for i in 0..(tl.total * sr as f64) as usize {
+            time.store((i as f64 / sr as f64).to_bits(), Ordering::Relaxed);
             let (l, r) = synth.next_stereo();
             samples.extend([(l * 32_000.0) as i16, (r * 32_000.0) as i16]);
         }
@@ -837,6 +894,6 @@ mod tests {
         }
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/orbital3.wav");
         std::fs::write(&path, wav).unwrap();
-        println!("wrote {}", path.display());
+        println!("wrote {} ({:.0} s)", path.display(), tl.total);
     }
 }
