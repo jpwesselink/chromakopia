@@ -9,10 +9,12 @@
 //! 3. "we've been expecting you" — in the terminal's own font, easing in
 //!    from the right, holding in the middle, easing out to the left.
 //! 4. "let's see if we can make this more entertaining, shall we?" — in
-//!    the terminal's own font too, in the letters' colours, the letters on
-//!    a rope: whipped down onto the table it slides in on a wave that dies
-//!    away until the line lies flat and still to be read; then another
-//!    crack of the whip runs a wave down it as it's yanked off to the left.
+//!    the terminal's own font too, in the letters' colours, coming in from
+//!    above like the greetings' long wave: letter after letter drops from
+//!    the top and eases down onto the line, so the line rolls down the
+//!    screen as one long wave; it lies still to be read; then the wave
+//!    rolls back up and off, right to left, clearing the way for the
+//!    scroller coming in from the right.
 //!
 //! All four are a library `Timeline` of cell effects around the
 //! scroller's line.
@@ -44,20 +46,17 @@ pub const STEP4_START: f64 = 12.0;
 /// code — "Welly well" starting the beat — reaches the middle just
 /// before it, and the beat lands on this bar.
 pub const BEAT_AT: f64 = 16.0;
-/// Step 4, the whip: seconds sliding in (the wave dying away as it
-/// comes), lying still, and being yanked out.
-const WHIP_IN: f64 = 1.0;
-const WHIP_HOLD: f64 = 1.8;
-const WHIP_OUT: f64 = 0.6;
-/// Rows the rope's wave reaches up and down at its biggest (at the tip),
-/// how fast it dies away coming in (seconds), radians from one letter to
-/// the next — a long wave, so neighbours are never more than a row apart
-/// and it reads as one rope, not scattered letters — and how fast it runs
-/// from the handle to the tip (radians a second).
-const WHIP_AMP: f64 = 3.0;
-const WHIP_DAMP: f64 = 0.4;
-const WHIP_K: f64 = 0.18;
-const WHIP_RUN: f64 = 9.0;
+/// Step 4, the long wave: seconds between one letter setting off from the
+/// top and the next, and each letter's fall onto the line; seconds into
+/// the step it lies still until; then seconds between one letter lifting
+/// off (from the right) and the next, and each letter's rise.
+const DROP_STAGGER: f64 = 0.008;
+const DROP_FALL: f64 = 0.8;
+const DROP_REST: f64 = 2.7;
+const RISE_STAGGER: f64 = 0.006;
+const RISE: f64 = 0.5;
+/// The row the letters fall from: just under the screen's top border.
+const DROP_TOP: f64 = 1.0;
 
 /// The cold open laid out for one screen.
 pub struct Intro {
@@ -80,14 +79,14 @@ impl Intro {
         let row = (scroll_y.max(0) as usize + 4) / 2;
         let centred = |line: &str| text(line, glyphs::LETTER_HIGHLIGHT).pad(row, 0, 0, width.saturating_sub(line.len()) / 2);
         let step3_end = STEP3_START + IN_SECS + HOLD_SECS + OUT_SECS;
-        let step4_end = STEP4_START + WHIP_IN + WHIP_HOLD + WHIP_OUT;
+        let step4_end = STEP4_START + Drop::secs(LINE4.chars().count());
         let timeline = Timeline::from_buffer(FrameBuffer::new(width, height), step4_end)
             .at(STEP1.0..STEP1.1, centred(LINE1))
             .at(STEP2.0..STEP2.1, centred(LINE2))
             .at(STEP2.0..STEP2.0 + FADE_SECS, AlphaIn::new(FADE_SECS))
             .at(STEP2.1 - FADE_SECS..STEP2.1, AlphaOut::new(FADE_SECS))
             .at(STEP3_START..step3_end, Slide { inner: Box::new(text(LINE3, glyphs::LETTER_HIGHLIGHT)), width, top: row as i64 })
-            .at(STEP4_START..step4_end, Whip { line: LINE4, width, row });
+            .at(STEP4_START..step4_end, Drop { line: LINE4, width, row });
         // The scroller's first code reaches the middle half a screen after
         // it sets off (a pixel a frame); a hair before the beat's bar.
         let secs = (BEAT_AT - 0.05 - width as f64 / 2.0 / FPS).max(step3_end + 0.2);
@@ -96,53 +95,42 @@ impl Intro {
     }
 }
 
-/// `line` as letters on a rope, on row `row` of a screen `width` wide:
-/// whipped in from the right on a wave that dies away until it lies flat
-/// in the middle, then cracked again and yanked off to the left.
-struct Whip {
+/// `line` centred on row `row` of a screen `width` wide, coming in from
+/// above on a long wave — letter after letter falling from the top and
+/// easing down onto the line — lying still, then rising back up and off,
+/// right to left.
+struct Drop {
     line: &'static str,
     width: usize,
     row: usize,
 }
 
-impl Whip {
-    /// Left column of the line, `t` seconds in.
-    fn x(&self, t: f64) -> f64 {
-        let len = self.line.chars().count() as f64;
-        let (right, mid, gone) = (self.width as f64, (self.width as f64 - len) / 2.0, -len);
-        if t < WHIP_IN {
-            right + (mid - right) * Easing::EaseOut.apply(t / WHIP_IN)
-        } else if t < WHIP_IN + WHIP_HOLD {
-            mid
-        } else {
-            mid + (gone - mid) * Easing::EaseIn.apply(((t - WHIP_IN - WHIP_HOLD) / WHIP_OUT).min(1.0))
-        }
+impl Drop {
+    /// Seconds from the first letter setting off to the last one gone.
+    fn secs(len: usize) -> f64 {
+        DROP_REST + len.saturating_sub(1) as f64 * RISE_STAGGER + RISE
     }
 
-    /// Rows letter `i` of `len` is off the line, `t` seconds in: the
-    /// throw's wave running from the handle (the first letter) down to
-    /// the tip and dying away, nothing while it lies still, then the crack
-    /// — a wave growing as it runs down from the handle while the rope is
-    /// pulled away. The tip always swings furthest, as a whip's does.
-    fn lift(i: usize, len: usize, t: f64) -> f64 {
-        let i = i as f64;
-        let tip = 0.4 + 0.6 * i / len.max(1) as f64;
-        let out = t - WHIP_IN - WHIP_HOLD;
-        if out < 0.0 {
-            WHIP_AMP * tip * (-t / WHIP_DAMP).exp() * (WHIP_K * i - WHIP_RUN * t).sin()
-        } else {
-            let p = (out / WHIP_OUT).min(1.0);
-            // The crack's front: letters past it haven't felt it yet.
-            let front = WHIP_RUN * out / WHIP_K;
-            if i > front {
-                return 0.0;
-            }
-            WHIP_AMP * tip * p.sqrt() * (WHIP_K * (front - i)).sin()
+    /// Row of letter `i` of `len`, `t` seconds in (None: off the top).
+    fn y(&self, i: usize, len: usize, t: f64) -> Option<f64> {
+        let (top, row) = (DROP_TOP, self.row as f64);
+        let fall = (t - i as f64 * DROP_STAGGER) / DROP_FALL;
+        if fall < 0.0 {
+            return None;
         }
+        let rise = (t - DROP_REST - (len - 1 - i) as f64 * RISE_STAGGER) / RISE;
+        let y = if rise > 0.0 {
+            // Lifting off: slow, then away, past the top.
+            row - (row - top + 2.0) * rise.min(1.0).powi(3)
+        } else {
+            // Falling: fast from the top, easing onto the line.
+            top + (row - top) * (1.0 - (1.0 - fall.min(1.0)).powi(3))
+        };
+        (y >= 0.0).then_some(y)
     }
 
     /// Letter `i`'s colour: a calm run along the line, pink to cream to
-    /// lavender — fixed, not flowing.
+    /// lavender.
     fn colour(i: usize, len: usize) -> Color {
         let k = 2.0 * i as f64 / (len.max(2) - 1) as f64;
         if k < 1.0 {
@@ -153,24 +141,22 @@ impl Whip {
     }
 }
 
-impl Effect for Whip {
+impl Effect for Drop {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
         let t = frame as f64 / FPS;
-        let x0 = self.x(t).round() as i64;
         let len = self.line.chars().count();
+        let x0 = self.width.saturating_sub(len) / 2;
         for (i, ch) in self.line.chars().enumerate() {
-            if ch == ' ' {
-                continue;
-            }
-            let (x, y) = (x0 + i as i64, self.row as i64 - Self::lift(i, len, t).round() as i64);
-            if x >= 0 && y >= 0 && (x as usize) < buf.width && (y as usize) < buf.height {
-                buf.set(x as usize, y as usize, Cell::new(ch, Self::colour(i, len)));
+            let Some(y) = self.y(i, len, t) else { continue };
+            let (x, y) = (x0 + i, y.round() as usize);
+            if ch != ' ' && x < buf.width && y < buf.height {
+                buf.set(x, y, Cell::new(ch, Self::colour(i, len)));
             }
         }
     }
 
     fn size(&self) -> (usize, usize) {
-        (self.width, self.row + WHIP_AMP as usize + 1)
+        (self.width, self.row + 1)
     }
 }
 
@@ -300,8 +286,8 @@ mod tests {
         let buf = frame_at(&intro, held);
         assert_eq!(line_at(&buf, LINE3), Some(((W - LINE3.len()) / 2, row)));
         assert_eq!(at(held + 0.5), at(held));
-        // Then leaves to the left, gone before the DYCP sets off.
-        assert_eq!(text_of(&frame_at(&intro, STEP4_START)), "");
+        // Then leaves to the left, gone before line 4 comes in.
+        assert_eq!(text_of(&frame_at(&intro, STEP4_START - 0.02)), "");
     }
 
     /// Rows the line's letters are on, `t` seconds into the cold open.
@@ -311,33 +297,37 @@ mod tests {
     }
 
     #[test]
-    fn step_four_is_whipped_in_lies_still_and_is_cracked_away() {
+    fn step_four_comes_down_from_above_on_a_long_wave_and_goes_back_up() {
         let intro = Intro::new(W, H, SCROLL_Y);
         let row = (SCROLL_Y as usize + 4) / 2;
-        // Coming in: the rope's wave spreads the letters over rows.
-        assert!(rows_at(&intro, STEP4_START + 0.15).len() >= 3, "{:?}", rows_at(&intro, STEP4_START + 0.15));
-        // Always one rope: neighbouring letters at most a row apart.
         let len = LINE4.len();
-        for f in 0..((WHIP_IN + WHIP_HOLD + WHIP_OUT) * FPS) as usize {
+        let drop = Drop { line: LINE4, width: W, row };
+        // Coming in: spread down the screen from near the top, never below the line.
+        let early = rows_at(&intro, STEP4_START + 0.4);
+        assert!(early.len() >= 8 && *early.iter().next().unwrap() <= 6 && *early.iter().last().unwrap() <= row, "{early:?}");
+        // One long wave, not scattered letters: neighbours close together.
+        for f in 0..(Drop::secs(len) * FPS) as usize {
             let t = f as f64 / FPS;
             for i in 1..len {
-                let (a, b) = (Whip::lift(i - 1, len, t).round(), Whip::lift(i, len, t).round());
-                assert!((a - b).abs() <= 1.0, "letters {} and {i} {a} and {b} rows off at {t:.2}s", i - 1);
+                if let (Some(a), Some(b)) = (drop.y(i - 1, len, t), drop.y(i, len, t)) {
+                    assert!((a.round() - b.round()).abs() <= 2.0, "letters {} and {i} at {t:.2}s: rows {a:.1} and {b:.1}", i - 1);
+                }
             }
         }
-        // Then it lies flat and still, whole and centred, to be read —
-        // for well over a second.
-        for t in [STEP4_START + WHIP_IN + 0.1, STEP4_START + WHIP_IN + WHIP_HOLD - 0.1] {
-            let buf = frame_at(&intro, t);
-            assert_eq!(line_at(&buf, LINE4), Some(((W - LINE4.len()) / 2, row)), "at {t}");
+        // Lying still, whole and centred, for over a second.
+        let landed = STEP4_START + (len - 1) as f64 * DROP_STAGGER + DROP_FALL;
+        assert!(STEP4_START + DROP_REST - landed >= 1.2);
+        for t in [landed + 0.05, STEP4_START + DROP_REST - 0.05] {
+            assert_eq!(line_at(&frame_at(&intro, t), LINE4), Some(((W - len) / 2, row)), "at {t}");
         }
-        assert!(WHIP_HOLD >= 1.5);
-        // The crack: a wave again as it goes, and then gone.
-        let cracked = STEP4_START + WHIP_IN + WHIP_HOLD + 0.25;
-        assert!(rows_at(&intro, cracked).len() >= 2, "{:?}", rows_at(&intro, cracked));
-        assert_eq!(text_of(&frame_at(&intro, STEP4_START + WHIP_IN + WHIP_HOLD + WHIP_OUT + 0.05)), "");
+        // Going: back up, the right end first.
+        let going = STEP4_START + DROP_REST + 0.3;
+        let buf = frame_at(&intro, going);
+        let first_up = (0..len).rev().find(|&i| (0..row).any(|y| buf.get((W - len) / 2 + i, y).ch != ' ')).unwrap();
+        assert!(first_up > len / 2, "lifts from the right: letter {first_up}");
+        assert_eq!(text_of(&frame_at(&intro, STEP4_START + Drop::secs(len) + 0.05)), "");
         // In colour: not all one.
-        let buf = frame_at(&intro, STEP4_START + WHIP_IN + 0.5);
+        let buf = frame_at(&intro, landed + 0.2);
         let colours: std::collections::BTreeSet<(u8, u8, u8)> =
             (0..W).map(|x| buf.get(x, row)).filter(|c| c.ch != ' ').map(|c| (c.color.r, c.color.g, c.color.b)).collect();
         assert!(colours.len() > 3);
