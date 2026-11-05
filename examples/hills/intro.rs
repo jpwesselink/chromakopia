@@ -49,12 +49,12 @@ pub const BEAT_AT: f64 = 16.0;
 const SWAY_IN: f64 = 1.2;
 const SWAY_HOLD: f64 = 1.6;
 const SWAY_OUT: f64 = 0.8;
-/// The wave: rows up and down at its biggest, radians from one letter to
-/// the next (gentle enough that neighbours are never more than a row
-/// apart: one wave, not scattered letters), and seconds a swing.
-const SWAY_AMP: f64 = 3.0;
-const SWAY_SPREAD: f64 = 0.22;
-const SWAY_PERIOD: f64 = 0.8;
+/// The wave: huge — rows up and down at its biggest, radians from one
+/// letter to the next (neighbours at most two rows apart: one wave, not
+/// scattered letters), and seconds a swing.
+const SWAY_AMP: f64 = 6.0;
+const SWAY_SPREAD: f64 = 0.28;
+const SWAY_PERIOD: f64 = 1.3;
 
 /// The cold open laid out for one screen.
 pub struct Intro {
@@ -316,12 +316,12 @@ mod tests {
         let coming = STEP4_START + 0.3;
         assert!(leftmost(&intro, coming).unwrap() > (W - len) / 2, "not coming from the right");
         assert!(rows_at(&intro, coming).len() >= 3, "{:?}", rows_at(&intro, coming));
-        // One wave, never scattered letters: neighbours at most a row apart.
+        // One wave, never scattered letters: neighbours at most two rows apart.
         for f in 0..((SWAY_IN + SWAY_HOLD + SWAY_OUT) * FPS) as usize {
             let t = f as f64 / FPS;
             for i in 1..len {
                 let (a, b) = (Sway::lift(i - 1, t).round(), Sway::lift(i, t).round());
-                assert!((a - b).abs() <= 1.0, "letters {} and {i} at {t:.2}s: {a} and {b}", i - 1);
+                assert!((a - b).abs() <= 2.0, "letters {} and {i} at {t:.2}s: {a} and {b}", i - 1);
             }
         }
         // Still, whole and centred, for over a second and a half.
