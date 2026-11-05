@@ -11,6 +11,7 @@
 //! Keys: → n space next code · ← p previous code · q quit
 
 mod dive;
+mod drums;
 mod figlet;
 mod glyphs;
 mod intro;

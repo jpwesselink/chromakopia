@@ -70,6 +70,7 @@ def main(path):
         f"/// Beats until the song starts over.",
         f"pub const BEATS: f64 = {end_beat!r};",
         "/// (track name, mixer volume) per track, in track order.",
+        "#[cfg_attr(not(test), allow(dead_code))]",
         f"pub const TRACKS: [(&str, f32); {len(tracks)}] = [",
         *[f"    ({name!r}, {volume!r})," .replace("'", '"') for name, volume in tracks],
         "];",

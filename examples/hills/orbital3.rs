@@ -6,6 +6,7 @@ pub const BPM: f64 = 120.0;
 /// Beats until the song starts over.
 pub const BEATS: f64 = 272.0;
 /// (track name, mixer volume) per track, in track order.
+#[cfg_attr(not(test), allow(dead_code))]
 pub const TRACKS: [(&str, f32); 9] = [
     ("1-Slow Pad", 0.7943282127),
     ("2-Bells Vibrant", 0.2184661329),

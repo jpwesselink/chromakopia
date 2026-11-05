@@ -49,3 +49,4 @@ path = "examples/license.rs"
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # Examples only: the hills demo plays its own music.
 cpal = "0.15"
+resid-rs = "1.1"
