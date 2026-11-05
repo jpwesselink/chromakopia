@@ -1,7 +1,9 @@
 //! The demo's music: the loops of "orbital 3"'s Session View (see
 //! `orbital3.rs`, generated from the Ableton set), launched by the scroll
 //! text the way you launch clips in Ableton — `{play drums full}`,
-//! `{play mallets volume:20}` (20 %), `{stop pad}`, `{stop all}` — each
+//! `{play mallets volume:20}` (20 %), `{play 303 cutoff:30 res:90 over:4}`
+//! (the 303s' filter knobs — cutoff, res, env, decay — turned over 4
+//! bars; knobs always turn, over a bar unless told), `{stop pad}`, `{stop all}` — each
 //! starting on the next bar. They play on emulated C64 SIDs (MOS 6581s by
 //! reSID), one chip to a track so each has its own level and filter, the
 //! way a C64 music routine does it: a player writes the chips' registers
@@ -192,22 +194,113 @@ fn ticks(beats: f64) -> u64 {
     (beats * per_beat()).round() as u64
 }
 
+/// What a `{play}` turns, all 0–100: the track's volume, and for the
+/// 303s their filter's knobs — cutoff, resonance, how far each note's
+/// envelope opens it, how fast that closes again — and over how many bars
+/// (None: leave it where it is; a bar).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Knobs {
+    pub volume: Option<u8>,
+    pub cutoff: Option<u8>,
+    pub res: Option<u8>,
+    pub env: Option<u8>,
+    pub decay: Option<u8>,
+    pub over: Option<u8>,
+}
+
+impl Knobs {
+    /// Whether any of the 303 filter's knobs is set.
+    pub fn filtered(&self) -> bool {
+        self.cutoff.or(self.res).or(self.env).or(self.decay).is_some()
+    }
+}
+
+/// Where a track's knobs stand, 0–100 each (fractions while they turn).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Dial {
+    volume: f64,
+    cutoff: f64,
+    res: f64,
+    env: f64,
+    decay: f64,
+}
+
+impl Dial {
+    /// `track` as it sounds untouched.
+    fn of(track: u8) -> Self {
+        let env = if track == ACID_HIGH { 45.0 } else { 100.0 };
+        Dial { volume: 100.0, cutoff: 0x0C0 as f64 * 100.0 / 0x7FF as f64, res: 80.0, env, decay: 50.0 }
+    }
+
+    /// This, with the knobs `knobs` names turned to their settings.
+    fn turned(self, knobs: Knobs) -> Self {
+        let to = |k: Option<u8>, v: f64| k.map_or(v, f64::from);
+        Dial {
+            volume: to(knobs.volume, self.volume),
+            cutoff: to(knobs.cutoff, self.cutoff),
+            res: to(knobs.res, self.res),
+            env: to(knobs.env, self.env),
+            decay: to(knobs.decay, self.decay),
+        }
+    }
+
+    fn towards(self, to: Dial, p: f64) -> Self {
+        let mix = |a: f64, b: f64| a + (b - a) * p;
+        Dial {
+            volume: mix(self.volume, to.volume),
+            cutoff: mix(self.cutoff, to.cutoff),
+            res: mix(self.res, to.res),
+            env: mix(self.env, to.env),
+            decay: mix(self.decay, to.decay),
+        }
+    }
+}
+
+/// A track's knobs turning from `from` to `to`, over the ticks from
+/// `start` to `start + len`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Turn {
+    from: Dial,
+    to: Dial,
+    start: u64,
+    len: u64,
+}
+
+impl Turn {
+    fn still(dial: Dial) -> Self {
+        Turn { from: dial, to: dial, start: 0, len: 0 }
+    }
+
+    /// Where the knobs stand at tick `now`: easing in and out.
+    fn at(&self, now: u64) -> Dial {
+        if self.len == 0 || now >= self.start + self.len {
+            return self.to;
+        }
+        let p = now.saturating_sub(self.start) as f64 / self.len as f64;
+        self.from.towards(self.to, p * p * (3.0 - 2.0 * p))
+    }
+}
+
+/// Whether `track` is a 303, with the filter knobs.
+pub fn has_filter_knobs(track: u8) -> bool {
+    track == ACID || track == ACID_HIGH
+}
+
 /// A launch or a stop, from a code or the opening.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Launch {
-    /// A loop, at a volume in percent.
-    Play(usize, u8),
+    /// A loop, with its knobs.
+    Play(usize, Knobs),
     Stop(Option<u8>),
     /// Stop the track if it's playing this loop.
     StopLoop(usize),
 }
 
-/// What a track plays: the loop, the tick it started, its volume (%).
+/// What a track plays: the loop and the tick it started.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Track {
     clip: usize,
     launch: u64,
-    volume: u8,
 }
 
 /// Per track, what it plays.
@@ -225,11 +318,11 @@ impl Session {
     pub fn new(timeline: &Timeline) -> Self {
         let opening = OPENING.iter().map(|&(t, w, secs)| {
             let at = (secs * TICKS as f64).ceil() as u64;
-            (at.div_ceil(BAR) * BAR, Launch::Play(clip_named(t, w).expect("opening loop"), 100))
+            (at.div_ceil(BAR) * BAR, Launch::Play(clip_named(t, w).expect("opening loop"), Knobs::default()))
         });
         let coded = timeline.cues.iter().filter_map(|cue| {
             let launch = match cue.code {
-                Code::Play(clip, volume) => Launch::Play(clip, volume),
+                Code::Play(clip, knobs) => Launch::Play(clip, knobs),
                 Code::Stop(track) => Launch::Stop(track),
                 Code::StopLoop(clip) => Launch::StopLoop(clip),
                 _ => return None,
@@ -253,37 +346,56 @@ impl Session {
     /// `CLIPS` (tests).
     #[cfg(test)]
     pub fn loop_at(&self, secs: f64, track: &str) -> Option<usize> {
-        self.at((secs * TICKS as f64) as u64)[track_named(track).unwrap() as usize].map(|p| p.clip)
+        self.at((secs * TICKS as f64) as u64).0[track_named(track).unwrap() as usize].map(|p| p.clip)
     }
 
     /// `track`'s volume (%) `secs` into the script (tests).
     #[cfg(test)]
     pub fn volume_at(&self, secs: f64, track: &str) -> Option<u8> {
-        self.at((secs * TICKS as f64) as u64)[track_named(track).unwrap() as usize].map(|p| p.volume)
+        let (playing, dials) = self.at((secs * TICKS as f64) as u64);
+        let t = track_named(track).unwrap() as usize;
+        playing[t].map(|_| dials[t].volume.round() as u8)
     }
 
     /// Just these loops, from the start (tests).
     #[cfg(test)]
     fn only(clips: &[usize]) -> Self {
-        Session { launches: clips.iter().map(|&c| (0, Launch::Play(c, 100))).collect() }
+        Session { launches: clips.iter().map(|&c| (0, Launch::Play(c, Knobs::default()))).collect() }
     }
 
     /// These loops at these volumes, from the start (tests).
     #[cfg(test)]
     fn at_volumes(clips: &[(usize, u8)]) -> Self {
-        Session { launches: clips.iter().map(|&(c, v)| (0, Launch::Play(c, v))).collect() }
+        Session { launches: clips.iter().map(|&(c, v)| (0, Launch::Play(c, Knobs { volume: Some(v), ..Knobs::default() }))).collect() }
     }
 
-    /// What plays at tick `now`.
-    fn at(&self, now: u64) -> Playing {
+    /// These loops with these knobs, from the start (tests).
+    #[cfg(test)]
+    fn with_knobs(clips: &[(usize, Knobs)]) -> Self {
+        Session { launches: clips.iter().map(|&(c, k)| (0, Launch::Play(c, k))).collect() }
+    }
+
+    /// What plays at tick `now`, and where every track's knobs stand.
+    fn at(&self, now: u64) -> (Playing, [Dial; TRACKS.len()]) {
         let mut playing: Playing = [None; TRACKS.len()];
+        let mut turns: [Turn; TRACKS.len()] = std::array::from_fn(|t| Turn::still(Dial::of(t as u8)));
         for &(at, launch) in self.launches.iter().take_while(|l| l.0 <= now) {
             match launch {
-                // Launching what already plays carries on, at the new volume.
-                Launch::Play(clip, volume) => match &mut playing[CLIPS[clip].track as usize] {
-                    Some(t) if t.clip == clip => t.volume = volume,
-                    track => *track = Some(Track { clip, launch: at, volume }),
-                },
+                Launch::Play(clip, knobs) => {
+                    let t = CLIPS[clip].track as usize;
+                    // Knobs belong to the track, and turn — from where they
+                    // stand, over `over` bars (a bar unless told) — while it
+                    // plays; a track setting off starts with them set.
+                    let to = turns[t].to.turned(knobs);
+                    turns[t] = match playing[t] {
+                        Some(_) => Turn { from: turns[t].at(at), to, start: at, len: knobs.over.unwrap_or(1) as u64 * BAR },
+                        None => Turn::still(to),
+                    };
+                    // Launching what already plays carries on.
+                    if playing[t].is_none_or(|p| p.clip != clip) {
+                        playing[t] = Some(Track { clip, launch: at });
+                    }
+                }
                 Launch::Stop(Some(t)) => playing[t as usize] = None,
                 Launch::StopLoop(clip) => {
                     let track = &mut playing[CLIPS[clip].track as usize];
@@ -294,7 +406,7 @@ impl Session {
                 Launch::Stop(None) => playing = [None; TRACKS.len()],
             }
         }
-        playing
+        (playing, std::array::from_fn(|t| turns[t].at(now)))
     }
 }
 
@@ -353,6 +465,8 @@ pub struct Player {
     /// Each chip's level, and the 808's, 0–1, as the session has them.
     pub levels: [f32; CHIPS],
     pub kit_level: f32,
+    /// Where each track's knobs stand, as the session has them.
+    dials: [Dial; TRACKS.len()],
 }
 
 impl Player {
@@ -366,6 +480,7 @@ impl Player {
             strikes: Vec::new(),
             levels: [1.0; CHIPS],
             kit_level: 1.0,
+            dials: std::array::from_fn(|t| Dial::of(t as u8)),
         }
     }
 
@@ -393,15 +508,18 @@ impl Player {
                 demo
             }
         };
-        let playing = self.session.at(now);
+        let (playing, dials) = self.session.at(now);
+        self.dials = dials;
         // Notes of loops that stopped, or were swapped, go.
         self.held.retain(|h| h.end > now && playing[h.note.track as usize].is_some_and(|t| (t.clip, t.launch) == (h.clip, h.launch)));
         // Levels: each chip at its track's volume (the pad chip at the
         // louder of the pad's and the bells').
         self.levels = [0.0; CHIPS];
         for (track, t) in playing.iter().enumerate() {
-            let Some(t) = t else { continue };
-            let level = t.volume as f32 / 100.0;
+            if t.is_none() {
+                continue;
+            }
+            let level = (dials[track].volume / 100.0) as f32;
             match chip_of(track as u8) {
                 Some(chip) => self.levels[chip] = self.levels[chip].max(level),
                 None => self.kit_level = level,
@@ -442,10 +560,10 @@ impl Player {
 
     /// Every voice's registers for this tick.
     fn voices(&mut self, sid: &mut impl Regs, now: u64) {
-        self.acid(sid, A1, ACID, 1.0, Patch { wave: SAW, ad: 0x08, sr: 0xA0 }, now);
+        self.acid(sid, A1, ACID, Patch { wave: SAW, ad: 0x08, sr: 0xA0 }, now);
         // The second 303: quieter — a lower sustain, its filter opening
         // less far.
-        self.acid(sid, B1, ACID_HIGH, 0.45, Patch { wave: SAW, ad: 0x06, sr: 0x50 }, now);
+        self.acid(sid, B1, ACID_HIGH, Patch { wave: SAW, ad: 0x06, sr: 0x50 }, now);
         let marimba = self.keys(|h| h.note.track == MARIMBA, 12);
         self.tone(sid, MARIMBA_SLOT, &marimba, Patch { wave: TRI, ad: 0x08, sr: 0x00 }, now);
         let thud = self.keys(|h| h.note.track == THUD, 0);
@@ -514,8 +632,8 @@ impl Player {
     }
 
     /// A 303 on `slot` through its chip's resonant low-pass, the cutoff
-    /// snapping open `open` far with each note and closing again.
-    fn acid(&mut self, sid: &mut impl Regs, slot: Slot, track: u8, open: f64, patch: Patch, now: u64) {
+    /// snapping open with each note and closing again, as its knobs stand.
+    fn acid(&mut self, sid: &mut impl Regs, slot: Slot, track: u8, patch: Patch, now: u64) {
         let chip = slot.0;
         let Some(h) = self.latest(track) else {
             self.release(sid, slot, patch.wave);
@@ -525,11 +643,20 @@ impl Player {
             return;
         }
         Self::sound(sid, slot, h.note.key as f64, patch, true);
+        let dial = self.dials[track as usize];
+        // The knobs, 0–100, onto the chip: the cutoff's floor across its
+        // 11 bits, the envelope's reach, its fall in ticks, resonance in 4 bits.
+        let floor = dial.cutoff * 0x7FF as f64 / 100.0;
+        let reach = dial.env / 100.0 * 0x500 as f64;
+        let fall = 3.0 + dial.decay * 0.54;
+        let res = (dial.res * 15.0 / 100.0).round() as u8;
         let since = (now - h.start) as f64;
         let vel = h.note.vel as f64 / 127.0;
-        let fc = (0x0C0 as f64 + 0x500 as f64 * open * vel * (-since / 30.0).exp()) as u16;
+        let fc = (floor + reach * vel * (-since / fall).exp()).min(0x7FF as f64) as u16;
         sid.poke(chip, FC_LO, (fc & 7) as u8);
         sid.poke(chip, FC_HI, (fc >> 3) as u8);
+        // Resonance only: the routing (voice 1 through the filter) never moves.
+        sid.poke(chip, RES_FILT, res << 4 | 1 << slot.1);
     }
 
     /// Soft voices: `keys` one to a slot, lowest first (any beyond the
@@ -809,17 +936,17 @@ mod tests {
         let bar_after = |t: f64| tick(t).div_ceil(BAR) * BAR;
         let bass = THUD as usize;
         // The opening pad from the start; the bass not until the bar after its code.
-        assert!(session.at(0)[PAD as usize].is_some());
+        assert!(session.at(0).0[PAD as usize].is_some());
         let launch = bar_after(cue(0));
         assert!(launch >= tick(cue(0)) && launch % BAR == 0);
-        assert!(session.at(launch - 1)[bass].is_none());
-        assert_eq!(session.at(launch)[bass].map(|t| (t.clip, t.launch)), Some((first("bass"), launch)));
+        assert!(session.at(launch - 1).0[bass].is_none());
+        assert_eq!(session.at(launch).0[bass].map(|t| (t.clip, t.launch)), Some((first("bass"), launch)));
         // Drums come in later, bass carries on; then the bass stops; then all.
         let drums = bar_after(cue(1));
-        assert_eq!(session.at(drums)[DRUMS as usize].map(|p| CLIPS[p.clip].name), Some("full"));
-        assert_eq!(session.at(drums)[bass].map(|t| (t.clip, t.launch)), Some((first("bass"), launch)));
-        assert!(session.at(bar_after(cue(2)))[bass].is_none());
-        assert!(session.at(bar_after(cue(3))).iter().all(Option::is_none));
+        assert_eq!(session.at(drums).0[DRUMS as usize].map(|p| CLIPS[p.clip].name), Some("full"));
+        assert_eq!(session.at(drums).0[bass].map(|t| (t.clip, t.launch)), Some((first("bass"), launch)));
+        assert!(session.at(bar_after(cue(2))).0[bass].is_none());
+        assert!(session.at(bar_after(cue(3))).0.iter().all(Option::is_none));
     }
 
     #[test]
@@ -939,13 +1066,13 @@ mod tests {
 
     #[test]
     fn volume_turns_a_track_down_and_a_relaunch_only_changes_it() {
-        let (session, tl) = session_of("ab{play mallets volume:20}cdefghijklmnopqrstuvwxyz{play mallets}abc");
+        let (session, tl) = session_of("ab{play mallets volume:20}cdefghijklmnopqrstuvwxyz{play mallets volume:100 over:0}abc");
         let cue = |n: usize| tl.cues.iter().filter(|c| matches!(c.code, Code::Play(..))).nth(n).unwrap().t;
         assert_eq!(session.volume_at(cue(0) + 2.1, "mallets"), Some(20));
         // Played again: back to full, the loop carrying on from where it was.
         let later = cue(1) + 2.1;
         assert_eq!(session.volume_at(later, "mallets"), Some(100));
-        assert_eq!(session.at((later * TICKS as f64) as u64)[MALLETS as usize].map(|t| t.launch), session.at(((cue(0) + 2.1) * TICKS as f64) as u64)[MALLETS as usize].map(|t| t.launch));
+        assert_eq!(session.at((later * TICKS as f64) as u64).0[MALLETS as usize].map(|t| t.launch), session.at(((cue(0) + 2.1) * TICKS as f64) as u64).0[MALLETS as usize].map(|t| t.launch));
         // And it sounds that much quieter.
         let level = |volume| {
             let time = clock();
@@ -974,6 +1101,58 @@ mod tests {
         let last = tl.cues.iter().filter(|c| matches!(c.code, Code::StopLoop(_))).next().unwrap().t;
         assert_eq!(session.loop_at(last + 2.1, "303"), Some(first("303")));
         assert!(script::parse("{stop 303 9}").is_err());
+    }
+
+    #[test]
+    fn the_303_knobs_turn_its_filter() {
+        // Parsed from the scroll text...
+        let code = script::parse("{play 303 cutoff:30 res:90 env:20 decay:70}").unwrap().events[0].1;
+        let knobs = Knobs { cutoff: Some(30), res: Some(90), env: Some(20), decay: Some(70), ..Knobs::default() };
+        assert_eq!(code, Code::Play(first("303"), knobs));
+        for bad in ["{play pad cutoff:30}", "{play 303 wobble:3}", "{play 303 cutoff:300}"] {
+            assert!(script::parse(bad).is_err(), "{bad}");
+        }
+        // ...onto the chip: a higher cutoff sits higher once each note's
+        // envelope has closed; resonance in the top nibble.
+        let filter = |knobs: Knobs| {
+            let acid = first("303");
+            let mut p = Player::new(Session::with_knobs(&[(acid, knobs)]));
+            let mut book = Book::new();
+            for t in 0..BAR {
+                p.tick(&mut book, t as f64 / TICKS as f64);
+            }
+            let regs = book.0[0];
+            ((regs[FC_HI as usize] as u16) << 3 | regs[FC_LO as usize] as u16 & 7, regs[RES_FILT as usize] >> 4)
+        };
+        let closed = Knobs { cutoff: Some(5), env: Some(0), ..Knobs::default() };
+        let open = Knobs { cutoff: Some(60), env: Some(0), res: Some(90), ..Knobs::default() };
+        let (lo, hi) = (filter(closed), filter(open));
+        assert!(hi.0 > lo.0 + 500, "cutoff {lo:?} vs {hi:?}");
+        assert_eq!((lo.1, hi.1), (12, 14));
+        // Untouched knobs: the 303 as it always was.
+        assert_eq!(filter(Knobs::default()).1, 12);
+    }
+
+    #[test]
+    fn knobs_turn_gradually_over_their_bars() {
+        let (session, tl) = session_of("ab{play 303}cdefghijklmnopqrstuvwxyz{play 303 cutoff:80 over:4}abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz{play 303 res:20}abcdefghijklmnopqrstuvwxyzabc");
+        let cues: Vec<f64> = tl.cues.iter().filter(|c| matches!(c.code, Code::Play(..))).map(|c| c.t).collect();
+        let tick = |t: f64| (t * TICKS as f64).ceil() as u64;
+        let turn = tick(cues[1]).div_ceil(BAR) * BAR;
+        let cutoff = |at: u64| session.at(at).1[ACID as usize].cutoff;
+        let untouched = Dial::of(ACID).cutoff;
+        // Where it was as the turn starts; half-way at half-way; there after 4 bars.
+        assert!((cutoff(turn) - untouched).abs() < 1e-9);
+        assert!((cutoff(turn + 2 * BAR) - (untouched + 80.0) / 2.0).abs() < 1e-9);
+        assert!((cutoff(turn + 4 * BAR) - 80.0).abs() < 1e-9);
+        // Every step on the way a small one.
+        assert!((turn..turn + 4 * BAR).all(|t| (cutoff(t + 1) - cutoff(t)).abs() < 0.2));
+        // Another knob later: the cutoff stays where it was turned to, the
+        // resonance turns over a bar.
+        let later = tick(cues[2]).div_ceil(BAR) * BAR;
+        let dial = |at: u64| session.at(at).1[ACID as usize];
+        assert!((dial(later + BAR).cutoff - 80.0).abs() < 1e-9);
+        assert!((dial(later).res - 80.0).abs() < 1e-9 && (dial(later + BAR).res - 20.0).abs() < 1e-9);
     }
 
     #[test]

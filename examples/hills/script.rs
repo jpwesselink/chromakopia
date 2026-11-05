@@ -56,9 +56,9 @@ pub enum Code {
     /// Side scroller `n` of `sides::SIDES` sets off across the screen.
     Side(usize),
     /// Start this loop (an index into `orbital3::CLIPS`) on the next bar,
-    /// in place of whatever its track plays, at this volume (%) — the loop
-    /// already playing just changes volume.
-    Play(usize, u8),
+    /// in place of whatever its track plays, with these knobs (volume,
+    /// and the 303s' filter) — the loop already playing just turns them.
+    Play(usize, super::music::Knobs),
     /// Stop this track's loop on the next bar (None: every track's).
     Stop(Option<u8>),
     /// Stop this loop (an index into `orbital3::CLIPS`) on the next bar —
@@ -124,18 +124,34 @@ pub fn parse(src: &str) -> Result<Script, String> {
             (Some("bye"), None, _) => Code::Bye,
             (Some("gap"), None, _) => Code::Gap,
             (Some("play"), Some(track), _) => {
-                // `{play <track> [loop] [volume:N]}`, the volume in percent.
-                let (mut which, mut volume) = (None, 100);
+                // `{play <track> [loop] [volume:N] [cutoff:N] [res:N] [env:N]
+                // [decay:N] [over:N]}`, each 0–100; cutoff to decay only on
+                // the 303s; `over` the bars the knobs take to turn.
+                let (mut which, mut knobs) = (None, super::music::Knobs::default());
                 for word in body.split_whitespace().skip(2) {
-                    match word.strip_prefix("volume:") {
-                        Some(v) => {
-                            volume = v.parse::<u8>().ok().filter(|&v| v <= 100).ok_or_else(|| format!("volume 0–100 in {{{body}}}"))?
+                    let Some((knob, value)) = word.split_once(':') else {
+                        if which.is_some() {
+                            return Err(format!("unknown code {{{body}}}"));
                         }
-                        None if which.is_none() => which = Some(word),
-                        None => return Err(format!("unknown code {{{body}}}")),
+                        which = Some(word);
+                        continue;
+                    };
+                    let n = value.parse::<u8>().ok().filter(|&v| v <= 100).ok_or_else(|| format!("{knob} 0–100 in {{{body}}}"))?;
+                    match knob {
+                        "volume" => knobs.volume = Some(n),
+                        "over" => knobs.over = Some(n),
+                        "cutoff" => knobs.cutoff = Some(n),
+                        "res" => knobs.res = Some(n),
+                        "env" => knobs.env = Some(n),
+                        "decay" => knobs.decay = Some(n),
+                        _ => return Err(format!("no knob {knob:?} (volume, cutoff, res, env, decay, over) in {{{body}}}")),
                     }
                 }
-                Code::Play(super::music::clip_named(track, which).map_err(|e| format!("{e} in {{{body}}}"))?, volume)
+                let clip = super::music::clip_named(track, which).map_err(|e| format!("{e} in {{{body}}}"))?;
+                if knobs.filtered() && !super::music::has_filter_knobs(super::orbital3::CLIPS[clip].track) {
+                    return Err(format!("cutoff, res, env and decay are the 303s' knobs, in {{{body}}}"));
+                }
+                Code::Play(clip, knobs)
             }
             (Some("stop"), Some("all"), None) => Code::Stop(None),
             (Some("stop"), Some(track), Some(which)) => {
