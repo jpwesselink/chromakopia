@@ -214,7 +214,7 @@ struct Stage {
     seek: Arc<Mutex<Option<Seek>>>,
     /// The music's loops, for the sequencer strip.
     session: music::Session,
-    /// Whether the sequencer strip shows (`s` toggles it).
+    /// Whether the sequencer strip shows: hidden until `s` toggles it.
     sequencer: Arc<AtomicBool>,
     /// Tracks muted from the keyboard (1–8), shared with the music.
     mutes: music::Mutes,
@@ -264,7 +264,7 @@ impl Stage {
             origin: Mutex::new(0.0),
             seek: Arc::new(Mutex::new(None)),
             session,
-            sequencer: Arc::new(AtomicBool::new(true)),
+            sequencer: Arc::new(AtomicBool::new(false)),
             mutes: Arc::new(AtomicU16::new(0)),
             clock: Arc::new(AtomicU64::new(0f64.to_bits())),
             #[cfg(test)]
@@ -1147,7 +1147,7 @@ mod tests {
     }
 
     #[test]
-    fn the_sequencer_strip_shows_at_the_bottom_and_s_hides_it() {
+    fn the_sequencer_strip_is_hidden_until_s_shows_it_at_the_bottom() {
         let stage = Stage::new(160);
         let row_text = |t: f64| {
             stage.seek_to(t);
@@ -1155,7 +1155,10 @@ mod tests {
             stage.render(&mut buf, 0);
             (0..160).map(|x| buf.get(x, ROWS - 2).ch).collect::<String>()
         };
-        // The pad plays in the cold open; the drums once Welly well's in.
+        // Hidden to start with: just the landscape's ground.
+        assert!(!row_text(5.0).contains("pad"));
+        // Shown (s): the pad plays in the cold open; the drums once Welly well's in.
+        stage.sequencer.store(true, Ordering::Relaxed);
         let early = row_text(5.0);
         assert!(early.contains("1▶ pad 1") && early.contains("4· drums"), "{early}");
         let beat = row_text(intro::BEAT_AT + 0.5);
