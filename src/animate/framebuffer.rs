@@ -623,6 +623,61 @@ fn solid(cell: Cell) -> Cell {
     one.map_or(cell, |c| Cell::with_bg(' ', c, c))
 }
 
+/// The corner's readout: frames a second and the share of a CPU core the
+/// whole process used (every thread — music too), each over the last
+/// second. CPU only where the OS tells it (Unix).
+#[cfg(not(target_arch = "wasm32"))]
+struct Meter {
+    since: std::time::Instant,
+    cpu_since: Option<Duration>,
+    frames: u32,
+    label: String,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Meter {
+    fn new() -> Self {
+        Meter { since: std::time::Instant::now(), cpu_since: cpu_time(), frames: 0, label: " 0fps ".into() }
+    }
+
+    /// Count a frame; the label, renewed once a second.
+    fn tick(&mut self) -> &str {
+        self.frames += 1;
+        let now = std::time::Instant::now();
+        let wall = now.duration_since(self.since);
+        if wall >= Duration::from_secs(1) {
+            let cpu = cpu_time();
+            self.label = match (self.cpu_since, cpu) {
+                (Some(a), Some(b)) => format!(" {}fps {}%cpu ", self.frames, cpu_share(b.saturating_sub(a), wall)),
+                _ => format!(" {}fps ", self.frames),
+            };
+            (self.since, self.cpu_since, self.frames) = (now, cpu, 0);
+        }
+        &self.label
+    }
+}
+
+/// `used` CPU time over `wall` time, as a whole percentage of one core.
+fn cpu_share(used: Duration, wall: Duration) -> u32 {
+    (used.as_secs_f64() / wall.as_secs_f64().max(1e-9) * 100.0).round() as u32
+}
+
+/// CPU time the whole process has used so far, user and system.
+#[cfg(unix)]
+fn cpu_time() -> Option<Duration> {
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) } != 0 {
+        return None;
+    }
+    let micros = |t: libc::timeval| Duration::from_secs(t.tv_sec as u64) + Duration::from_micros(t.tv_usec as u64);
+    Some(micros(usage.ru_utime) + micros(usage.ru_stime))
+}
+
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
+fn cpu_time() -> Option<Duration> {
+    None
+}
+
 /// Diff two framebuffers and produce minimal ANSI output.
 ///
 /// Uses absolute cursor positioning — no newlines, no scrolling.
@@ -789,24 +844,15 @@ pub(crate) async fn run_effect_in(
     let mut frame: usize = 0;
     let mut buf = FrameBuffer::new(width, height);
     let mut prev: Option<FrameBuffer> = None;
-    let mut last_fps_time = std::time::Instant::now();
-    let mut render_count: u32 = 0;
-    let mut displayed_fps: u32 = 0;
+    let mut meter = Meter::new();
 
     while running.load(Ordering::Relaxed) && tokio::time::Instant::now() < deadline {
         interval.tick().await;
         effect.render(&mut buf, frame);
 
         let mut output = diff_render(prev.as_ref(), &buf, start_row);
-        render_count += 1;
-        let now = std::time::Instant::now();
-        if now.duration_since(last_fps_time) >= Duration::from_secs(1) {
-            displayed_fps = render_count;
-            render_count = 0;
-            last_fps_time = now;
-        }
-        let fps_str = format!(" {}fps ", displayed_fps);
-        let fps_col = term_width.saturating_sub(fps_str.len());
+        let fps_str = meter.tick();
+        let fps_col = term_width.saturating_sub(fps_str.chars().count());
         output.push_str(&format!(
             "\x1B[{};{}H\x1B[90m{}\x1B[0m",
             start_row,
@@ -976,9 +1022,7 @@ pub fn spawn_effect(
         let mut prev: Option<FrameBuffer> = None;
         let mut interval = tokio::time::interval(frame_duration);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut last_fps_time = std::time::Instant::now();
-        let mut render_count: u32 = 0;
-        let mut displayed_fps: u32 = 0;
+        let mut meter = Meter::new();
 
         // Fade state: (color, easing, total_frames, elapsed)
         let mut fade: Option<(Color, super::easing::Easing, usize, usize)> = None;
@@ -1061,15 +1105,8 @@ pub fn spawn_effect(
 
             // Diff + fps counter + write
             let mut output = diff_render(prev.as_ref(), &buf, start_row);
-            render_count += 1;
-            let now = std::time::Instant::now();
-            if now.duration_since(last_fps_time) >= Duration::from_secs(1) {
-                displayed_fps = render_count;
-                render_count = 0;
-                last_fps_time = now;
-            }
-            let fps_str = format!(" {}fps ", displayed_fps);
-            let fps_col = term_width.saturating_sub(fps_str.len());
+            let fps_str = meter.tick();
+            let fps_col = term_width.saturating_sub(fps_str.chars().count());
             output.push_str(&format!(
                 "\x1B[{};{}H\x1B[90m{}\x1B[0m",
                 start_row,
@@ -1320,6 +1357,25 @@ mod tests {
             }
             prev = Some(buf.clone());
         }
+    }
+
+    #[test]
+    fn the_corner_shows_frames_and_cpu() {
+        assert_eq!(cpu_share(Duration::from_millis(70), Duration::from_secs(1)), 7);
+        assert_eq!(cpu_share(Duration::from_millis(1500), Duration::from_secs(1)), 150);
+        #[cfg(unix)]
+        {
+            // The process's CPU time is there and only goes up.
+            let a = cpu_time().expect("getrusage");
+            let mut x = 0u64;
+            for i in 0..5_000_000u64 {
+                x = x.wrapping_add(i * i);
+            }
+            std::hint::black_box(x);
+            assert!(cpu_time().unwrap() > a);
+        }
+        let mut meter = Meter::new();
+        assert_eq!(meter.tick(), " 0fps ");
     }
 
     #[test]

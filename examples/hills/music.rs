@@ -103,9 +103,13 @@ const LEVEL_GLIDE: f32 = 2_000.0;
 const PAD_CUTOFF: u16 = 0x230;
 /// Beats a bells chord holds as a pad, so the chords run into each other.
 const CHORD_BEATS: f64 = 2.0;
-/// The demo's time and the music's drifting further apart than this
-/// (a skip, the show starting over): the music jumps to the demo.
-const RESYNC: u64 = TICKS as u64 / 10;
+/// The demo's time and the music's further apart than this (a skip, the
+/// show starting over): the music jumps to the demo, cutting what rang.
+const RESYNC: u64 = TICKS as u64;
+/// Ticks the music may drift from the demo before it's nudged back — a
+/// tick held or a tick doubled, unheard. (The demo counts frames, the
+/// music samples; a dropped frame or two shouldn't cut the music short.)
+const DRIFT: u64 = 2;
 
 // The tracks, by index into `TRACKS`.
 const PAD: u8 = 0;
@@ -565,6 +569,8 @@ pub struct Player {
     dials: [Dial; TRACKS.len()],
     /// Tracks muted from the keyboard: their loops run on, unheard.
     pub mutes: Mutes,
+    /// Times it jumped to the demo, cutting what rang (the first tick counts).
+    pub jumps: u32,
 }
 
 impl Player {
@@ -580,6 +586,7 @@ impl Player {
             kit_level: 1.0,
             dials: std::array::from_fn(|t| Dial::of(t as u8)),
             mutes: Mutes::default(),
+            jumps: 0,
         }
     }
 
@@ -598,6 +605,7 @@ impl Player {
                 }
                 // Jumped: what rang stops; the loops pick up where the
                 // demo is now.
+                self.jumps += 1;
                 self.held.clear();
                 for chip in 0..CHIPS {
                     for v in 0..3 {
@@ -607,6 +615,22 @@ impl Player {
                 demo
             }
         };
+        // Drifted a little: nudge back, a tick at a time, unheard.
+        let steps = if now > demo + DRIFT {
+            0
+        } else if now + DRIFT < demo {
+            2
+        } else {
+            1
+        };
+        for k in 0..steps {
+            self.step(sid, now + k);
+        }
+        self.now = Some(now + steps);
+    }
+
+    /// One tick of music at tick `now`: the notes due, the voices' registers.
+    fn step(&mut self, sid: &mut impl Regs, now: u64) {
         let (playing, dials) = self.session.at(now);
         self.dials = dials;
         // Notes of loops that stopped, or were swapped, go.
@@ -641,7 +665,6 @@ impl Player {
             }
         }
         self.voices(sid, now);
-        self.now = Some(now + 1);
     }
 
     /// Hold `note` (of loop `clip`, launched at `launch`) from `now`.
@@ -1126,13 +1149,32 @@ mod tests {
         for t in 0..300 {
             p.tick(&mut book, t as f64 / TICKS as f64);
         }
-        // Small wobble: the music keeps its own steady count...
+        // Small wobble: no jump — nothing cut — it catches up a tick...
+        let rang = p.held.clone();
         p.tick(&mut book, 300.0 / TICKS as f64 + 0.03);
-        assert_eq!(p.now, Some(301));
+        assert_eq!(p.now, Some(302));
+        assert!(rang.iter().all(|h| h.end <= 302 || p.held.contains(h)), "notes cut by a wobble");
         // ...a skip: it jumps, and what rang is cut.
         p.tick(&mut book, 40.0);
         assert_eq!(p.now, Some(40 * TICKS as u64 + 1));
         assert!(p.held.iter().all(|h| h.start == 40 * TICKS as u64));
+    }
+
+    #[test]
+    fn a_demo_running_slow_never_makes_the_music_jump() {
+        // The demo dropping frames — its clock 3 % slow — against steady
+        // music: nudged along, never a jump, never more than a few ticks out.
+        let mut p = Player::new(Session::only(&[first("bass"), first("pad"), clip_named("drums", Some("full")).unwrap()]));
+        let mut book = Book::new();
+        for t in 0..TICKS as u64 * 20 {
+            let demo = t as f64 * 0.97 / TICKS as f64;
+            p.tick(&mut book, demo);
+            let now = p.now.unwrap();
+            let target = (demo * TICKS as f64).round() as u64;
+            assert!(now.abs_diff(target) <= DRIFT + 2, "{now} vs {target} at {t}");
+        }
+        // Only the very first tick counts as a jump: nothing was ever cut.
+        assert_eq!(p.jumps, 1, "the music jumped, cutting what rang");
     }
 
     #[test]
