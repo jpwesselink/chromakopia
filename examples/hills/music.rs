@@ -228,8 +228,10 @@ struct Dial {
 impl Dial {
     /// `track` as it sounds untouched.
     fn of(track: u8) -> Self {
-        let env = if track == ACID_HIGH { 45.0 } else { 100.0 };
-        Dial { volume: 100.0, cutoff: 0x0C0 as f64 * 100.0 / 0x7FF as f64, res: 80.0, env, decay: 50.0 }
+        // The 303s untouched are soft and gentle — little resonance, a
+        // mild, rounder envelope; the scroll text turns them up to acid.
+        let env = if track == ACID_HIGH { 20.0 } else { 35.0 };
+        Dial { volume: 100.0, cutoff: 15.0, res: 30.0, env, decay: 60.0 }
     }
 
     /// This, with the knobs `knobs` names turned to their settings.
@@ -1244,9 +1246,9 @@ mod tests {
         let open = Knobs { cutoff: Some(60), env: Some(0), res: Some(90), ..Knobs::default() };
         let (lo, hi) = (filter(closed), filter(open));
         assert!(hi.0 > lo.0 + 500, "cutoff {lo:?} vs {hi:?}");
-        assert_eq!((lo.1, hi.1), (12, 14));
-        // Untouched knobs: the 303 as it always was.
-        assert_eq!(filter(Knobs::default()).1, 12);
+        assert_eq!((lo.1, hi.1), (5, 14));
+        // Untouched knobs: soft and gentle, little resonance.
+        assert_eq!(filter(Knobs::default()).1, 5);
     }
 
     #[test]
@@ -1268,7 +1270,7 @@ mod tests {
         let later = tick(cues[2]).div_ceil(BAR) * BAR;
         let dial = |at: u64| session.at(at).1[ACID as usize];
         assert!((dial(later + BAR).cutoff - 80.0).abs() < 1e-9);
-        assert!((dial(later).res - 80.0).abs() < 1e-9 && (dial(later + BAR).res - 20.0).abs() < 1e-9);
+        assert!((dial(later).res - Dial::of(ACID).res).abs() < 1e-9 && (dial(later + BAR).res - 20.0).abs() < 1e-9);
     }
 
     #[test]
