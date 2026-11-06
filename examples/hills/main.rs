@@ -8,7 +8,8 @@
 //! `panel.rs`) wait for codes of their own.
 //!
 //! Run: `cargo run --release --example hills` (`-- --mute` for no music)
-//! Keys: → n space next code · ← p previous code · s sequencer · q quit
+//! Keys: → n space next code · ← p previous code · s sequencer ·
+//! 1–8 mute a track · q quit
 
 mod dive;
 mod drums;
@@ -33,7 +34,7 @@ mod tiny;
 mod wordmark;
 
 use chromakopia::prelude::*;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chromakopia::animate::framebuffer::FPS;
@@ -215,6 +216,8 @@ struct Stage {
     session: music::Session,
     /// Whether the sequencer strip shows (`s` toggles it).
     sequencer: Arc<AtomicBool>,
+    /// Tracks muted from the keyboard (1–8), shared with the music.
+    mutes: music::Mutes,
     /// The script time, as f64 bits, each frame: the music follows it.
     clock: Arc<AtomicU64>,
     /// Tests: show the storyboard from this time instead of the script.
@@ -262,6 +265,7 @@ impl Stage {
             seek: Arc::new(Mutex::new(None)),
             session,
             sequencer: Arc::new(AtomicBool::new(true)),
+            mutes: Arc::new(AtomicU16::new(0)),
             clock: Arc::new(AtomicU64::new(0f64.to_bits())),
             #[cfg(test)]
             story: Mutex::new(None),
@@ -365,7 +369,7 @@ impl Effect for Stage {
         }
 
         if self.sequencer.load(Ordering::Relaxed) {
-            draw_strip(buf, &self.session.strip(view.secs), view.secs);
+            draw_strip(buf, &self.session.strip(view.secs, self.mutes.load(Ordering::Relaxed)), view.secs);
         }
 
         if buf.width > 0 && buf.height > 0 {
@@ -410,16 +414,18 @@ fn draw_strip(buf: &mut FrameBuffer, strip: &music::Strip, secs: f64) {
     let (bar, beat, sixteenth) = strip.position;
     parts.push((format!(" ▶ {bar}.{beat}.{sixteenth} "), bright));
     let blink = (secs * 4.0).floor() as i64 % 2 == 0;
-    for t in &strip.tracks {
+    for (key, t) in strip.tracks.iter().enumerate() {
         parts.push(("│ ".into(), dim));
+        let key = key + 1;
         match &t.playing {
+            _ if t.muted => parts.push((format!("{key}✕ {} ", t.name), dim)),
             Some((name, through)) => {
                 let filled = (through * 4.0).floor() as usize;
                 let bar: String = (0..4).map(|i| if i <= filled { '▰' } else { '▱' }).collect();
                 let knob = t.cutoff.map(|c| format!(" c{c:.0}")).unwrap_or_default();
-                parts.push((format!("▶ {} {name}{knob} {bar} ", t.name), bright));
+                parts.push((format!("{key}▶ {} {name}{knob} {bar} ", t.name), bright));
             }
-            None => parts.push((format!("· {} ", t.name), dim)),
+            None => parts.push((format!("{key}· {} ", t.name), dim)),
         }
         if t.waiting {
             parts.push((if blink { "◆ " } else { "  " }.into(), wait));
@@ -568,9 +574,11 @@ async fn main() {
     // The music plays for as long as this lives, the scroll text
     // launching its loops; silent without a sound device, or with --mute.
     let session = stage.session.clone();
-    let _music = if std::env::args().any(|a| a == "--mute") { None } else { music::play(session, stage.clock.clone()) };
+    let _music = if std::env::args().any(|a| a == "--mute") { None } else { music::play(session, stage.clock.clone(), stage.mutes.clone()) };
     let seek = stage.seek.clone();
     let sequencer = stage.sequencer.clone();
+    let mutes = stage.mutes.clone();
+    let strip_tracks = music::strip_tracks();
     Scene::new()
         .add(stage)
         .fullscreen()
@@ -578,6 +586,13 @@ async fn main() {
         .on_key(move |key| {
             if key == Key::Char('s') {
                 sequencer.fetch_xor(true, Ordering::Relaxed);
+                return;
+            }
+            // 1–8: mute or unmute the strip's tracks.
+            if let Key::Char(c @ '1'..='9') = key {
+                if let Some(&track) = strip_tracks.get(c as usize - '1' as usize) {
+                    mutes.fetch_xor(1 << track, Ordering::Relaxed);
+                }
                 return;
             }
             let request = match key {
@@ -1142,9 +1157,13 @@ mod tests {
         };
         // The pad plays in the cold open; the drums once Welly well's in.
         let early = row_text(5.0);
-        assert!(early.contains("▶ pad 1") && early.contains("· drums"), "{early}");
+        assert!(early.contains("1▶ pad 1") && early.contains("4· drums"), "{early}");
         let beat = row_text(intro::BEAT_AT + 0.5);
-        assert!(beat.contains("▶ drums little"), "{beat}");
+        assert!(beat.contains("4▶ drums little"), "{beat}");
+        // Muted (key 4): marked, still in its place.
+        stage.mutes.store(1 << music::track_named("drums").unwrap(), Ordering::Relaxed);
+        assert!(row_text(intro::BEAT_AT + 0.5).contains("4✕ drums"));
+        stage.mutes.store(0, Ordering::Relaxed);
         assert!(beat.contains("▶ 9."), "the transport: {beat}");
         // Toggled off: the landscape's ground again.
         stage.sequencer.store(false, Ordering::Relaxed);

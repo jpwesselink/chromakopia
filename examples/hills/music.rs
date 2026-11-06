@@ -26,7 +26,7 @@
 //! so skipping back and forth, or the show starting over, always lands on
 //! the right loops at the right point in their bars.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use resid::{ChipModel, SamplingMethod, Sid};
@@ -316,6 +316,17 @@ pub struct Session {
     waits: Vec<(u64, u64, Vec<u8>)>,
 }
 
+/// Which tracks are muted, a bit per track (index into `TRACKS`): shared
+/// by the keys that toggle them, the strip that shows them and the music
+/// that leaves them out.
+pub type Mutes = Arc<AtomicU16>;
+
+/// The tracks in the sequencer strip, in order — those with loops. Keys
+/// 1, 2, 3… toggle them.
+pub fn strip_tracks() -> Vec<u8> {
+    (0..TRACKS.len() as u8).filter(|&t| CLIPS.iter().any(|c| c.track == t)).collect()
+}
+
 /// One track in the sequencer strip.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StripTrack {
@@ -327,6 +338,8 @@ pub struct StripTrack {
     pub waiting: bool,
     /// The 303s' cutoff knob, 0–100.
     pub cutoff: Option<f64>,
+    /// Muted from the keyboard.
+    pub muted: bool,
 }
 
 /// The sequencer strip: the transport, and every track with loops.
@@ -368,14 +381,16 @@ impl Session {
         Session { launches, waits }
     }
 
-    /// The sequencer strip `secs` into the script.
-    pub fn strip(&self, secs: f64) -> Strip {
+    /// The sequencer strip `secs` into the script, with `mutes` (a bit per
+    /// track).
+    pub fn strip(&self, secs: f64, mutes: u16) -> Strip {
         let now = (secs.max(0.0) * TICKS as f64) as u64;
         let (playing, dials) = self.at(now);
         let per_beat = per_beat() as u64;
         let position = (now / BAR + 1, now % BAR / per_beat + 1, now % per_beat / (per_beat / 4) + 1);
-        let tracks = (0..TRACKS.len())
-            .filter(|&t| CLIPS.iter().any(|c| c.track as usize == t))
+        let tracks = strip_tracks()
+            .into_iter()
+            .map(|t| t as usize)
             .map(|t| {
                 let playing = playing[t].filter(|p| p.launch <= now).map(|p| {
                     let clip = CLIPS[p.clip];
@@ -389,6 +404,7 @@ impl Session {
                     playing,
                     waiting: self.waits.iter().any(|(fired, at, ts)| *fired <= now && now < *at && ts.contains(&(t as u8))),
                     cutoff: has_filter_knobs(t as u8).then_some(dials[t].cutoff),
+                    muted: mutes & 1 << t != 0,
                 }
             })
             .collect();
@@ -526,6 +542,8 @@ pub struct Player {
     pub kit_level: f32,
     /// Where each track's knobs stand, as the session has them.
     dials: [Dial; TRACKS.len()],
+    /// Tracks muted from the keyboard: their loops run on, unheard.
+    pub mutes: Mutes,
 }
 
 impl Player {
@@ -540,6 +558,7 @@ impl Player {
             levels: [1.0; CHIPS],
             kit_level: 1.0,
             dials: std::array::from_fn(|t| Dial::of(t as u8)),
+            mutes: Mutes::default(),
         }
     }
 
@@ -574,8 +593,13 @@ impl Player {
         // Levels: each chip at its track's volume (the pad chip at the
         // louder of the pad's and the bells').
         self.levels = [0.0; CHIPS];
+        let mutes = self.mutes.load(Ordering::Relaxed);
+        let muted = |track: usize| mutes & 1 << track != 0;
+        self.kit_level = if muted(DRUMS as usize) { 0.0 } else { self.kit_level };
+        // A muted track's notes go at once (its loop runs on, unheard).
+        self.held.retain(|h| !muted(h.note.track as usize));
         for (track, t) in playing.iter().enumerate() {
-            if t.is_none() {
+            if t.is_none() || muted(track) {
                 continue;
             }
             let level = (dials[track].volume / 100.0) as f32;
@@ -591,7 +615,7 @@ impl Player {
                 continue;
             }
             let phase = (now - launch) % length;
-            for &note in clip.notes.iter().filter(|n| ticks(n.at) % length == phase) {
+            for &note in clip.notes.iter().filter(|n| ticks(n.at) % length == phase && !muted(n.track as usize)) {
                 self.hold(note, c, launch, now);
             }
         }
@@ -857,13 +881,14 @@ impl Synth {
 /// `clock` (its script time as f64 bits) through `session`; it plays as
 /// long as the returned stream lives. None when there is no sound to be
 /// had (no device, an unusual sample format) — the demo just runs silent.
-pub fn play(session: Session, clock: Arc<AtomicU64>) -> Option<cpal::Stream> {
+pub fn play(session: Session, clock: Arc<AtomicU64>, mutes: Mutes) -> Option<cpal::Stream> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     let device = cpal::default_host().default_output_device()?;
     let supported = device.default_output_config().ok()?;
     let config: cpal::StreamConfig = supported.config();
     let channels = config.channels as usize;
     let mut synth = Synth::new(config.sample_rate.0, session, clock);
+    synth.player.mutes = mutes;
     // Left and right as the first two channels; any others get both.
     let mut frame = move |out: &mut dyn FnMut(usize, f32)| {
         let (l, r) = synth.next_stereo();
@@ -1220,23 +1245,48 @@ mod tests {
         let cue = |n: usize| tl.cues.iter().filter(|c| matches!(c.code, Code::Play(..))).nth(n).unwrap().t;
         let track = |strip: &Strip, name: &str| strip.tracks.iter().find(|t| t.name == name).cloned().unwrap();
         // The opening pad plays from the start, its first loop.
-        let start = session.strip(0.1);
+        let start = session.strip(0.1, 0);
         assert_eq!(start.position, (1, 1, 1));
         assert_eq!(track(&start, "pad").playing.map(|p| p.0), Some("1".to_string()));
         // The bass's code has fired: it waits for the bar, then plays.
-        let fired = session.strip(cue(0) + 0.01);
+        let fired = session.strip(cue(0) + 0.01, 0);
         assert!(track(&fired, "bass").waiting && track(&fired, "bass").playing.is_none());
         let bar = (cue(0) * TICKS as f64).ceil() as u64;
         let bar = bar.div_ceil(BAR) * BAR;
-        let on = session.strip(bar as f64 / TICKS as f64);
+        let on = session.strip(bar as f64 / TICKS as f64, 0);
         assert!(!track(&on, "bass").waiting);
         assert_eq!(track(&on, "bass").playing.map(|p| p.1), Some(0.0));
         assert_eq!(on.position.1, 1, "a launch lands on beat 1");
         // The 303's cutoff knob shows.
-        let later = session.strip(cue(1) + 2.5);
+        let later = session.strip(cue(1) + 2.5, 0);
         assert!((track(&later, "303").cutoff.unwrap() - 60.0).abs() < 1e-9);
         // The toy track has no loops: not in the strip.
         assert!(later.tracks.iter().all(|t| t.name != "toy"));
+    }
+
+    #[test]
+    fn a_muted_track_goes_quiet_and_comes_back_in_time() {
+        let bass = first("bass");
+        let mut p = Player::new(Session::only(&[bass]));
+        let mut book = Book::new();
+        let mute = |p: &Player, on: bool| p.mutes.store(if on { 1 << THUD } else { 0 }, Ordering::Relaxed);
+        mute(&p, true);
+        let length = ticks(CLIPS[bass].beats);
+        for t in 0..length {
+            p.tick(&mut book, t as f64 / TICKS as f64);
+            assert!(p.held.iter().all(|h| h.note.track != THUD) && p.levels[5] == 0.0, "the bass plays muted at {t}");
+        }
+        // Unmuted: back on its next note, in its loop's time.
+        mute(&p, false);
+        let next = CLIPS[bass].notes[0];
+        for t in length..length + ticks(next.at) + 1 {
+            p.tick(&mut book, t as f64 / TICKS as f64);
+        }
+        assert!(p.held.iter().any(|h| h.note == next && h.start == length + ticks(next.at)));
+        // The strip numbers eight tracks for the keys, and shows the mute.
+        assert_eq!(strip_tracks().len(), 8);
+        let strip = Session::only(&[bass]).strip(1.0, 1 << THUD);
+        assert!(strip.tracks.iter().find(|t| t.name == "bass").unwrap().muted);
     }
 
     #[test]
