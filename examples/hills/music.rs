@@ -311,6 +311,30 @@ type Playing = [Option<Track>; TRACKS.len()];
 pub struct Session {
     /// (tick it takes effect, launch), in order.
     launches: Vec<(u64, Launch)>,
+    /// (tick its code fired, tick it takes effect, tracks it touches) for
+    /// each coded launch: between the two it's waiting for its bar.
+    waits: Vec<(u64, u64, Vec<u8>)>,
+}
+
+/// One track in the sequencer strip.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StripTrack {
+    pub name: &'static str,
+    /// The loop it plays — its name, or its number on the track — and how
+    /// far through it (0–1).
+    pub playing: Option<(String, f64)>,
+    /// A launch or stop has fired and waits for the next bar.
+    pub waiting: bool,
+    /// The 303s' cutoff knob, 0–100.
+    pub cutoff: Option<f64>,
+}
+
+/// The sequencer strip: the transport, and every track with loops.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Strip {
+    /// Bar, beat and sixteenth, from 1, as Live counts.
+    pub position: (u64, u64, u64),
+    pub tracks: Vec<StripTrack>,
 }
 
 impl Session {
@@ -320,20 +344,55 @@ impl Session {
             let at = (secs * TICKS as f64).ceil() as u64;
             (at.div_ceil(BAR) * BAR, Launch::Play(clip_named(t, w).expect("opening loop"), Knobs::default()))
         });
-        let coded = timeline.cues.iter().filter_map(|cue| {
-            let launch = match cue.code {
-                Code::Play(clip, knobs) => Launch::Play(clip, knobs),
-                Code::Stop(track) => Launch::Stop(track),
-                Code::StopLoop(clip) => Launch::StopLoop(clip),
-                _ => return None,
-            };
-            // The next bar line at or after the code.
-            let at = (cue.t * TICKS as f64).ceil() as u64;
-            Some((at.div_ceil(BAR) * BAR, launch))
-        });
+        let mut waits = Vec::new();
+        let coded: Vec<(u64, Launch)> = timeline
+            .cues
+            .iter()
+            .filter_map(|cue| {
+                let (launch, tracks) = match cue.code {
+                    Code::Play(clip, knobs) => (Launch::Play(clip, knobs), vec![CLIPS[clip].track]),
+                    Code::Stop(Some(track)) => (Launch::Stop(Some(track)), vec![track]),
+                    Code::Stop(None) => (Launch::Stop(None), (0..TRACKS.len() as u8).collect()),
+                    Code::StopLoop(clip) => (Launch::StopLoop(clip), vec![CLIPS[clip].track]),
+                    _ => return None,
+                };
+                // The next bar line at or after the code.
+                let fired = (cue.t * TICKS as f64).ceil() as u64;
+                let at = fired.div_ceil(BAR) * BAR;
+                waits.push((fired, at, tracks));
+                Some((at, launch))
+            })
+            .collect();
         let mut launches: Vec<(u64, Launch)> = opening.chain(coded).collect();
         launches.sort_by_key(|l| l.0);
-        Session { launches }
+        Session { launches, waits }
+    }
+
+    /// The sequencer strip `secs` into the script.
+    pub fn strip(&self, secs: f64) -> Strip {
+        let now = (secs.max(0.0) * TICKS as f64) as u64;
+        let (playing, dials) = self.at(now);
+        let per_beat = per_beat() as u64;
+        let position = (now / BAR + 1, now % BAR / per_beat + 1, now % per_beat / (per_beat / 4) + 1);
+        let tracks = (0..TRACKS.len())
+            .filter(|&t| CLIPS.iter().any(|c| c.track as usize == t))
+            .map(|t| {
+                let playing = playing[t].filter(|p| p.launch <= now).map(|p| {
+                    let clip = CLIPS[p.clip];
+                    let number = CLIPS[..p.clip].iter().filter(|c| c.track == clip.track).count() + 1;
+                    let name = if clip.name.is_empty() { number.to_string() } else { clip.name.to_string() };
+                    let length = ticks(clip.beats).max(1);
+                    (name, ((now - p.launch) % length) as f64 / length as f64)
+                });
+                StripTrack {
+                    name: TRACK_NAMES[t],
+                    playing,
+                    waiting: self.waits.iter().any(|(fired, at, ts)| *fired <= now && now < *at && ts.contains(&(t as u8))),
+                    cutoff: has_filter_knobs(t as u8).then_some(dials[t].cutoff),
+                }
+            })
+            .collect();
+        Strip { position, tracks }
     }
 
     /// Whether `track` has a loop going `secs` into the script (tests).
@@ -360,19 +419,19 @@ impl Session {
     /// Just these loops, from the start (tests).
     #[cfg(test)]
     fn only(clips: &[usize]) -> Self {
-        Session { launches: clips.iter().map(|&c| (0, Launch::Play(c, Knobs::default()))).collect() }
+        Session { launches: clips.iter().map(|&c| (0, Launch::Play(c, Knobs::default()))).collect(), waits: Vec::new() }
     }
 
     /// These loops at these volumes, from the start (tests).
     #[cfg(test)]
     fn at_volumes(clips: &[(usize, u8)]) -> Self {
-        Session { launches: clips.iter().map(|&(c, v)| (0, Launch::Play(c, Knobs { volume: Some(v), ..Knobs::default() }))).collect() }
+        Session { launches: clips.iter().map(|&(c, v)| (0, Launch::Play(c, Knobs { volume: Some(v), ..Knobs::default() }))).collect(), waits: Vec::new() }
     }
 
     /// These loops with these knobs, from the start (tests).
     #[cfg(test)]
     fn with_knobs(clips: &[(usize, Knobs)]) -> Self {
-        Session { launches: clips.iter().map(|&(c, k)| (0, Launch::Play(c, k))).collect() }
+        Session { launches: clips.iter().map(|&(c, k)| (0, Launch::Play(c, k))).collect(), waits: Vec::new() }
     }
 
     /// What plays at tick `now`, and where every track's knobs stand.
@@ -1153,6 +1212,31 @@ mod tests {
         let dial = |at: u64| session.at(at).1[ACID as usize];
         assert!((dial(later + BAR).cutoff - 80.0).abs() < 1e-9);
         assert!((dial(later).res - 80.0).abs() < 1e-9 && (dial(later + BAR).res - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_strip_shows_what_plays_what_waits_and_where_we_are() {
+        let (session, tl) = session_of("ab{play bass}cdefghijklmnopqrstuvwxyz{play 303 cutoff:60 over:0}abc");
+        let cue = |n: usize| tl.cues.iter().filter(|c| matches!(c.code, Code::Play(..))).nth(n).unwrap().t;
+        let track = |strip: &Strip, name: &str| strip.tracks.iter().find(|t| t.name == name).cloned().unwrap();
+        // The opening pad plays from the start, its first loop.
+        let start = session.strip(0.1);
+        assert_eq!(start.position, (1, 1, 1));
+        assert_eq!(track(&start, "pad").playing.map(|p| p.0), Some("1".to_string()));
+        // The bass's code has fired: it waits for the bar, then plays.
+        let fired = session.strip(cue(0) + 0.01);
+        assert!(track(&fired, "bass").waiting && track(&fired, "bass").playing.is_none());
+        let bar = (cue(0) * TICKS as f64).ceil() as u64;
+        let bar = bar.div_ceil(BAR) * BAR;
+        let on = session.strip(bar as f64 / TICKS as f64);
+        assert!(!track(&on, "bass").waiting);
+        assert_eq!(track(&on, "bass").playing.map(|p| p.1), Some(0.0));
+        assert_eq!(on.position.1, 1, "a launch lands on beat 1");
+        // The 303's cutoff knob shows.
+        let later = session.strip(cue(1) + 2.5);
+        assert!((track(&later, "303").cutoff.unwrap() - 60.0).abs() < 1e-9);
+        // The toy track has no loops: not in the strip.
+        assert!(later.tracks.iter().all(|t| t.name != "toy"));
     }
 
     #[test]

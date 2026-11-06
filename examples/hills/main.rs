@@ -8,7 +8,7 @@
 //! `panel.rs`) wait for codes of their own.
 //!
 //! Run: `cargo run --release --example hills` (`-- --mute` for no music)
-//! Keys: → n space next code · ← p previous code · q quit
+//! Keys: → n space next code · ← p previous code · s sequencer · q quit
 
 mod dive;
 mod drums;
@@ -33,7 +33,7 @@ mod tiny;
 mod wordmark;
 
 use chromakopia::prelude::*;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chromakopia::animate::framebuffer::FPS;
@@ -77,6 +77,8 @@ struct View {
     dive: dive::Dive,
     /// Per side scroller: seconds since its latest `{side}` code.
     sides: [Option<f64>; sides::SIDES.len()],
+    /// Script time.
+    secs: f64,
 }
 
 /// What is on screen at script time `t`: the scroller, plus the landscape
@@ -129,7 +131,7 @@ fn script_view(tl: &script::Timeline, intro_secs: f64, t: f64) -> View {
     };
     let intro = (t < intro_secs).then_some(t);
     let sides = std::array::from_fn(|i| tl.since(script::Code::Side(i), t).map(|at| t - at));
-    View { logo, heading: None, panel: None, pushed: None, scroll: tl.scrolled(t), hills, intro, dive, sides }
+    View { logo, heading: None, panel: None, pushed: None, scroll: tl.scrolled(t), hills, intro, dive, sides, secs: t }
 }
 
 /// What is on screen `local` seconds into storyboard step `i`. The
@@ -156,7 +158,7 @@ fn view_for(steps: &[Step], i: usize, local: f64) -> View {
     let pushed = panel
         .filter(|pv| !pv.slide.first && local < panel::ENTER_SECS)
         .map(|_| PanelView { step: i - 1, local: steps[i - 1].secs + local, slide: slide_of(steps, i - 1) });
-    View { logo, heading, panel, pushed, scroll: 0.0, hills: Some(f64::INFINITY), intro: None, dive: dive::Dive::default(), sides: [None; sides::SIDES.len()] }
+    View { logo, heading, panel, pushed, scroll: 0.0, hills: Some(f64::INFINITY), intro: None, dive: dive::Dive::default(), sides: [None; sides::SIDES.len()], secs: 0.0 }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -209,6 +211,10 @@ struct Stage {
     /// Wall time at which script time was 0.
     origin: Mutex<f64>,
     seek: Arc<Mutex<Option<Seek>>>,
+    /// The music's loops, for the sequencer strip.
+    session: music::Session,
+    /// Whether the sequencer strip shows (`s` toggles it).
+    sequencer: Arc<AtomicBool>,
     /// The script time, as f64 bits, each frame: the music follows it.
     clock: Arc<AtomicU64>,
     /// Tests: show the storyboard from this time instead of the script.
@@ -234,6 +240,7 @@ impl Stage {
             .unwrap_or_else(|e| panic!("scroll text: {e}"));
         let cold_open = intro::Intro::new(screen_w, ROWS, SCROLLER_Y);
         let timeline = script::Timeline::new(&placed, screen_w).with_lead(cold_open.secs, &cold_open.marks);
+        let session = music::Session::new(&timeline);
         let view = Arc::new(Mutex::new(script_view(&timeline, cold_open.shown, 0.0)));
         let scroller = Arc::new(scroller::Scroller::new(placed.glyphs.clone(), SCROLLER_Y));
         let ride = looping::ride(&placed.glyphs, screen_w);
@@ -253,6 +260,8 @@ impl Stage {
             timeline,
             origin: Mutex::new(0.0),
             seek: Arc::new(Mutex::new(None)),
+            session,
+            sequencer: Arc::new(AtomicBool::new(true)),
             clock: Arc::new(AtomicU64::new(0f64.to_bits())),
             #[cfg(test)]
             story: Mutex::new(None),
@@ -355,6 +364,10 @@ impl Effect for Stage {
             }
         }
 
+        if self.sequencer.load(Ordering::Relaxed) {
+            draw_strip(buf, &self.session.strip(view.secs), view.secs);
+        }
+
         if buf.width > 0 && buf.height > 0 {
             frame_edges(buf);
         }
@@ -381,6 +394,52 @@ fn frame_edges(buf: &mut FrameBuffer) {
     }
 }
 
+
+/// The sequencer strip on the bottom row inside the border, as Live's
+/// session view in one line: the transport (bar.beat.16th), then each
+/// track — ▶ and its loop with a bar of how far through it is, a blinking
+/// ◆ while a launch waits for its bar, a dim · when it's quiet — and the
+/// 303s' cutoff knob. Cut off at the screen's edge.
+fn draw_strip(buf: &mut FrameBuffer, strip: &music::Strip, secs: f64) {
+    if buf.height < 3 || buf.width < 4 {
+        return;
+    }
+    let row = buf.height - 2;
+    let (bg, bright, dim, wait) = (glyphs::LETTER_OUTLINE, glyphs::LETTER_HIGHLIGHT, glyphs::LETTER_LOWER, glyphs::LETTER_UPPER);
+    let mut parts: Vec<(String, Color)> = Vec::new();
+    let (bar, beat, sixteenth) = strip.position;
+    parts.push((format!(" ▶ {bar}.{beat}.{sixteenth} "), bright));
+    let blink = (secs * 4.0).floor() as i64 % 2 == 0;
+    for t in &strip.tracks {
+        parts.push(("│ ".into(), dim));
+        match &t.playing {
+            Some((name, through)) => {
+                let filled = (through * 4.0).floor() as usize;
+                let bar: String = (0..4).map(|i| if i <= filled { '▰' } else { '▱' }).collect();
+                let knob = t.cutoff.map(|c| format!(" c{c:.0}")).unwrap_or_default();
+                parts.push((format!("▶ {} {name}{knob} {bar} ", t.name), bright));
+            }
+            None => parts.push((format!("· {} ", t.name), dim)),
+        }
+        if t.waiting {
+            parts.push((if blink { "◆ " } else { "  " }.into(), wait));
+        }
+    }
+    let mut x = 1;
+    for (text, color) in parts {
+        for ch in text.chars() {
+            if x + 1 >= buf.width {
+                break;
+            }
+            buf.set(x, row, Cell::with_bg(ch, color, bg));
+            x += 1;
+        }
+    }
+    // The rest of the row the strip's colour, edge to edge.
+    for x in x..buf.width - 1 {
+        buf.set(x, row, Cell::with_bg(' ', bright, bg));
+    }
+}
 
 /// Terminal row the subtitle sits on: the panel's bottom interior row.
 fn subtitle_row(geo: &panel::Geometry) -> usize {
@@ -508,14 +567,19 @@ async fn main() {
     let stage = Stage::new(terminal_width());
     // The music plays for as long as this lives, the scroll text
     // launching its loops; silent without a sound device, or with --mute.
-    let session = music::Session::new(&stage.timeline);
+    let session = stage.session.clone();
     let _music = if std::env::args().any(|a| a == "--mute") { None } else { music::play(session, stage.clock.clone()) };
     let seek = stage.seek.clone();
+    let sequencer = stage.sequencer.clone();
     Scene::new()
         .add(stage)
         .fullscreen()
         .quit_key('q')
         .on_key(move |key| {
+            if key == Key::Char('s') {
+                sequencer.fetch_xor(true, Ordering::Relaxed);
+                return;
+            }
             let request = match key {
                 Key::Right | Key::Char('n') | Key::Char(' ') => Seek::Next,
                 Key::Left | Key::Char('p') => Seek::Prev,
@@ -1065,6 +1129,26 @@ mod tests {
         stage.render(&mut buf, 0);
         let letters = (0..ROWS).flat_map(|y| (0..160).map(move |x| (x, y))).filter(|&(x, y)| buf.get(x, y).ch.is_ascii_alphabetic()).count();
         assert!(letters > 40, "only {letters} letters");
+    }
+
+    #[test]
+    fn the_sequencer_strip_shows_at_the_bottom_and_s_hides_it() {
+        let stage = Stage::new(160);
+        let row_text = |t: f64| {
+            stage.seek_to(t);
+            let mut buf = FrameBuffer::new(160, ROWS);
+            stage.render(&mut buf, 0);
+            (0..160).map(|x| buf.get(x, ROWS - 2).ch).collect::<String>()
+        };
+        // The pad plays in the cold open; the drums once Welly well's in.
+        let early = row_text(5.0);
+        assert!(early.contains("▶ pad 1") && early.contains("· drums"), "{early}");
+        let beat = row_text(intro::BEAT_AT + 0.5);
+        assert!(beat.contains("▶ drums little"), "{beat}");
+        assert!(beat.contains("▶ 9."), "the transport: {beat}");
+        // Toggled off: the landscape's ground again.
+        stage.sequencer.store(false, Ordering::Relaxed);
+        assert!(!row_text(5.0).contains("pad"));
     }
 
     #[test]
