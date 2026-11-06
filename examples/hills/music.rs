@@ -158,6 +158,25 @@ fn chip_of(track: u8) -> Option<usize> {
     }
 }
 
+/// What the scroll text calls track `t`.
+pub fn track_name(t: u8) -> &'static str {
+    TRACK_NAMES[t as usize]
+}
+
+/// Loop `clip` as the scroll text names it: its track and its name, or
+/// its number on the track.
+pub fn clip_label(clip: usize) -> String {
+    let c = CLIPS[clip];
+    let number = CLIPS[..clip].iter().filter(|o| o.track == c.track).count() + 1;
+    let which = if c.name.is_empty() { number.to_string() } else { c.name.to_string() };
+    format!("{} {which}", TRACK_NAMES[c.track as usize])
+}
+
+/// Seconds in a bar.
+pub fn bar_secs() -> f64 {
+    BAR as f64 / TICKS as f64
+}
+
 /// The track the scroll text calls `name`.
 pub fn track_named(name: &str) -> Option<u8> {
     TRACK_NAMES.iter().position(|&n| n.eq_ignore_ascii_case(name)).map(|i| i as u8)

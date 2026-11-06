@@ -526,12 +526,12 @@ pub const PITCH: &str = "{play drums little}{hills}{style flat}{pause 1}{gap}Wel
 ...and yes, before you ask: this is a TERMINAL. No browser, no video, no OSC 1337, ESC _ G nor sixels, just the good old terminal you have known and loved...   which you will now {side hide}{play 303 2}love a little bit more.   {font tiny}(psst... the small print: {stop 303 2}no pixels were harmed in the making of this demo - because there are no pixels, just text and ANSI escape codes!){font c64}   \
 {side far}Clouds that drift and throw shadows on the land. Never shade. They're above that.   \
 A logo that will not sit still, bouncing every letter on its own little wave...   in fact, it won't{logo away} even stay.    \
-{play 303 res:10 over:0}{path loop}And all of it at a silky 60 frames per second.{path off}{dive in}{play drums little}{play marimba}{play 303 cutoff:20 over:4}{path spin}Round and round we go - and not a single drop spilled!{path off}Down in the C where the colours spill: sky blue, mint and a coral hill!{dive out}{play drums full}{stop marimba}{font big}BENDING THE RULES{font c64}   {logo}{zoom on}Zoom in, zoom out...{zoom off}   \
+{path loop}{play 303b res:10 over:0}And all of it at a silky 60 frames per second.{path off}{play drums little}{play marimba}{play 303 2 cutoff:20 over:4}{dive in}{path spin}Round and round we go - and not a single drop spilled!{path off}Down in the C where the colours spill: sky blue, mint and a coral hill!{dive out}{play drums full}{stop marimba}{font big}BENDING THE RULES{font c64}   {logo}{zoom on}Zoom in, zoom out...{zoom off}   \
 How is it done?   Ha!   A magician never tells...   {font term}(this is your terminal's own font, by the way - blink and you miss it){font c64}   \
 ...but a crate does:   {font big}cargo add chromakopia{font c64}   {style flat}{wave off}...ofc you should type it{logo out}{stop 303} without the colours, just like we did in 1986...{wave on}{style candy}   \
 {wave long}{side dycp}{play 303b}{play 303 2}Greetings fly out to Exel - sndpl - Paradox - Pitr / Eindbazen - ISO - DocWilco - Danny Styles - Spidey - Humasect - Nightdead - Si-Goat - Stephen Parker - Koffiekop - Kevinjel - Sanity - \
 Quaddepos - Janglad - KVE - Aftertwelve and the rest of DMKC - {side rush}Matteo Collina - Luca Maraschi - Heapwolf - \
-Ashley Williams - Steve Klabnik - {wave on}\
+Ashley Williams (you were right about Rust) - Steve Klabnik - {wave on}\
 {stop 303b}and to everyone who still believes a terminal can be beautiful, \
 to all the coders, pixel pushers and scrollers of the past, {logo}and to YOU for reading this far!   {font mario}CHROMAKOPIA{font c64}   \
 Keys: space or arrows to skip, q to quit.   {bye}{stop all}Text wraps... now!          ";

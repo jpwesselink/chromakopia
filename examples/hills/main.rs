@@ -7,7 +7,8 @@
 //! and types the tagline under it. The effect panels (`stage.rs`,
 //! `panel.rs`) wait for codes of their own.
 //!
-//! Run: `cargo run --release --example hills` (`-- --mute` for no music)
+//! Run: `cargo run --release --example hills` (`-- --mute` for no music;
+//! `-- --cues` prints when each code fires, in bars, and quits)
 //! Keys: → n space next code · ← previous code · p pause · s sequencer ·
 //! 1–8 mute a track · q quit
 
@@ -463,6 +464,63 @@ fn draw_strip(buf: &mut FrameBuffer, strip: &music::Strip, secs: f64) {
     }
 }
 
+/// When each code in the scroll text fires on a screen `width` wide:
+/// script time, bar.beat.16th (as Live counts, 120 BPM), when a music code
+/// takes effect (the next bar), the code, and the text from there on.
+fn cue_sheet(width: usize) -> String {
+    use std::fmt::Write as _;
+    let placed = script::parse(scroller::PITCH).and_then(|s| s.place(width)).unwrap_or_else(|e| panic!("scroll text: {e}"));
+    let cold_open = intro::Intro::new(width, ROWS, SCROLLER_Y);
+    let timeline = script::Timeline::new(&placed, width).with_lead(cold_open.secs, &cold_open.marks);
+    let bar = music::bar_secs();
+    let position = |t: f64| {
+        let beats = t / (bar / 4.0);
+        (beats as u64 / 4 + 1, beats as u64 % 4 + 1, ((beats.fract()) * 4.0) as u64 + 1)
+    };
+    let mut out = format!("{} columns wide; a bar is {bar} s, 120 px of text, 15 C64 letters\n\n", width);
+    let _ = writeln!(out, "{:>7}  {:<9} {:<6} {:<34} text", "time", "bar", "music", "code");
+    let cues = timeline.cues.iter().filter(|c| c.code != script::Code::Mark);
+    for (cue, &(x, _)) in cues.zip(&placed.events) {
+        let (b, beat, sixteenth) = position(cue.t);
+        let music = matches!(cue.code, script::Code::Play(..) | script::Code::Stop(_) | script::Code::StopLoop(_))
+            .then(|| format!("→ {}", (cue.t / bar - 1e-9).ceil() as u64 + 1))
+            .unwrap_or_default();
+        let code = match cue.code {
+            script::Code::Play(clip, knobs) => {
+                let mut s = format!("play {}", music::clip_label(clip));
+                for (name, v) in [("volume", knobs.volume), ("cutoff", knobs.cutoff), ("res", knobs.res), ("env", knobs.env), ("decay", knobs.decay), ("over", knobs.over)] {
+                    if let Some(v) = v {
+                        let _ = write!(s, " {name}:{v}");
+                    }
+                }
+                s
+            }
+            script::Code::Stop(Some(t)) => format!("stop {}", music::track_name(t)),
+            script::Code::Stop(None) => "stop all".into(),
+            script::Code::StopLoop(clip) => format!("stop {}", music::clip_label(clip)),
+            script::Code::Side(i) => format!("side {}", sides::SIDES[i].name),
+            script::Code::Dive(true) => "dive in".into(),
+            script::Code::Dive(false) => "dive out".into(),
+            script::Code::Pause(secs) => format!("pause {secs}"),
+            script::Code::LogoAway => "logo away".into(),
+            script::Code::LogoOut => "logo out".into(),
+            other => format!("{other:?}").to_lowercase(),
+        };
+        // The text from there, its spaces put back where letters stand apart.
+        let mut text = String::new();
+        let mut last: Option<&script::Glyph> = None;
+        for g in placed.glyphs.iter().filter(|g| g.x >= x).take(24) {
+            if last.is_some_and(|l| g.x > l.x + scroller::advance(l.font, l.ch) as f64 + 0.5) {
+                text.push(' ');
+            }
+            text.push(g.ch);
+            last = Some(g);
+        }
+        let _ = writeln!(out, "{:>6.1}s  {:<9} {:<6} {:<34} {text}", cue.t, format!("{b}.{beat}.{sixteenth}"), music, format!("{{{code}}}"));
+    }
+    out
+}
+
 /// Terminal row the subtitle sits on: the panel's bottom interior row.
 fn subtitle_row(geo: &panel::Geometry) -> usize {
     (geo.y + geo.h as i64 - 1) as usize
@@ -576,6 +634,11 @@ fn size_problem(rows: usize) -> Option<String> {
 
 #[tokio::main]
 async fn main() {
+    // The cue sheet is text: any terminal (or none) will do.
+    if std::env::args().any(|a| a == "--cues") {
+        print!("{}", cue_sheet(terminal_width().max(80)));
+        return;
+    }
     if let Some(problem) = size_problem(terminal_height()) {
         eprintln!("{problem}");
         return;
@@ -1097,16 +1160,14 @@ mod tests {
     }
 
     #[test]
-    fn the_303s_first_loop_comes_in_as_the_text_starts_looping() {
-        let first = music::clip_named("303", None).unwrap();
+    fn the_303b_comes_in_as_the_text_starts_looping() {
         for w in [100, 160, 260] {
             let stage = Stage::new(w);
             let session = music::Session::new(&stage.timeline);
             let start = when_scrolled(&stage, looping::ride(&stage.glyphs, w).unwrap().0);
-            // Not before (another 303 loop may play from the logo); within
-            // a bar or so of the loop starting.
-            assert_ne!(session.loop_at(start - 2.5, "303"), Some(first), "w {w}: before the loop");
-            assert_eq!(session.loop_at(start + 2.5, "303"), Some(first), "w {w}: not in the loop");
+            // Not before; within a bar or so of the loop starting.
+            assert!(!session.plays(start - 2.5, "303b"), "w {w}: before the loop");
+            assert!(session.plays(start + 2.5, "303b"), "w {w}: not in the loop");
         }
     }
 
@@ -1214,6 +1275,34 @@ mod tests {
         stage.paused.store(false, Ordering::Relaxed);
         let (_, t3) = frame(181);
         assert!((t3 - t - 1.0 / FPS).abs() < 1e-9, "{t} then {t3}");
+    }
+
+    #[test]
+    fn bar_puts_the_next_code_on_the_beat_at_any_width() {
+        for w in [100, 160, 260] {
+            let placed = script::parse("ab{pause 3}cdefg{bar}{play 303}hij{bars 2}{play bass}kl").unwrap().place(w).unwrap();
+            let cold_open = intro::Intro::new(w, ROWS, SCROLLER_Y);
+            let tl = script::Timeline::new(&placed, w).with_lead(cold_open.secs, &cold_open.marks);
+            let plays: Vec<f64> = tl.cues.iter().filter(|c| matches!(c.code, script::Code::Play(..))).map(|c| c.t).collect();
+            let bar = music::bar_secs();
+            for t in &plays {
+                // A hair before its bar line, so it launches on it.
+                let off = (t / bar).ceil() * bar - t;
+                assert!((0.0..0.1).contains(&off), "w {w}: {t} is {off} s before a bar");
+            }
+            // {bars 2}: two whole bars after the bar line.
+            let gap = plays[1] - plays[0];
+            assert!(gap >= 2.0 * bar && ((gap / bar).round() - gap / bar).abs() < 0.05, "w {w}: {gap}");
+        }
+    }
+
+    #[test]
+    fn the_cue_sheet_lists_every_code_with_its_bar() {
+        let sheet = cue_sheet(160);
+        assert!(sheet.contains("{play drums little}") && sheet.contains("Welly"), "{sheet}");
+        // "Welly well" brings the drums in on bar 9: the fifth swell.
+        let drums = sheet.lines().find(|l| l.contains("{play drums little}")).unwrap();
+        assert!(drums.contains("→ 9"), "{drums}");
     }
 
     #[test]

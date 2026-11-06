@@ -35,6 +35,11 @@ pub enum Code {
     /// off (or what comes after is still waiting off the right edge) when
     /// a code next to it reaches the middle.
     Gap,
+    /// Space up to the next bar line of the music, then this many whole
+    /// bars more (`{bar}`: none; `{bars 4}`: four) — so what follows comes
+    /// to the middle on the beat. A bar is 120 pixels of text at 120 BPM
+    /// (15 C64 letters), and a `{pause 2}` is one too.
+    Bars(u16),
     /// Everything after is set in this font.
     Font(Font),
     /// Everything after is drawn in this style.
@@ -123,6 +128,8 @@ pub fn parse(src: &str) -> Result<Script, String> {
             (Some("hills"), None, _) => Code::Hills,
             (Some("bye"), None, _) => Code::Bye,
             (Some("gap"), None, _) => Code::Gap,
+            (Some("bar"), None, _) => Code::Bars(0),
+            (Some("bars"), Some(n), None) => Code::Bars(n.parse().map_err(|_| format!("bad bars in {{{body}}}"))?),
             (Some("play"), Some(track), _) => {
                 // `{play <track> [loop] [volume:N] [cutoff:N] [res:N] [env:N]
                 // [decay:N] [over:N]}`, each 0–100; cutoff to decay only on
@@ -232,6 +239,9 @@ impl Script {
         // Dived in, with the waves yet to spread.
         let mut to_spread = false;
         let (mut glyphs, mut events, mut x) = (Vec::new(), Vec::new(), 0.0);
+        // Seconds the text has stood still so far: bars count them too.
+        let mut paused = 0.0;
+        let bar_secs = 4.0 * 60.0 / super::orbital3::BPM;
         let mut codes = self.events.iter().peekable();
         let chars: Vec<char> = self.text.chars().collect();
         for i in 0..=chars.len() {
@@ -242,6 +252,17 @@ impl Script {
                 codes.next();
                 match code {
                     Code::Gap => x += width as f64 / 2.0,
+                    Code::Pause(secs) => {
+                        paused += secs;
+                        events.push((x, code));
+                    }
+                    Code::Bars(n) => {
+                        // The text reaches the middle at its start's bar
+                        // plus x/SPEED plus the pauses: on to the next bar line.
+                        let t = x / SPEED + paused;
+                        let next = (t / bar_secs - 1e-9).ceil() * bar_secs + n as f64 * bar_secs;
+                        x += (next - t) * SPEED;
+                    }
                     Code::Font(f) => font = f,
                     Code::Style(st) => style = st,
                     Code::Wave(next) => {
