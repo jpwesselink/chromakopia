@@ -26,7 +26,7 @@
 //! so skipping back and forth, or the show starting over, always lands on
 //! the right loops at the right point in their bars.
 
-use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use resid::{ChipModel, SamplingMethod, Sid};
@@ -698,6 +698,23 @@ impl Player {
         true
     }
 
+    /// Let every sounding voice go, each keeping its waveform so it rings
+    /// out on its own release (a pause: the tails, the echoes and the hall
+    /// carry on); the notes are kept, to sound again on going on.
+    pub fn let_go(&mut self, sid: &mut impl Regs) {
+        let wave = |(chip, v): Slot| match (chip, v) {
+            (0, 0) | (1, 0) => SAW,
+            (2, _) => PULSE,
+            _ => TRI,
+        };
+        for chip in 0..CHIPS {
+            for v in 0..3u8 {
+                let slot = (chip, v);
+                self.release(sid, slot, wave(slot));
+            }
+        }
+    }
+
     fn release(&mut self, sid: &mut impl Regs, (chip, v): Slot, wave: u8) {
         if self.voices[chip][v as usize].take().is_some() {
             sid.poke(chip, 7 * v + CTRL, wave);
@@ -801,6 +818,9 @@ pub struct Synth {
     read: usize,
     /// Cycles owed to the chips, in 1/TICKS of a cycle.
     carry: u32,
+    /// The demo is paused: the sequencer holds, what sounds rings out.
+    pub paused: Arc<AtomicBool>,
+    was_paused: bool,
 }
 
 impl Synth {
@@ -833,14 +853,25 @@ impl Synth {
             kit_level: 1.0,
             read: 0,
             carry: 0,
+            paused: Arc::new(AtomicBool::new(false)),
+            was_paused: false,
         }
     }
 
     /// The next sample, left and right, -1..1.
     pub fn next_stereo(&mut self) -> (f32, f32) {
         while self.read >= self.buffers.iter().map(Vec::len).min().unwrap_or(0) {
-            let demo = f64::from_bits(self.clock.load(Ordering::Relaxed));
-            self.player.tick(&mut self.sids, demo);
+            let paused = self.paused.load(Ordering::Relaxed);
+            if paused {
+                // Held: no ticks, no new notes; what sounded rings out.
+                if !self.was_paused {
+                    self.player.let_go(&mut self.sids);
+                }
+            } else {
+                let demo = f64::from_bits(self.clock.load(Ordering::Relaxed));
+                self.player.tick(&mut self.sids, demo);
+            }
+            self.was_paused = paused;
             for (drum, vel) in self.player.strikes.drain(..) {
                 self.kit.strike(drum, vel);
             }
@@ -881,7 +912,7 @@ impl Synth {
 /// `clock` (its script time as f64 bits) through `session`; it plays as
 /// long as the returned stream lives. None when there is no sound to be
 /// had (no device, an unusual sample format) — the demo just runs silent.
-pub fn play(session: Session, clock: Arc<AtomicU64>, mutes: Mutes) -> Option<cpal::Stream> {
+pub fn play(session: Session, clock: Arc<AtomicU64>, mutes: Mutes, paused: Arc<AtomicBool>) -> Option<cpal::Stream> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     let device = cpal::default_host().default_output_device()?;
     let supported = device.default_output_config().ok()?;
@@ -889,6 +920,7 @@ pub fn play(session: Session, clock: Arc<AtomicU64>, mutes: Mutes) -> Option<cpa
     let channels = config.channels as usize;
     let mut synth = Synth::new(config.sample_rate.0, session, clock);
     synth.player.mutes = mutes;
+    synth.paused = paused;
     // Left and right as the first two channels; any others get both.
     let mut frame = move |out: &mut dyn FnMut(usize, f32)| {
         let (l, r) = synth.next_stereo();
@@ -1287,6 +1319,44 @@ mod tests {
         assert_eq!(strip_tracks().len(), 8);
         let strip = Session::only(&[bass]).strip(1.0, 1 << THUD);
         assert!(strip.tracks.iter().find(|t| t.name == "bass").unwrap().muted);
+    }
+
+    #[test]
+    fn a_pause_holds_the_sequencer_and_lets_the_tails_ring_out() {
+        let time = clock();
+        let all: Vec<usize> = (0..CLIPS.len()).filter(|&i| CLIPS[i].track != DRUMS || CLIPS[i].name == "full").collect();
+        let mut synth = Synth::new(RATE, Session::only(&all), time.clone());
+        let play = |synth: &mut Synth, from: usize, n: usize| -> Vec<f32> {
+            (from..from + n)
+                .map(|i| {
+                    time.store((i as f64 / RATE as f64).to_bits(), Ordering::Relaxed);
+                    let (l, r) = synth.next_stereo();
+                    (l + r) / 2.0
+                })
+                .collect()
+        };
+        let second = RATE as usize;
+        play(&mut synth, 0, 3 * second);
+        let now = synth.player.now;
+        // Paused, the demo's clock stopped: the music doesn't move on...
+        synth.paused.store(true, Ordering::Relaxed);
+        time.store((3.0f64).to_bits(), Ordering::Relaxed);
+        let tail: Vec<f32> = (0..3 * second)
+            .map(|_| {
+                let (l, r) = synth.next_stereo();
+                (l + r) / 2.0
+            })
+            .collect();
+        assert_eq!(synth.player.now, now, "the sequencer moved on in a pause");
+        // ...but it doesn't cut out: the first moments still sound, dying
+        // away, and in the end it's quiet.
+        let (first, last) = (rms(&tail[..second / 4]), rms(&tail[2 * second..]));
+        assert!(first > 0.01, "cut dead: {first}");
+        assert!(last < first / 4.0, "rings on and on: {first} then {last}");
+        // On again: from where it was.
+        synth.paused.store(false, Ordering::Relaxed);
+        play(&mut synth, 3 * second, second / 10);
+        assert!(synth.player.now.unwrap() - now.unwrap() < TICKS as u64 / 5);
     }
 
     #[test]

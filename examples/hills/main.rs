@@ -8,7 +8,7 @@
 //! `panel.rs`) wait for codes of their own.
 //!
 //! Run: `cargo run --release --example hills` (`-- --mute` for no music)
-//! Keys: → n space next code · ← p previous code · s sequencer ·
+//! Keys: → n space next code · ← previous code · p pause · s sequencer ·
 //! 1–8 mute a track · q quit
 
 mod dive;
@@ -218,6 +218,11 @@ struct Stage {
     sequencer: Arc<AtomicBool>,
     /// Tracks muted from the keyboard (1–8), shared with the music.
     mutes: music::Mutes,
+    /// Paused (`p`), shared with the music.
+    paused: Arc<AtomicBool>,
+    /// (last frame seen, frames spent paused): the show's own frame count
+    /// stands still in a pause, so it goes on from there seamlessly.
+    held: Mutex<(usize, usize)>,
     /// The script time, as f64 bits, each frame: the music follows it.
     clock: Arc<AtomicU64>,
     /// Tests: show the storyboard from this time instead of the script.
@@ -266,6 +271,8 @@ impl Stage {
             session,
             sequencer: Arc::new(AtomicBool::new(false)),
             mutes: Arc::new(AtomicU16::new(0)),
+            paused: Arc::new(AtomicBool::new(false)),
+            held: Mutex::new((0, 0)),
             clock: Arc::new(AtomicU64::new(0f64.to_bits())),
             #[cfg(test)]
             story: Mutex::new(None),
@@ -317,6 +324,15 @@ impl Stage {
 
 impl Effect for Stage {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
+        // The show's frame: the renderer's, less the frames spent paused.
+        let frame = {
+            let mut held = self.held.lock().unwrap();
+            if self.paused.load(Ordering::Relaxed) {
+                held.1 += frame.saturating_sub(held.0);
+            }
+            held.0 = frame;
+            frame - held.1
+        };
         let view = self.view_at(frame);
         *self.view.lock().unwrap() = view;
 
@@ -574,10 +590,11 @@ async fn main() {
     // The music plays for as long as this lives, the scroll text
     // launching its loops; silent without a sound device, or with --mute.
     let session = stage.session.clone();
-    let _music = if std::env::args().any(|a| a == "--mute") { None } else { music::play(session, stage.clock.clone(), stage.mutes.clone()) };
+    let _music = if std::env::args().any(|a| a == "--mute") { None } else { music::play(session, stage.clock.clone(), stage.mutes.clone(), stage.paused.clone()) };
     let seek = stage.seek.clone();
     let sequencer = stage.sequencer.clone();
     let mutes = stage.mutes.clone();
+    let paused = stage.paused.clone();
     let strip_tracks = music::strip_tracks();
     Scene::new()
         .add(stage)
@@ -586,6 +603,10 @@ async fn main() {
         .on_key(move |key| {
             if key == Key::Char('s') {
                 sequencer.fetch_xor(true, Ordering::Relaxed);
+                return;
+            }
+            if key == Key::Char('p') {
+                paused.fetch_xor(true, Ordering::Relaxed);
                 return;
             }
             // 1–8: mute or unmute the strip's tracks.
@@ -597,7 +618,7 @@ async fn main() {
             }
             let request = match key {
                 Key::Right | Key::Char('n') | Key::Char(' ') => Seek::Next,
-                Key::Left | Key::Char('p') => Seek::Prev,
+                Key::Left => Seek::Prev,
                 _ => return,
             };
             *seek.lock().unwrap() = Some(request);
@@ -1171,6 +1192,28 @@ mod tests {
         // Toggled off: the landscape's ground again.
         stage.sequencer.store(false, Ordering::Relaxed);
         assert!(!row_text(5.0).contains("pad"));
+    }
+
+    #[test]
+    fn a_pause_stands_the_show_still_and_it_goes_on_from_there() {
+        let stage = Stage::new(160);
+        stage.seek_to(30.0);
+        let frame = |f: usize| {
+            let mut buf = FrameBuffer::new(160, ROWS);
+            stage.render(&mut buf, f);
+            (buf, f64::from_bits(stage.clock.load(Ordering::Relaxed)))
+        };
+        frame(0);
+        let (before, t) = frame(60);
+        stage.paused.store(true, Ordering::Relaxed);
+        // Two seconds paused: the same picture, the clock still.
+        let (during, t2) = frame(180);
+        assert_eq!((0..ROWS).flat_map(|y| (0..160).map(move |x| (x, y))).filter(|&(x, y)| before.get(x, y) != during.get(x, y)).count(), 0);
+        assert_eq!(t, t2);
+        // Going on: a frame later is a frame on, not two seconds.
+        stage.paused.store(false, Ordering::Relaxed);
+        let (_, t3) = frame(181);
+        assert!((t3 - t - 1.0 / FPS).abs() < 1e-9, "{t} then {t3}");
     }
 
     #[test]
